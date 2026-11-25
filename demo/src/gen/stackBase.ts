@@ -1,0 +1,208 @@
+// Stacked worlds (overworld / underworld / sky) share one tile grid, so a staircase is at the
+// same x,y on both sides. This file: region shapes, borders, and the gated openings in them.
+import { D, T, type Dimension, type LocId } from '../core/types';
+import { Rng, childSeed, valueNoise } from '../core/rng';
+import type { StackBP } from './blueprint';
+import { SH, SW } from './spatial';
+
+export interface BiomeStyle {
+  ground: number;
+  /** what the solid rim of the region is made of */
+  rim: number[];
+  rimGround?: number;
+  solid: number[];
+  soft: number[];
+  density: number;
+  pond?: number;
+}
+
+export const STYLES: Record<string, BiomeStyle> = {
+  plains: { ground: T.GRASS, rim: [D.TREE], solid: [D.TREE, D.ROCK], soft: [D.TUFT, D.FLOWER, D.FLOWER], density: 0.025 },
+  forest: { ground: T.GRASS, rim: [D.TREE, D.PINE], solid: [D.TREE, D.PINE], soft: [D.TUFT, D.MUSHROOM], density: 0.08 },
+  mountain: { ground: T.STONE, rim: [D.ROCK], solid: [D.ROCK], soft: [D.TUFT], density: 0.05 },
+  lake: { ground: T.SWAMP, rim: [], rimGround: T.WATER, solid: [D.REED], soft: [D.REED, D.TUFT], density: 0.03, pond: T.WATER },
+  desert: { ground: T.SAND, rim: [D.ROCK, D.CACTUS], solid: [D.CACTUS, D.ROCK], soft: [], density: 0.035 },
+  snow: { ground: T.SNOW, rim: [D.PINE], solid: [D.PINE, D.ROCK], soft: [], density: 0.045 },
+  badlands: { ground: T.DIRT, rim: [D.ROCK], solid: [D.DEADTREE, D.ROCK], soft: [D.TUFT], density: 0.045 },
+  beach: { ground: T.SAND, rim: [], rimGround: T.WATER, solid: [D.PALM, D.ROCK], soft: [D.TUFT], density: 0.03 },
+  cavern: { ground: T.CAVE, rim: [], rimGround: T.CAVEWALL, solid: [D.STALAG], soft: [D.MUSHROOM], density: 0.04 },
+  flooded: { ground: T.CAVE, rim: [], rimGround: T.CAVEWALL, solid: [D.STALAG], soft: [D.MUSHROOM], density: 0.02, pond: T.WATER },
+  crystal: { ground: T.CAVE, rim: [], rimGround: T.CAVEWALL, solid: [D.CRYSTAL, D.STALAG], soft: [], density: 0.05 },
+  magma: { ground: T.CAVE, rim: [], rimGround: T.CAVEWALL, solid: [D.STALAG], soft: [], density: 0.02, pond: T.LAVA },
+  sky: { ground: T.CLOUD, rim: [], rimGround: T.VOID, solid: [D.PILLAR], soft: [], density: 0.015 },
+};
+
+/** Working state of one stacked dimension while it is being realised. */
+export interface ST {
+  bp: StackBP;
+  dim: Dimension;
+  rng: Rng;
+  w: number;
+  h: number;
+  /** region that owns each tile (rims included), -1 = nothing */
+  owner: Int16Array;
+  /** 1 = rim tile (solid edge of a region) */
+  border: Uint8Array;
+  /** 1 = something was placed here or wants this tile kept clear */
+  reserved: Uint8Array;
+  /** shuffled interior tiles per region */
+  interior: number[][];
+  /** tiles that separate two zones: tile -> edge id */
+  barriers: Map<number, string>;
+  anchors: Map<number, LocId>;
+  /** tiles where paths should lead (openings, doors), per region */
+  mouths: number[][];
+  problems: string[];
+}
+
+const N8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] as const;
+
+export function initStack(bp: StackBP, gw: number, gh: number, seed: number): ST {
+  const w = gw * SW, h = gh * SH, n = w * h;
+  const dim: Dimension = {
+    id: bp.id, name: bp.name, kind: bp.kind, w, h, sw: SW, sh: SH, stack: bp.stack,
+    ground: new Uint8Array(n), deco: new Uint8Array(n), elev: new Int8Array(n), solid: new Uint8Array(n).fill(1),
+    region: new Int16Array(n).fill(-1), zone: new Int32Array(n).fill(-1), zoneLoc: [], regions: [], objects: [],
+  };
+  const st: ST = {
+    bp, dim, rng: new Rng(childSeed(seed, 'tiles' + bp.id)), w, h, owner: new Int16Array(n).fill(-1),
+    border: new Uint8Array(n), reserved: new Uint8Array(n), interior: bp.regions.map(() => []),
+    barriers: new Map(), anchors: new Map(), mouths: bp.regions.map(() => []), problems: [],
+  };
+  const reg = st.owner;
+
+  // 1. organic region shapes: screens, warped by smooth noise. The warp is the same for every
+  //    stacked world, so a cave really lies under the land that owns its entrance.
+  const A = 4.5;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const wx = x + (valueNoise(seed, x / 9, y / 9) - 0.5) * 2 * A;
+    const wy = y + (valueNoise(seed ^ 0x51ed, x / 9, y / 9) - 0.5) * 2 * A;
+    const sx = Math.max(0, Math.min(gw - 1, Math.floor(wx / SW)));
+    const sy = Math.max(0, Math.min(gh - 1, Math.floor(wy / SH)));
+    reg[y * w + x] = bp.part.cell[sy * gw + sx];
+  }
+
+  // 2. rims: any tile touching another region (or the map edge) is solid
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    if (reg[i] < 0) continue;
+    for (const [dx, dy] of N8) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h || reg[ny * w + nx] !== reg[i]) { st.border[i] = 1; break; }
+    }
+  }
+
+  // 3. each region keeps its largest walkable piece; slivers cut off by the warp become rim
+  const comp = new Int32Array(n).fill(-1);
+  const sizes: number[] = [];
+  for (let s = 0; s < n; s++) {
+    if (reg[s] < 0 || st.border[s] || comp[s] >= 0) continue;
+    const id = sizes.length;
+    let size = 0;
+    const stack = [s];
+    comp[s] = id;
+    while (stack.length) {
+      const i = stack.pop()!;
+      size++;
+      for (const j of [i - 1, i + 1, i - w, i + w]) {
+        if (j < 0 || j >= n || comp[j] >= 0 || st.border[j] || reg[j] !== reg[s]) continue;
+        if ((j === i - 1 || j === i + 1) && ((j / w) | 0) !== ((i / w) | 0)) continue;
+        comp[j] = id;
+        stack.push(j);
+      }
+    }
+    sizes.push(size);
+  }
+  const best = bp.regions.map(() => -1);
+  for (let i = 0; i < n; i++) if (comp[i] >= 0 && (best[reg[i]] < 0 || sizes[comp[i]] > sizes[best[reg[i]]])) best[reg[i]] = comp[i];
+  for (let i = 0; i < n; i++) {
+    if (reg[i] < 0) continue;
+    if (!st.border[i] && comp[i] !== best[reg[i]]) st.border[i] = 1;
+    if (!st.border[i]) st.interior[reg[i]].push(i);
+  }
+  bp.regions.forEach((r, k) => {
+    if (st.interior[k].length < 90) st.problems.push(`${r.name} is too small to hold anything`);
+    st.interior[k] = st.rng.shuffle(st.interior[k]);
+  });
+
+  // 4. base paint
+  for (let i = 0; i < n; i++) {
+    const r = reg[i];
+    dim.region[i] = r;
+    if (r < 0) { dim.ground[i] = T.VOID; continue; }
+    const region = bp.regions[r], style = STYLES[region.biome];
+    dim.elev[i] = region.elev;
+    dim.ground[i] = style.ground;
+    if (!st.border[i]) { dim.solid[i] = 0; continue; }
+    if (style.rimGround !== undefined) {
+      dim.ground[i] = style.rimGround;
+      if (style.rimGround === T.CAVEWALL) dim.elev[i] = region.elev + 1;
+      if (style.rimGround === T.VOID) dim.region[i] = -1; // sky islands simply end
+    } else dim.deco[i] = st.rng.pick(style.rim);
+  }
+  return st;
+}
+
+/** Carve one gated opening per region edge: a straight, one-tile-wide cut through both rims. */
+export function carveOpenings(st: ST): void {
+  const { w, h, dim, border } = st;
+  const regOf = st.owner;
+  const carved = new Uint8Array(w * h);
+  for (const op of st.bp.openings) {
+    type Cand = { pa: number; pb: number; path: number[]; d: number };
+    const cands: Cand[] = [];
+    for (const i of st.interior[op.a]) {
+      if (st.reserved[i]) continue;
+      const x = i % w, y = (i / w) | 0;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const path: number[] = [];
+        let cx = x + dx, cy = y + dy, ok = true, seenB = false;
+        while (ok && path.length < 9) {
+          if (cx < 1 || cy < 1 || cx >= w - 1 || cy >= h - 1) { ok = false; break; }
+          const j = cy * w + cx, rj = regOf[j];
+          if (!border[j]) { ok = rj === op.b && path.length >= 2 && seenB && !st.reserved[j]; break; }
+          if (rj === op.b) seenB = true;
+          else if (rj !== op.a || seenB) { ok = false; break; }
+          // both sides of the cut must stay solid, or the gate could be walked around
+          const l = (cy + dx) * w + cx + dy, r2 = (cy - dx) * w + cx - dy;
+          if (!border[l] || !border[r2] || carved[l] || carved[r2] || carved[j]) { ok = false; break; }
+          path.push(j);
+          cx += dx; cy += dy;
+        }
+        if (ok && path.length >= 2 && path.length < 9 && !border[cy * w + cx]) cands.push({ pa: i, pb: cy * w + cx, path, d: dy !== 0 ? (dy > 0 ? 2 : 0) : dx > 0 ? 1 : 3 });
+      }
+    }
+    if (!cands.length) { st.problems.push(`no room for ${op.label} between ${st.bp.regions[op.a].name} and ${st.bp.regions[op.b].name}`); continue; }
+    const min = Math.min(...cands.map((c) => c.path.length));
+    const c = st.rng.pick(cands.filter((k) => k.path.length <= min + 1));
+    const ra = st.bp.regions[op.a], rb = st.bp.regions[op.b];
+    let lastA = 0;
+    c.path.forEach((j, k) => {
+      const side = regOf[j] === op.a ? ra : rb;
+      if (regOf[j] === op.a) lastA = k;
+      carved[j] = 1;
+      dim.solid[j] = 0;
+      dim.deco[j] = D.NONE;
+      dim.region[j] = regOf[j];
+      dim.elev[j] = side.elev;
+      dim.ground[j] = op.gate === 'water' ? T.WATER : st.bp.kind === 'sky' ? T.PLANK : st.bp.kind === 'underworld' ? T.CAVE : T.PATH;
+    });
+    const gate = c.path[lastA];
+    st.barriers.set(gate, op.edgeId);
+    const dir = (['n', 'e', 's', 'w'] as const)[c.d];
+    dim.objects.push({
+      id: 'g.' + op.edgeId, kind: op.oneWay ? 'ledge' : 'gate', x: gate % w, y: (gate / w) | 0, label: op.label,
+      gate: op.gate, req: op.req, edgeId: op.edgeId, dir,
+    });
+    if (ra.elev !== rb.elev && !op.oneWay && lastA + 1 < c.path.length) {
+      const s = c.path[lastA + 1];
+      dim.objects.push({ id: 's.' + op.edgeId, kind: 'stairs', x: s % w, y: (s / w) | 0, label: 'Stairs', dir });
+    }
+    for (const m of [c.pa, c.pb]) {
+      const mx = m % w, my = (m / w) | 0;
+      for (let yy = my - 1; yy <= my + 1; yy++) for (let xx = mx - 1; xx <= mx + 1; xx++) st.reserved[yy * w + xx] = 1;
+    }
+    st.mouths[op.a].push(c.pa);
+    st.mouths[op.b].push(c.pb);
+  }
+}
