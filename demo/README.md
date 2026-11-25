@@ -1,0 +1,64 @@
+# Worldgen demo (TypeScript)
+
+A small, runnable prototype of the world generator planned for the Rust/Bevy game.
+It generates the **logic** of a Zelda-like world first (what unlocks what), turns that
+into tile maps, and then re-checks every promise it made.
+
+## Run it
+
+```sh
+cd demo
+npm install
+npm run build        # writes dist/index.html, a single self-contained page
+npm test             # generator across hundreds of seeds, in Node
+npm run check        # type-check
+```
+
+Open `dist/index.html` in a browser. No server needed.
+
+## What is where
+
+| Path | Role |
+| --- | --- |
+| `src/core/types.ts` | The whole data contract. Plain data, written to port 1:1 to Rust structs and enums. |
+| `src/core/req.ts` | Requirement expressions: `has`, `use` (spend a renewable), `all`, `any`. |
+| `src/core/solver.ts` | Sphere search. Renewable consumables, worst-case small keys. |
+| `src/core/content.ts` | The premade set: items, the gate each one opens, biomes. |
+| `src/gen/plan.ts` | Level 0. Fixes the tool order and what each world must contain. |
+| `src/gen/lockgraph.ts` | The generic forward lock-and-key builder, used for regions and for dungeon rooms. |
+| `src/gen/regions.ts` | World → regions → places. Same routine for overworld, underworld, sky. |
+| `src/gen/dungeon.ts` | Place → rooms, with small keys and a boss key. |
+| `src/gen/npcs.ts` | NPCs as monotone stage machines; quests. |
+| `src/gen/logic.ts` | Orchestrates the above, then adds loops, ledges and extra stairs. |
+| `src/gen/stack*.ts`, `interiorTiles.ts`, `tiles.ts` | Tile realisation, and the proof that tiles match the graph. |
+| `src/gen/validate.ts` | Lints: solvable, complete, no soft-lock, refills, keys, NPCs, briefs. |
+| `src/render/` | Canvas map view (zoom, height layers, particles). Demo only. |
+| `src/ui/` | Side panels. Demo only. |
+
+`core/` and `gen/` have no DOM dependency; they are the part that becomes the Rust crate.
+
+## The rules that keep worlds valid
+
+1. **Requirements live on edges and checks**, never on nodes.
+2. **Constraints flow down.** A node receives the items guaranteed on entry and an ordered
+   list of payloads it must contain. Child seeds derive from the parent seed plus the child id.
+3. **Forward construction.** A node is attached with a lock made only from items already
+   owned, so the tree is solvable before any solver runs.
+4. **Loops are proposals.** Shortcuts, one-way ledges and extra stairs are added after the
+   tree and kept only if the lints still pass.
+5. **Consumables are renewable or unusable.** Ammo is never counted. Each ammo gate gets a
+   free refill on its near side; shops need rupees, which have a free source at the start.
+6. **Small keys are worst-case.** A locked door opens in logic only when the player holds
+   enough keys for every locked door currently in front of them.
+7. **NPCs only move forward**, driven by what the player owns, and never to an unreachable zone.
+8. **Tiles are verified.** Walkable tiles are flood-filled into zones; every gate must
+   separate exactly the two zones of its edge. A map that disagrees is discarded and the
+   next attempt runs from a derived seed, so results stay deterministic per seed.
+
+## Known simplifications
+
+- A region is one walkable zone (plus gated alcoves). Regions do not have internal puzzles yet.
+- The one-way soft-lock check is conservative: it assumes the minimum inventory a player
+  must hold at the top of a drop.
+- Rooms are single screens; there is no room-internal puzzle generation.
+- Tile art is procedural placeholder drawing, not the pre-rendered 3D look planned for Bevy.

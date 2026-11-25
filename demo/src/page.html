@@ -1,0 +1,76 @@
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <h1>Poosheen Worldgen</h1>
+      <p>Seeded lock-and-key worlds: logic first, tiles second, every promise re-checked.</p>
+    </div>
+    <form class="seedbar" id="seedForm" autocomplete="off">
+      <label for="seed">Seed</label>
+      <input id="seed" name="seed" type="text" spellcheck="false" maxlength="32" value="poosheen">
+      <button type="submit" class="btn primary" id="btnGenerate">Generate</button>
+      <button type="button" class="btn" id="btnRandom">Random</button>
+      <span class="pill" id="status" role="status">…</span>
+    </form>
+  </header>
+
+  <main class="layout">
+    <section class="stage" aria-label="World map">
+      <canvas id="map" tabindex="0" aria-label="Generated world map. Drag to pan, scroll or pinch to zoom."></canvas>
+
+      <div class="overlay tl">
+        <div class="seg" id="dimTabs" role="tablist" aria-label="World layer"></div>
+        <button type="button" class="btn small" id="btnBack" hidden>← Back outside</button>
+      </div>
+      <div class="overlay tr">
+        <button type="button" class="btn small" id="btnFit" title="Zoom out to see the whole map">Whole map</button>
+        <button type="button" class="btn small toggle" id="btnGhost" aria-pressed="true" title="Show how the stacked worlds line up">Layers</button>
+        <button type="button" class="btn small toggle" id="btnFog" aria-pressed="true" title="Dim what the player cannot reach yet">Fog</button>
+      </div>
+
+      <aside class="card" id="info" hidden aria-live="polite"></aside>
+
+      <div class="scrub">
+        <button type="button" class="btn small" id="btnPlay" aria-label="Play the playthrough">▶</button>
+        <div class="scrub-main">
+          <div class="scrub-row">
+            <label for="sphere" id="sphereLabel">Sphere 0</label>
+            <span class="gained" id="gained"></span>
+          </div>
+          <input id="sphere" type="range" min="0" max="1" step="1" value="0">
+        </div>
+      </div>
+    </section>
+
+    <section class="side" id="panels" aria-label="Generator details"></section>
+  </main>
+
+  <section class="notes" aria-label="How the generator works">
+    <h2>What the generator guarantees</h2>
+    <div class="notes-grid">
+      <article>
+        <h3>Top-down briefs</h3>
+        <p>The plan fixes the order of tools first. Worlds, regions, places and rooms each receive a brief: what the player is guaranteed to own on entry, and what must be found inside. Children never report anything a parent has to react to.</p>
+      </article>
+      <article>
+        <h3>One builder at every level</h3>
+        <p>Regions of a world and rooms of a dungeon are built by the same routine. It attaches one node at a time and may only lock an edge with something already owned, so the tree is solvable by construction. Loops and one-way ledges are added afterwards and kept only if the checks still pass.</p>
+      </article>
+      <article>
+        <h3>Ammo, keys and rupees</h3>
+        <p>Bombs and arrows are never counted. They are either renewable (bag or bow owned, and a refill reachable) or unusable. Every ammo gate gets a free refill on its near side. Small keys use worst-case logic, so no order of opening doors can waste one.</p>
+      </article>
+      <article>
+        <h3>NPCs that move</h3>
+        <p>An NPC is a list of stages, and the active one is the last whose condition holds. Conditions read only what the player owns, which never shrinks, so NPCs only move forward. A stage may not activate before its zone is reachable.</p>
+      </article>
+      <article>
+        <h3>Layers that agree</h3>
+        <p>Overworld, underworld and sky share one tile grid. Stairs sit at the same tile on both sides, and what lies above decides the cave below: lakes flood it, mountains fill it with crystal. Interiors are separate tile spaces, so a house can be larger inside.</p>
+      </article>
+      <article>
+        <h3>Tiles are proven, not trusted</h3>
+        <p>After painting, walkable tiles are flood-filled into zones. Each gate must separate exactly the two zones of its edge, and each chest must stand in the zone the logic says. A map that disagrees is thrown away and the next attempt runs from a derived seed.</p>
+      </article>
+    </div>
+  </section>
+</div>
