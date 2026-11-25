@@ -12,7 +12,7 @@ export interface WorldState {
   done: Set<string>;
   /** map object ids of NPC stages that are not the active one */
   hidden: Set<string>;
-  /** active stage index per npc id */
+  /** active stage index per npc id; -1 while the NPC has not appeared */
   npcStage: Record<string, number>;
   /** items picked up in exactly this sphere */
   gained: ItemId[];
@@ -40,7 +40,7 @@ export function stateAt(world: World, k: number): WorldState {
   const hidden = new Set<string>();
   const npcStage: Record<string, number> = {};
   for (const n of world.npcs) {
-    let active = 0;
+    let active = -1; // -1: this NPC has not appeared yet
     n.stages.forEach((st, i) => { if (evalReq(st.when, caps, world.items)) active = i; });
     npcStage[n.id] = active;
     n.stages.forEach((_, i) => { if (i !== active) hidden.add(`o.${n.id}.${i}`); });

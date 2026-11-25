@@ -51,9 +51,13 @@ export function createPlaythroughTab(): TabView {
     );
   }
 
+  function ensure(ctx: TabCtx): void {
+    if (forWorld !== ctx.world) { openZones = new Set(); forWorld = ctx.world; }
+  }
+
   function render(ctx: TabCtx): void {
     const { world, state, ix, cb } = ctx;
-    if (forWorld !== world) { openZones = new Set(); forWorld = world; }
+    ensure(ctx);
     const list = h('ol', { class: 'pa-tl', 'aria-label': 'Spheres' });
     for (const sp of world.solution.spheres) {
       const k = sp.index;
@@ -122,6 +126,7 @@ export function createPlaythroughTab(): TabView {
   }
 
   function reveal(sel: Selection, ctx: TabCtx): boolean {
+    ensure(ctx);
     if (!sel || sel.checkId || sel.edgeId) return false;
     const loc = selLoc(ctx.world, ctx.ix, ctx.state, sel);
     const k = loc !== undefined ? ctx.world.solution.locSphere[loc] : undefined;

@@ -180,13 +180,13 @@ export function placeItem(ctx: Ctx, rng: Rng, region: RegionBP, item: ItemId, ca
     s.room.objs.push({ id: 'o.' + c.id, kind: 'chest', label: c.label, checkId: c.id });
     s.node.provides = [item];
     s.node.needs = req;
-    s.node.entryCaps = caps;
+    if (main) s.node.entryCaps = caps;
     region.feats.push({ f: 'entrance', edgeId: e.id, style: 'cave', label: s.interior.name, req, interior: s.interior });
     region.hnode.children.push(s.node);
   } else if (roll < 0.8 && gateable.length) {
     const g = GATES[rng.weighted(gateable, (c) => 1 + gateable.indexOf(c))];
     const node = place(ctx, region, 'alcove', `${g.label} alcove`, [item], g.req);
-    node.entryCaps = caps;
+    if (main) node.entryCaps = caps;
     const loc = ctx.loc(node.id, `${g.label} alcove, ${region.name}`, node.id, region.stack.id);
     node.locs.push(loc);
     const e = ctx.edge(region.id, loc, g.req, g.gate);
@@ -195,7 +195,7 @@ export function placeItem(ctx: Ctx, rng: Rng, region: RegionBP, item: ItemId, ca
     if (g.spends) localSource(ctx, region, g.spends);
   } else {
     const c = ctx.check(region.id, item, 'chest', `Chest in the open (${what})`);
-    place(ctx, region, 'grove', main ? 'Clearing' : 'Hidden nook', [item]).entryCaps = caps;
+    place(ctx, region, 'grove', main ? 'Clearing' : 'Hidden nook', [item]).entryCaps = main ? caps : [];
     region.feats.push({ f: 'spot', obj: { id: 'o.' + c.id, kind: 'chest', label: c.label, checkId: c.id } });
   }
 }

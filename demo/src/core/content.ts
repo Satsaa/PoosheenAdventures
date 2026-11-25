@@ -83,7 +83,8 @@ export const UNDER_BIOMES: Record<string, { id: string; name: string; color: str
 };
 
 export const DUNGEON_NAMES = ['Temple of Naps', 'Baddie Keep', 'Hollow Bellows', 'Catacomb of Crumbs', 'Yarnspire'];
-export const NPC_NAMES = ['Bober', 'Toud', 'Tutel', 'Monke', 'Hanko', 'Mimsy', 'Old Purrl', 'Biscuit'];
+// (Toud is the Elder, so the name is not in the pool)
+export const NPC_NAMES = ['Bober', 'Nibbles', 'Tutel', 'Monke', 'Hanko', 'Mimsy', 'Old Purrl', 'Biscuit'];
 export const QUEST_ITEMS = [
   ['Lost Mitten', '🧤'], ['Honey Jar', '🍯'], ['Polished Shell', '🐚'], ['Lucky Acorn', '🌰'], ['Warm Scarf', '🧣'], ['Brass Bell', '🔔'],
 ] as const;

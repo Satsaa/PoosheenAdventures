@@ -42,7 +42,7 @@ export function createQuestsTab(): TabView {
 
     const nBox = h('div', { class: 'pa-cards' });
     for (const n of world.npcs) {
-      // stateAt falls back to stage 0 even when its condition does not hold yet (e.g. the peddler)
+      // npcStage is -1 while an NPC has not appeared yet (e.g. the peddler before his first stop)
       const k0 = state.npcStage[n.id] ?? 0;
       const absent = !n.stages[k0] || !reqOk(world, state, n.stages[k0].when);
       const active = absent ? -1 : k0;

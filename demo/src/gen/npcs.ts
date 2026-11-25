@@ -52,17 +52,17 @@ export function addNpcs(ctx: Ctx, rng: Rng, plan: Plan, regions: RegionBP[], sta
   const spots = rng.shuffle(regions).slice(0, 3);
   const t1 = ctx.item({ id: 'quest:trade1', name: 'Yarn Ball', kind: 'quest', icon: '◍', color: '#ff9fd0' });
   const t2 = ctx.item({ id: 'quest:trade2', name: 'Knitted Hat', kind: 'quest', icon: '◓', color: '#ff9fd0' });
-  const gives: [ItemId, Req, string][] = [
-    [t1, NONE, 'Take this yarn. Someone out there knits.'],
-    [t2, has(t1), 'Yarn! I can finally finish this hat. Here, it is yours.'],
-    ['wallet', has(t2), 'What a hat. Take my big wallet, I never fill it anyway.'],
+  const gives: [ItemId, Req, string, string][] = [
+    [t1, NONE, 'Take this yarn. Someone out there knits.', 'I hope the yarn found its knitter.'],
+    [t2, has(t1), 'I would trade for a Yarn Ball.', 'Yarn! I finally finished the hat. It is yours now.'],
+    ['wallet', has(t2), 'I would trade for a Knitted Hat.', 'What a hat. Keep my big wallet, I never filled it anyway.'],
   ];
-  const steps = gives.map(([item, req, line], i) => {
+  const steps = gives.map(([item, req, before, after], i) => {
     const r = spots[i % spots.length];
     const c = ctx.check(r.id, item, 'npc', `${names[i]}'s trade`, req);
     ctx.npcs.push({
       id: 'trade' + i, name: names[i], role: 'Trade chain', icon: '☻', color: '#ff9fd0',
-      stages: [stageAt(r, NONE, i === 0 ? line : `I would trade for a ${ctx.items[gives[i - 1][0]].name}.`, [c.id]), stageAt(r, has(item), line)],
+      stages: [stageAt(r, NONE, before, [c.id]), stageAt(r, has(item), after)],
     });
     return { text: `${names[i]} in ${r.name} gives the ${ctx.items[item].name}`, req, check: c.id };
   });

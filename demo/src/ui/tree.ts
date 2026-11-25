@@ -62,8 +62,12 @@ export function createTreeTab(): TabView {
     return wrap;
   }
 
-  function render(ctx: TabCtx): void {
+  function ensure(ctx: TabCtx): void {
     if (forWorld !== ctx.world) { open = new Set(); defaults(ctx.world.tree); forWorld = ctx.world; }
+  }
+
+  function render(ctx: TabCtx): void {
+    ensure(ctx);
     el.replaceChildren(
       h('p', { class: 'pa-note' }, 'Every level answers the same three questions: what it needs to get in, what it gives, and what the player is guaranteed to own on entry. Expand a row to see the promise.'),
       row(ctx, ctx.world.tree, 0));
@@ -75,6 +79,7 @@ export function createTreeTab(): TabView {
   }
 
   function reveal(sel: Selection, ctx: TabCtx): boolean {
+    ensure(ctx);
     const n = nodeFor(sel, ctx);
     let changed = false;
     for (let p = n ? ctx.ix.parent.get(n.id) : undefined; p; p = ctx.ix.parent.get(p.id)) {

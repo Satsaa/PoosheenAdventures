@@ -2,7 +2,7 @@
 import type { HNode, ItemId, LogicGraph } from '../core/types';
 import { Rng, childSeed } from '../core/rng';
 import { BASE_ITEMS, BIOMES, GATES, UNDER_BIOMES } from '../core/content';
-import { NONE, reqItems, use } from '../core/req';
+import { NONE, any, has, reqItems, use } from '../core/req';
 import { solve } from '../core/solver';
 import { Ctx, hnode, type RegionBP, type StackBP } from './blueprint';
 import { makePlan, type Plan } from './plan';
@@ -200,11 +200,24 @@ function addLoops(ctx: Ctx, rng: Rng, graph: LogicGraph, over: StackBP): void {
   }
 }
 
-/** Report upward: what each node provides is the union of its children's. */
+/**
+ * Report upward, after loops exist: what each node provides is the union of its children's,
+ * and `needs` is recomputed as "any of the ways in", so extra stairs and shortcuts show up.
+ */
 function finishTree(n: HNode, ctx: Ctx): ItemId[] {
   const own = new Set(n.provides);
   for (const l of n.locs) for (const c of ctx.checks) if (c.loc === l) own.add(c.item);
   for (const c of n.children) for (const it of finishTree(c, ctx)) own.add(it);
   n.provides = [...own];
+  n.entryCaps = [...new Set(n.entryCaps)];
+  const inside = new Set<string>();
+  const collect = (m: HNode) => { m.locs.forEach((l) => inside.add(l)); m.children.forEach(collect); };
+  collect(n);
+  if (inside.size && n.kind !== 'game') {
+    const ways = ctx.edges
+      .filter((e) => (inside.has(e.b) && !inside.has(e.a)) || (inside.has(e.a) && !inside.has(e.b) && !e.oneWay))
+      .map((e) => (e.lock ? has('key:' + e.lock) : e.req));
+    if (ways.length) n.needs = any(...ways.filter((w, i) => ways.findIndex((x) => JSON.stringify(x) === JSON.stringify(w)) === i));
+  }
   return n.provides;
 }
