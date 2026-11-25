@@ -16,8 +16,10 @@ export type Feature =
   | { f: 'pocket'; edgeId: string; gate: GateKind; req: Req; label: string; loc: LocId; obj: ObjTpl }
   /** a building / cave mouth leading to an interior dimension */
   | { f: 'entrance'; edgeId: string; style: string; label: string; req: Req; interior: InteriorBP }
+  /** a house nobody needs to enter: it makes the village a village */
+  | { f: 'house' }
   /** stairs between stacked worlds; realised at the same tile in both */
-  | { f: 'vertical'; edgeId: string; style: string; label: string; req: Req; other: RegionBP };
+  | { f: 'vertical'; edgeId: string; style: string; label: string; req: Req; other: RegionBP; optional?: boolean };
 
 export interface RegionBP {
   id: string;
@@ -41,6 +43,8 @@ export interface OpeningBP {
   req: Req;
   label: string;
   oneWay?: boolean;
+  /** a loop, not part of the tree: if the map has no room for it, it is simply left out */
+  optional?: boolean;
 }
 
 export interface StackBP {

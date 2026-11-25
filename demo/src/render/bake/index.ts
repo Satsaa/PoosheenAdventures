@@ -6,13 +6,15 @@
 //   m:<dir>        edge blend mask (albedo alpha), dir 0..3 = N E S W
 //   fm:<dir>       shore foam mask (albedo = foam colour)
 //   d:<D>          deco prop, pivot = tile NW ground corner             d:2:snow, d:8:glow variants
-//   h:<depth>:<c>  house column (depth 1..3 tiles, c 0 west,1 mid,2 east,3 single)
+//   hp:<wall>:<floors>:<mask>  modular building piece (wall plaster|stone, floors 1|2, mask = N1 E2 S4 W8 neighbours in the footprint)
+//   c:<kind>:<clip>:<dir>      character animation frames (see sheet.ts Clip; anims map lists clips per 'c:<kind>')
 //   o:<...>        objects: o:chest, o:chest:done, o:gate:<kind>[:done], o:ent:<style>, o:npc,
 //                  o:guard, o:start, o:boss, o:src:<pot|grass|flower>, o:ledge:<n|e|s|w>
 //   torch          wall torch for interiors
 import { D, T } from '../../core/types';
 import { edgeMask, faceStrip, groundTile } from './ground';
-import { DECO_VARIANTS, decoModel, houseModel, objectModels } from './models';
+import { DECO_VARIANTS, WALL_KINDS, decoModel, housePiece, objectModels } from './models';
+import { CLIPS, CREATURES, DIRS, creatureModel } from './creatures';
 import { renderModel } from './sdf';
 import { type AssetSheet, Sprite, packSheet } from './sheet';
 
@@ -50,9 +52,20 @@ export function bakeAtlas(): AssetSheet {
   }
   for (let v = 0; v < 2; v++) put('d:' + D.PINE + ':snow', renderModel(decoModel(D.PINE, v, { snow: true })!, v + 3));
   for (let v = 0; v < 3; v++) put('d:' + D.MUSHROOM + ':glow', renderModel(decoModel(D.MUSHROOM, v, { glow: true })!, v + 5));
-  for (let depth = 1; depth <= 3; depth++) for (let c = 0; c < 4; c++) put(`h:${depth}:${c}`, renderModel(houseModel(depth, c), depth * 4 + c));
+  for (const wall of WALL_KINDS) for (let floors = 1; floors <= 2; floors++) for (let mask = 0; mask < 16; mask++) put(`hp:${wall}:${floors}:${mask}`, renderModel(housePiece(mask, floors, wall), mask + floors * 16));
+  const anims = new Map<string, Record<string, import('./sheet').Clip>>();
+  for (const kind of CREATURES) {
+    const clips: Record<string, import('./sheet').Clip> = {};
+    for (const [clip, cd] of Object.entries(CLIPS) as ['idle' | 'walk', { frames: number; fps: number }][]) {
+      if ((kind === 'npc' || kind === 'hero') && clip === 'walk') continue;
+      for (const dir of DIRS) for (let f = 0; f < cd.frames; f++) put(`c:${kind}:${clip}:${dir}`, renderModel(creatureModel(kind, dir, clip, f), f + 1));
+      clips[clip] = { fps: cd.fps, s: `c:${kind}:${clip}:s`, e: `c:${kind}:${clip}:e`, n: `c:${kind}:${clip}:n`, mirrorW: true, frames: cd.frames };
+    }
+    anims.set('c:' + kind, clips);
+  }
   for (const o of objectModels()) put(o.key, renderModel(o.model, o.key.length));
   cached = packSheet(sprites);
+  cached.anims = anims;
   lastBakeMs = performance.now() - t0;
   return cached;
 }

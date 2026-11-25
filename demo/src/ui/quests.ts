@@ -1,10 +1,29 @@
 // Quests tab: quest steps ticked against the current sphere, and NPCs as monotone stage steppers.
 import { fmtReq } from '../core/req';
-import { h, chip, reqOk, selLoc, type Selection } from './shared';
+import { h, chip, reqOk, selLoc, phaseOf, phaseMark, reqPhases, PHASE_ONLY, type Selection } from './shared';
+import type { Npc, Phase } from '../core/types';
+import type { WorldState } from '../core/view';
 import type { TabCtx, TabView } from './tab';
 
 export function createQuestsTab(): TabView {
   const el = h('div', { class: 'pa-quests' });
+  let outTags: { n: Npc; phase: Phase | undefined; tag: HTMLElement }[] = [];
+
+  function outState(phase: Phase | undefined, state: WorldState): { text: string; cls: string; title: string } {
+    const now = phaseOf(state);
+    if (!phase) return { text: '', cls: '', title: '' };
+    if (!now) return { text: PHASE_ONLY[phase], cls: 'pa-tag', title: '' };
+    return phase === now
+      ? { text: 'out now', cls: 'pa-tag is-out', title: `Out ${PHASE_ONLY[phase]}` }
+      : { text: phase === 'night' ? 'back at night' : 'back by day', cls: 'pa-tag is-away', title: `Not out right now: ${PHASE_ONLY[phase]}` };
+  }
+  function paintOut(o: { phase: Phase | undefined; tag: HTMLElement }, state: WorldState): void {
+    const v = outState(o.phase, state);
+    o.tag.textContent = v.text;
+    o.tag.className = v.cls;
+    o.tag.title = v.title;
+    o.tag.hidden = !v.text;
+  }
 
   function render(ctx: TabCtx): void {
     const { world, state, ix, cb } = ctx;
@@ -25,9 +44,11 @@ export function createQuestsTab(): TabView {
           h('span', { class: 'pa-tick', 'aria-hidden': 'true' }, done ? '✓' : ''),
           h('span', { class: 'pa-sr' }, done ? 'done: ' : 'to do: '),
           h('div', { class: 'pa-step-b' },
-            chk
-              ? h('button', { class: 'pa-link', type: 'button', onclick: () => cb.focusLoc(chk.loc), title: where ? `Show ${where} on the map` : undefined }, st.text)
-              : h('span', null, st.text),
+            h('span', null,
+              chk
+                ? h('button', { class: 'pa-link', type: 'button', onclick: () => cb.focusLoc(chk.loc), title: where ? `Show ${where} on the map` : undefined }, st.text)
+                : h('span', null, st.text),
+              ...[...reqPhases(chk ? chk.req : st.req)].map((p) => phaseMark(p))),
             h('span', { class: 'pa-muted pa-step-m' },
               chk ? (k !== undefined ? `sphere ${k}` : 'never reached') : st.req.t !== 'none' ? `when you own ${fmtReq(st.req, world.items)}` : ''))));
       }
@@ -41,6 +62,7 @@ export function createQuestsTab(): TabView {
     }
 
     const nBox = h('div', { class: 'pa-cards' });
+    outTags = [];
     for (const n of world.npcs) {
       // npcStage is -1 while an NPC has not appeared yet (e.g. the peddler before his first stop)
       const k0 = state.npcStage[n.id] ?? 0;
@@ -54,7 +76,8 @@ export function createQuestsTab(): TabView {
           h('button', { class: 'pa-stage', type: 'button', onclick: () => cb.focusLoc(st.loc), 'aria-current': i === active ? 'step' : undefined, title: `Show ${where} on the map` },
             h('span', { class: 'pa-stage-dot', 'aria-hidden': 'true' }),
             h('span', { class: 'pa-stage-b' },
-              h('span', { class: 'pa-stage-when' }, st.when.t === 'none' ? 'from the start' : `once you own ${fmtReq(st.when, world.items)}`),
+              h('span', { class: 'pa-stage-when' }, st.when.t === 'none' ? 'from the start' : `once you own ${fmtReq(st.when, world.items)}`,
+                st.phase ? h('span', { class: 'pa-stage-phase' }, ' · ', phaseMark(st.phase, ' ' + PHASE_ONLY[st.phase])) : null),
               h('span', { class: 'pa-stage-loc' }, where, i === active ? h('span', { class: 'pa-tag is-active' }, 'now') : null),
               h('q', { class: 'pa-stage-line' }, st.line)))));
       });
@@ -62,7 +85,7 @@ export function createQuestsTab(): TabView {
         h('header', { class: 'pa-card-h' },
           h('span', { class: 'pa-npc-i', style: { '--chip-c': n.color }, 'aria-hidden': 'true' }, n.icon),
           h('h4', { class: 'pa-card-t' }, n.name),
-          absent ? h('span', { class: 'pa-tag', title: 'No stage condition holds yet' }, 'not around yet') : null,
+          absent ? h('span', { class: 'pa-tag', title: 'No stage condition holds yet' }, 'not around yet') : outTag(n, active, state),
           h('span', { class: 'pa-muted pa-card-n' }, n.role)),
         ol));
     }
@@ -72,6 +95,17 @@ export function createQuestsTab(): TabView {
       h('h3', { class: 'pa-label pa-sec-t' }, 'NPCs'),
       h('p', { class: 'pa-note' }, 'NPCs only ever move forward, driven by what the player owns, and never to a place the player cannot reach yet.'),
       nBox);
+  }
+
+  function outTag(n: Npc, active: number, state: WorldState): HTMLElement {
+    const o = { n, phase: n.stages[active]?.phase, tag: h('span') };
+    paintOut(o, state);
+    outTags.push(o);
+    return o.tag;
+  }
+
+  function onTime(ctx: TabCtx): void {
+    for (const o of outTags) paintOut(o, ctx.state);
   }
 
   function match(sel: Selection, ctx: TabCtx): Element[] {
@@ -93,5 +127,5 @@ export function createQuestsTab(): TabView {
     return out;
   }
 
-  return { el, render, match };
+  return { el, render, match, onTime };
 }

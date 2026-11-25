@@ -37,9 +37,31 @@ function findBlock(
   return best;
 }
 
-const ORDER: Record<Feature['f'], number> = { vertical: 0, entrance: 1, pocket: 2, spot: 3 };
+const ORDER: Record<Feature['f'], number> = { vertical: 0, entrance: 1, house: 1.5, pocket: 2, spot: 3 };
 
-export function placeFeatures(sts: Map<DimId, ST>): DoorMap {
+type Shape = [number, number][];
+const rect = (x0: number, x1: number, y0: number, y1: number): Shape => {
+  const out: Shape = [];
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) out.push([x, y]);
+  return out;
+};
+/** Footprints as offsets from the tile in front of the door. Every one covers (0, -1), where the door is. */
+const HOUSES: Shape[] = [
+  rect(-1, 1, -2, -1), rect(0, 1, -2, -1), rect(-1, 2, -2, -1), rect(-1, 1, -3, -1),
+  [...rect(-1, 2, -2, -1), ...rect(-1, 0, -3, -3)], // L
+  [...rect(-2, 1, -2, -1), ...rect(0, 1, -3, -3)], // L, mirrored
+  [...rect(-2, 2, -3, -2), ...rect(-1, 1, -1, -1)], // T
+];
+const HALLS: Record<string, Shape[]> = {
+  dungeon: [rect(-2, 2, -3, -1), [...rect(-2, 2, -2, -1), ...rect(-1, 1, -3, -3)]],
+  sanctum: [[...rect(-2, 2, -3, -1), ...rect(-1, 1, -4, -4)]],
+  shop: [rect(-1, 2, -2, -1), rect(-1, 1, -2, -1)],
+};
+const LOOKS: Record<string, string[]> = {
+  house: ['timber-red', 'timber-blue', 'thatch', 'timber-green'], shop: ['timber-gold'], dungeon: ['stone-moss', 'stone-dark'], sanctum: ['marble'],
+};
+
+export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => void): DoorMap {
   const doors: DoorMap = new Map();
   const pts = new Map<RegionBP, { x: number; y: number }[]>();
   const ptsOf = (r: RegionBP) => pts.get(r) ?? pts.set(r, []).get(r)!;
@@ -62,7 +84,7 @@ export function placeFeatures(sts: Map<DimId, ST>): DoorMap {
   }
 
   for (const st of sts.values()) {
-    const { w, dim } = st;
+    const { w, dim, rng } = st;
     for (const r of st.bp.regions) {
       const P = ptsOf(r);
       const fail = (what: string) => st.problems.push(`no room for ${what} in ${r.name}`);
@@ -70,7 +92,7 @@ export function placeFeatures(sts: Map<DimId, ST>): DoorMap {
         if (f.f === 'vertical') {
           const st2 = sts.get(f.other.stack.id)!;
           const at = findBlock(st, r.idx, P, -1, -1, 1, 1, (x, y) => freeBlock(st2, f.other.idx, x - 1, y - 1, x + 1, y + 1));
-          if (!at) { fail(f.label); continue; }
+          if (!at) { if (f.optional) drop(f.edgeId); else fail(f.label); continue; }
           reserve(st, at.x - 1, at.y - 1, at.x + 1, at.y + 1);
           reserve(st2, at.x - 1, at.y - 1, at.x + 1, at.y + 1);
           ptsOf(f.other).push(at);
@@ -81,23 +103,41 @@ export function placeFeatures(sts: Map<DimId, ST>): DoorMap {
           st.mouths[r.idx].push(at.y * w + at.x);
           st2.mouths[f.other.idx].push(at.y * w + at.x);
           doors.set(f.edgeId, { dim: dim.id, x: at.x, y: at.y, obj: here });
-        } else if (f.f === 'entrance') {
-          const at = findBlock(st, r.idx, P, -2, -3, 2, 1);
-          if (!at) { fail(f.label); continue; }
-          reserve(st, at.x - 2, at.y - 3, at.x + 2, at.y + 1);
-          // a red-roofed house would look odd in a cave or on a cloud: use the local building material there
-          const deco = st.bp.kind === 'underworld' ? D.STALAG : st.bp.kind === 'sky' ? D.PILLAR : f.style === 'cave' ? D.ROCK : D.HOUSE;
-          for (let y = at.y - 2; y <= at.y - 1; y++) for (let x = at.x - 1; x <= at.x + 1; x++) {
-            dim.solid[y * w + x] = 1;
-            dim.deco[y * w + x] = deco;
+        } else if (f.f === 'entrance' || f.f === 'house') {
+          const kind = f.f === 'house' ? 'house' : f.style;
+          // buildings are made of tiles and come in different shapes; caves, the underworld and the
+          // sky use the local material instead (rock, stalagmites, pillars)
+          const built = st.bp.kind === 'overworld' && kind !== 'cave';
+          const plain = HOUSES[0];
+          let shape = built ? rng.pick(HALLS[kind] ?? HOUSES) : plain;
+          let at: { x: number; y: number } | null = null;
+          for (const s of [shape, plain]) {
+            const xs = s.map((o) => o[0]), ys = s.map((o) => o[1]);
+            at = findBlock(st, r.idx, P, Math.min(...xs) - 1, Math.min(...ys) - 1, Math.max(...xs) + 1, 1);
+            if (at) { shape = s; reserve(st, at.x + Math.min(...xs) - 1, at.y + Math.min(...ys) - 1, at.x + Math.max(...xs) + 1, at.y + 1); break; }
           }
+          if (!at) { if (f.f === 'entrance') fail(f.label); continue; }
+          const deco = st.bp.kind === 'underworld' ? D.STALAG : st.bp.kind === 'sky' ? D.PILLAR : kind === 'cave' ? D.ROCK : D.HOUSE;
+          const tiles = shape.map(([dx, dy]) => (at!.y + dy) * w + at!.x + dx);
+          for (const t of tiles) { dim.solid[t] = 1; dim.deco[t] = deco; }
+          if (built) {
+            (dim.structures ??= []).push({
+              id: 'b.' + dim.structures.length, kind, style: rng.pick(LOOKS[kind] ?? LOOKS.house), tiles, door: { x: at.x, y: at.y },
+              floors: kind === 'house' ? rng.range(1, 2) : kind === 'shop' ? 1 : 2,
+            });
+          }
+          if (f.f === 'house') continue;
           const obj: MapObject = { id: 'd.' + f.edgeId, kind: 'entrance', x: at.x, y: at.y, label: f.label, style: f.style, req: f.req, edgeId: f.edgeId };
           dim.objects.push(obj);
           st.mouths[r.idx].push(at.y * w + at.x);
           doors.set(f.edgeId, { dim: dim.id, x: at.x, y: at.y, obj });
         } else if (f.f === 'pocket') {
           const at = findBlock(st, r.idx, P, -2, -2, 2, 2);
-          if (!at) { fail(f.label); continue; }
+          if (!at) {
+            // no open ground left for a free-standing alcove: cut one into the region's own rim
+            if (!rimAlcove(st, r.idx, f)) fail(f.label);
+            continue;
+          }
           reserve(st, at.x - 2, at.y - 2, at.x + 2, at.y + 2);
           const style = STYLES[r.biome];
           const wall = st.bp.kind === 'underworld' ? D.STALAG : st.bp.kind === 'sky' ? D.PILLAR : style.rim[0] ?? D.ROCK;
@@ -113,6 +153,12 @@ export function placeFeatures(sts: Map<DimId, ST>): DoorMap {
           dim.objects.push({ id: 'g.' + f.edgeId, kind: 'gate', x: at.x, y: at.y + 1, label: f.label, gate: f.gate, req: f.req, edgeId: f.edgeId, dir: 'n' });
           dim.objects.push({ ...f.obj, x: at.x, y: at.y } as MapObject);
           st.mouths[r.idx].push((at.y + 2) * w + at.x);
+        } else if (f.obj.kind === 'enemy') {
+          // creatures need one free tile; if the region is full they simply are not there
+          const at = findBlock(st, r.idx, [], 0, 0, 0, 0);
+          if (!at) continue;
+          st.reserved[at.y * w + at.x] = 1;
+          dim.objects.push({ ...f.obj, x: at.x, y: at.y } as MapObject);
         } else {
           const at = findBlock(st, r.idx, P, -1, -1, 1, 1) ?? findBlock(st, r.idx, P, 0, 0, 0, 0);
           if (!at) { fail(f.obj.label); continue; }
@@ -174,4 +220,41 @@ function scenery(st: ST): void {
       }
     }
   }
+}
+
+/**
+ * An alcove set into the rim: the chest takes a rim tile whose other three sides stay solid,
+ * and the gate stands on the open ground in front of it. Used when a region is too full for a
+ * free-standing alcove.
+ */
+function rimAlcove(st: ST, r: number, f: Extract<Feature, { f: 'pocket' }>): boolean {
+  const { w, dim } = st;
+  const open = (i: number) => !dim.solid[i] && !st.barriers.has(i);
+  const wall = (i: number) => dim.solid[i] === 1 && !st.river[i];
+  for (const g of st.interior[r]) {
+    if (st.reserved[g] || dim.solid[g]) continue;
+    for (const [dx, dy] of [[0, -1], [1, 0], [-1, 0], [0, 1]]) {
+      const d = dy * w + dx, side = dx !== 0 ? w : 1;
+      const c = g + d;
+      // the chest tile: this region's rim, walled on its three other sides
+      if (st.owner[c] !== r || !st.border[c] || !wall(c) || st.reserved[c]) continue;
+      if (!wall(c + d) || !wall(c + side) || !wall(c - side)) continue;
+      // the gate tile must sit on a straight edge of open ground, so taking it cuts nothing off
+      if (st.reserved[g - d] || ![g - d, g + side, g - side, g - d + side, g - d - side].every(open)) continue;
+      dim.solid[c] = 0;
+      dim.deco[c] = 0;
+      dim.ground[c] = dim.ground[g];
+      dim.elev[c] = dim.elev[g];
+      st.reserved[c] = st.reserved[g] = 1;
+      st.barriers.set(g, f.edgeId);
+      st.anchors.set(c, f.loc);
+      if (f.gate === 'water') dim.ground[g] = T.WATER;
+      const dir = dy < 0 ? 'n' : dy > 0 ? 's' : dx > 0 ? 'e' : 'w';
+      dim.objects.push({ id: 'g.' + f.edgeId, kind: 'gate', x: g % w, y: (g / w) | 0, label: f.label, gate: f.gate, req: f.req, edgeId: f.edgeId, dir });
+      dim.objects.push({ ...f.obj, x: c % w, y: (c / w) | 0 } as MapObject);
+      st.mouths[r].push(g - d);
+      return true;
+    }
+  }
+  return false;
 }

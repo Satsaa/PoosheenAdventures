@@ -26,5 +26,7 @@ export interface TabView {
   reveal?(sel: Selection, ctx: TabCtx): boolean;
   /** after a sphere change: element to bring into view */
   onState?(ctx: TabCtx): Element | null;
+  /** only the time of day changed (same world, same sphere): update time-dependent bits in place */
+  onTime?(ctx: TabCtx): void;
   destroy?(): void;
 }

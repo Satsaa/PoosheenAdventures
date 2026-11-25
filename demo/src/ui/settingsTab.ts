@@ -1,7 +1,8 @@
 // Settings tab: searchable generation settings. Built once, then synced in place on every world.
 import { SETTING_DEFS, ITEM_SETTING_DEFS, defaultSettings, type GenSettings } from '../core/settings';
 import { h } from './shared';
-import { settingRow, itemRow, setLabelSource, type Row } from './settingRows';
+import { settingRow, itemRow, graphicsRow, setLabelSource, type Row } from './settingRows';
+import { GRAPHICS_DEFS, defaultGraphics, type GraphicsSettings } from '../render/graphics';
 import type { SettingsModel } from './settingsModel';
 import type { TabCtx, TabView } from './tab';
 
@@ -13,11 +14,13 @@ export function createSettingsTab(model: SettingsModel): SettingsTab {
   let built = false;
   let ctx: TabCtx | null = null;
   const rows: Row[] = [];
-  const groups: { name: string; sec: HTMLElement; head: HTMLButtonElement; body: HTMLElement; badge: HTMLElement; rows: Row[]; items: boolean }[] = [];
+  type Kind = 'gen' | 'items' | 'gfx';
+  const groups: { name: string; sec: HTMLElement; head: HTMLButtonElement; body: HTMLElement; badge: HTMLElement; rows: Row[]; kind: Kind }[] = [];
+  const divisions: { kind: 'gen' | 'gfx'; el: HTMLElement; reset: HTMLButtonElement }[] = [];
   const collapsed = new Set<string>();
   let query = '';
   let undoTimer = 0;
-  let undoPrev: GenSettings | null = null;
+  let undoPrev: { gen: GenSettings; gfx: GraphicsSettings } | null = null;
   let ro: ResizeObserver | null = null;
 
   // header strip
@@ -40,7 +43,7 @@ export function createSettingsTab(model: SettingsModel): SettingsTab {
       h('button', { class: 'pa-btn2', type: 'button', onclick: () => toggleImport(false) }, 'Cancel')),
     importErr);
 
-  const search = h('input', { type: 'search', id: 'pa-set-search', class: 'pa-search-in', placeholder: 'Search settings and items', autocomplete: 'off', spellcheck: 'false', 'aria-keyshortcuts': '/' });
+  const search = h('input', { type: 'search', id: 'pa-set-search', class: 'pa-search-in', placeholder: 'Search settings, items, graphics', autocomplete: 'off', spellcheck: 'false', 'aria-keyshortcuts': '/' });
   const clearBtn = h('button', { class: 'pa-search-x', type: 'button', 'aria-label': 'Clear search', hidden: true }, '×');
   const searchBox = h('div', { class: 'pa-search' },
     h('label', { for: 'pa-set-search', class: 'pa-sr' }, 'Search settings'),
@@ -53,19 +56,23 @@ export function createSettingsTab(model: SettingsModel): SettingsTab {
     h('button', { class: 'pa-btn2', type: 'button', onclick: () => setQuery('', true) }, 'Clear search'));
   const groupsBox = h('div', { class: 'pa-groups' });
 
-  resetAll.addEventListener('click', () => {
-    undoPrev = JSON.parse(JSON.stringify(model.cur));
-    model.replace(defaultSettings());
-    undoBox.replaceChildren('Reset. ', h('button', { class: 'pa-link', type: 'button', onclick: undo }, 'Undo'));
+  resetAll.addEventListener('click', () => resetSome(true, true, 'Reset'));
+  /** reset generation and/or graphics; always undoable for a few seconds */
+  function resetSome(gen: boolean, gfx: boolean, what: string): void {
+    undoPrev = { gen: JSON.parse(JSON.stringify(model.cur)), gfx: { ...model.gCur } };
+    if (gen) model.replace(defaultSettings());
+    if (gfx) model.replaceGraphics(defaultGraphics());
+    undoBox.replaceChildren(`${what}. `, h('button', { class: 'pa-link', type: 'button', onclick: undo }, 'Undo'));
     clearTimeout(undoTimer);
     undoTimer = window.setTimeout(() => { undoBox.replaceChildren(); undoPrev = null; }, 8000);
-  });
+  }
   function undo(): void {
     if (!undoPrev) return;
     const prev = undoPrev;
     undoPrev = null;
     clearTimeout(undoTimer);
-    model.replace(prev);
+    if (JSON.stringify(prev.gen) !== JSON.stringify(model.cur)) model.replace(prev.gen);
+    if (JSON.stringify(prev.gfx) !== JSON.stringify(model.gCur)) model.replaceGraphics(prev.gfx);
     undoBox.replaceChildren('Restored.');
     undoTimer = window.setTimeout(() => undoBox.replaceChildren(), 2500);
     resetAll.focus();
@@ -99,7 +106,8 @@ export function createSettingsTab(model: SettingsModel): SettingsTab {
   function doImport(): void {
     try {
       const next = model.parse(importTa.value);
-      model.replace(next);
+      model.replace(next.gen);
+      if (next.graphics) model.replaceGraphics(next.graphics);
       importTa.value = '';
       toggleImport(false);
       status.textContent = 'Imported. Values out of range were clamped.';
@@ -136,13 +144,16 @@ export function createSettingsTab(model: SettingsModel): SettingsTab {
         r.highlight(ok ? words : []);
         if (ok) n++;
       }
-      const show = g.items ? words.length > 0 && n > 0 : n > 0;
+      const show = g.kind === 'items' ? words.length > 0 && n > 0 : n > 0;
       g.sec.hidden = !show;
       const open = words.length > 0 || !collapsed.has(g.name);
       g.body.hidden = !open;
       g.head.setAttribute('aria-expanded', String(open));
       if (show) any += n;
     }
+    for (const d of divisions) d.el.hidden = !groups.some((g) => !g.sec.hidden && (g.kind === d.kind || (d.kind === 'gen' && g.kind === 'items')));
+    let firstShown = true;
+    for (const d of divisions) { d.el.classList.toggle('is-first', firstShown && !d.el.hidden); if (!d.el.hidden) firstShown = false; }
     emptyQ.textContent = `“${query.trim()}”`;
     empty.hidden = any > 0 || !words.length;
   }
@@ -150,33 +161,53 @@ export function createSettingsTab(model: SettingsModel): SettingsTab {
   function build(c: TabCtx): void {
     const names: string[] = [];
     for (const d of SETTING_DEFS) if (!names.includes(d.group)) names.push(d.group);
-    const mk = (name: string, items: boolean) => {
+    const division = (kind: 'gen' | 'gfx', title: string, sub: string, resetLabel: string, onReset: () => void) => {
+      const reset = h('button', { class: 'pa-btn2 pa-div-reset', type: 'button', onclick: onReset }, resetLabel);
+      const box = h('div', { class: `pa-div is-${kind}` },
+        h('div', { class: 'pa-div-h' }, h('div', null, h('h3', { class: 'pa-div-t' }, title), h('p', { class: 'pa-div-s' }, sub)), reset));
+      divisions.push({ kind, el: box, reset });
+      groupsBox.append(box);
+      return box;
+    };
+    let target = division('gen', 'Generation', 'Changes the world: every change regenerates this seed.', 'Reset generation', () => resetSome(true, false, 'Generation reset'));
+    const mk = (name: string, kind: Kind) => {
       const badge = h('span', { class: 'pa-grp-n pa-num' });
       const head = h('button', { class: 'pa-grp-h', type: 'button', 'aria-expanded': 'true' },
-        h('span', { class: 'pa-grp-tw', 'aria-hidden': 'true' }), h('span', { class: 'pa-grp-t' }, name), badge);
+        h('span', { class: 'pa-grp-tw', 'aria-hidden': 'true' }), h('span', { class: 'pa-grp-t' }, name.replace(/^Graphics:\s*/i, '')), badge);
       const body = h('div', { class: 'pa-grp-b' });
       const sec = h('section', { class: 'pa-grp', 'data-group': name }, head, body);
-      const g = { name, sec, head, body, badge, rows: [] as Row[], items };
+      const g = { name, sec, head, body, badge, rows: [] as Row[], kind };
       head.addEventListener('click', () => {
         if (query) return;
         if (collapsed.has(name)) collapsed.delete(name); else collapsed.add(name);
         filter();
       });
       groups.push(g);
-      groupsBox.append(sec);
+      target.append(sec);
       return g;
     };
     for (const name of names) {
-      const g = mk(name, false);
+      const g = mk(name, 'gen');
       for (const d of SETTING_DEFS.filter((x) => x.group === name)) {
         const r = settingRow(model, d, 's');
         g.rows.push(r); rows.push(r); g.body.append(r.el);
       }
     }
-    const gi = mk('Items', true);
+    const gi = mk('Items', 'items');
     for (const d of ITEM_SETTING_DEFS) {
       const r = itemRow(model, d, 'si', c.world, { focusLoc: (l) => ctx?.cb.focusLoc(l) });
       gi.rows.push(r); rows.push(r); gi.body.append(r.el);
+    }
+    // graphics: built generically from GRAPHICS_DEFS, groups in the order they first appear
+    target = division('gfx', 'Graphics', 'Changes only how the map is drawn. Applied instantly; the world stays the same.', 'Reset graphics', () => resetSome(false, true, 'Graphics reset'));
+    const gNames: string[] = [];
+    for (const d of GRAPHICS_DEFS) if (!gNames.includes(d.group)) gNames.push(d.group);
+    for (const name of gNames) {
+      const g = mk(name, 'gfx');
+      for (const d of GRAPHICS_DEFS.filter((x) => x.group === name)) {
+        const r = graphicsRow(model, d, GRAPHICS_DEFS, 'sg');
+        g.rows.push(r); rows.push(r); g.body.append(r.el);
+      }
     }
     const head = h('div', { class: 'pa-set-head' },
         h('div', { class: 'pa-set-bar' }, count, resetAll, undoBox, h('span', { class: 'pa-grow' }), copyBtn, importBtn),
@@ -203,6 +234,7 @@ export function createSettingsTab(model: SettingsModel): SettingsTab {
     count.textContent = n ? `${n} changed` : 'All defaults';
     count.classList.toggle('is-mod', n > 0);
     resetAll.disabled = n === 0;
+    for (const d of divisions) d.reset.disabled = (d.kind === 'gen' ? model.genChanges() : model.graphicsChanges()) === 0;
   }
   model.onChange(sync);
 

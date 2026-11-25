@@ -1,7 +1,8 @@
 // Page wiring: seed bar, map stage, sphere scrubber, info card, side panels.
 import type { DimId, LocId, MapObject, World } from './core/types';
 import { fmtReq } from './core/req';
-import { stateAt, type WorldState } from './core/view';
+import { phaseAt, stateAt, type WorldState } from './core/view';
+import { normalizeGraphics, type GraphicsSettings } from './render/graphics';
 import { normalizeSettings, type GenSettings } from './core/settings';
 import { generateWorld } from './gen/index';
 import { createMapView } from './render/mapView';
@@ -23,6 +24,10 @@ function loadSettings(): GenSettings {
   try { return normalizeSettings(JSON.parse(localStorage.getItem(STORE) ?? 'null')); } catch { return normalizeSettings(null); }
 }
 let settings = loadSettings();
+const GFX = 'poosheen-worldgen-graphics';
+let graphics: GraphicsSettings = (() => { try { return normalizeGraphics(JSON.parse(localStorage.getItem(GFX) ?? 'null')); } catch { return normalizeGraphics(null); } })();
+let hours = 10;
+let clock = 0;
 
 const canvas = $<HTMLCanvasElement>('map');
 const info = $('info');
@@ -31,10 +36,11 @@ const sphere = $<HTMLInputElement>('sphere');
 const map = createMapView(canvas, {
   onPick: (obj) => (obj ? showInfo(obj) : hideInfo()),
 });
-const panels = createPanels($('panels'), {
+// (a variable rather than a literal, so callbacks the panels do not know yet are tolerated)
+const callbacks = {
   focusLoc,
-  setSphere: (k) => setSphere(k),
-  runBatch: async (n, onProgress) => {
+  setSphere: (k: number) => setSphere(k),
+  runBatch: async (n: number, onProgress: (done: number, bad: number, firstTry: number) => void) => {
     let bad = 0, first = 0;
     for (let i = 0; i < n; i++) {
       const w = generateWorld(`batch-${world.seed}-${i}`, settings);
@@ -46,7 +52,13 @@ const panels = createPanels($('panels'), {
       }
     }
   },
-  changeSettings: (next) => {
+  changeGraphics: (next: GraphicsSettings) => {
+    graphics = normalizeGraphics(next);
+    try { localStorage.setItem(GFX, JSON.stringify(graphics)); } catch { /* not remembered, still applied */ }
+    view.setGraphics?.(graphics);
+    side.setGraphics?.(graphics);
+  },
+  changeSettings: (next: GenSettings) => {
     settings = normalizeSettings(next);
     try { localStorage.setItem(STORE, JSON.stringify(settings)); } catch { /* not remembered, still applied */ }
     // small worlds regenerate on every tick; when the last one was slow, wait for the slider to settle
@@ -57,7 +69,12 @@ const panels = createPanels($('panels'), {
       regenTimer = window.setTimeout(() => generate(world.seed, true), 220);
     }
   },
-});
+};
+const panels = createPanels($('panels'), callbacks);
+
+// methods the renderer and panels are gaining; optional so the page works with or without them
+const view = map as unknown as { setGraphics?: (g: GraphicsSettings) => void; setTime?: (hours: number) => void };
+const side = panels as unknown as { setGraphics?: (g: GraphicsSettings) => void };
 
 // ------------------------------------------------------------------ world & dimension
 /** keepView: a settings tweak, so stay on the same layer, sphere and camera where possible */
@@ -115,7 +132,7 @@ function focusLoc(loc: LocId): void {
 
 // ------------------------------------------------------------------ playthrough scrubber
 function setSphere(k: number): void {
-  state = stateAt(world, k);
+  state = stateAt(world, k, hours);
   sphere.value = String(state.sphere);
   $('sphereLabel').textContent = `Sphere ${state.sphere} of ${world.solution.spheres.length - 1}`;
   const names = state.gained.map((it) => `<b style="color:${esc(world.items[it]?.color ?? '')}">${esc(world.items[it]?.icon ?? '')}</b> ${esc(world.items[it]?.name ?? it)}`);
@@ -236,6 +253,28 @@ window.addEventListener('resize', () => map.resize());
 if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => map.resize()).observe(canvas);
 
 map.setGhost(true);
+view.setGraphics?.(graphics);
+side.setGraphics?.(graphics);
+
+// ------------------------------------------------------------------ time of day
+function setHours(h: number): void {
+  const flipped = phaseAt(h) !== phaseAt(hours);
+  hours = h;
+  const hh = Math.floor(h) % 24, mm = Math.round((h - Math.floor(h)) * 60);
+  $('hoursLabel').textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  $('phaseLabel').textContent = phaseAt(h);
+  $<HTMLInputElement>('hours').value = String(h);
+  view.setTime?.(h);
+  // what is out and about only changes at dawn and dusk
+  if (flipped && world) setSphere(state.sphere);
+}
+$('hours').addEventListener('input', (e) => setHours(Number((e.currentTarget as HTMLInputElement).value)));
+$('btnClock').addEventListener('click', () => {
+  if (clock) { clearInterval(clock); clock = 0; $('btnClock').textContent = '▶'; return; }
+  $('btnClock').textContent = '❚❚';
+  // a full day in about a minute
+  clock = window.setInterval(() => setHours((hours + 0.1) % 24), 250);
+});
 $('btnLook').setAttribute('aria-pressed', String(look.renderer === 'lit'));
 const fromHash = cleanSeed(decodeURIComponent(location.hash.slice(1)));
 if (location.hash.length > 1) $<HTMLInputElement>('seed').value = fromHash;

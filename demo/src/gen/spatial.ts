@@ -1,7 +1,7 @@
 // Coarse space: a world is a grid of "screens"; a region is a connected set of screens.
 // Space is partitioned FIRST, and the lock graph is then only allowed to use edges between
 // regions that really touch. That is what makes the abstract graph embeddable without tricks.
-import type { Rng } from '../core/rng';
+import { valueNoise, type Rng } from '../core/rng';
 
 export const SW = 12; // screen width in tiles
 export const SH = 10; // screen height in tiles
@@ -112,6 +112,33 @@ export function growBlob(rng: Rng, gw: number, gh: number, start: number, count:
   return set;
 }
 
+// ---------------------------------------------------------------- land shape
+/**
+ * Which screens of the rectangle are land. Grown outward from the middle, always taking the
+ * screen that is closest to the centre after a noise nudge, so the land is one piece with an
+ * irregular coast. Everything else becomes sea or mountain range.
+ */
+export function landMask(seed: number, gw: number, gh: number, count: number): Uint8Array {
+  const total = gw * gh;
+  const mask = new Uint8Array(total);
+  if (count >= total) return mask.fill(1);
+  const score = (s: number) => {
+    const x = ((s % gw) + 0.5) / gw - 0.5, y = (((s / gw) | 0) + 0.5) / gh - 0.5;
+    return Math.hypot(x, y) * 2 + (valueNoise(seed, (s % gw) * 0.37, ((s / gw) | 0) * 0.37) - 0.5) * 0.9;
+  };
+  const start = (gh >> 1) * gw + (gw >> 1);
+  mask[start] = 1;
+  const frontier = new Set(neighbours(gw, gh, start));
+  for (let n = 1; n < count && frontier.size; n++) {
+    let best = -1, bestScore = Infinity;
+    for (const s of frontier) { const v = score(s); if (v < bestScore) { bestScore = v; best = s; } }
+    frontier.delete(best);
+    mask[best] = 1;
+    for (const t of neighbours(gw, gh, best)) if (!mask[t]) frontier.add(t);
+  }
+  return mask;
+}
+
 // ---------------------------------------------------------------- rivers
 // A river runs along the lines BETWEEN screens (a path on the lattice of screen corners).
 // That makes it a border by construction: where it follows a region border it replaces the
@@ -139,17 +166,24 @@ export function traceRivers(
   const cw = gw + 1;
   const taken = new Set<number>(); // corners used by any river, plus their neighbours, so rivers never touch
   const rivers: River[] = [];
-  const edge = (cx: number, cy: number) => cx === 0 || cy === 0 || cx === gw || cy === gh;
+  // the river ends where it meets the sea: the map edge, or a corner that touches a screen outside the land
+  const edge = (cx: number, cy: number) => {
+    if (cx === 0 || cy === 0 || cx === gw || cy === gh) return true;
+    for (const [ox, oy] of [[-1, -1], [0, -1], [-1, 0], [0, 0]]) if (part.cell[(cy + oy) * gw + cx + ox] < 0) return true;
+    return false;
+  };
+  /** a river bed needs land on both sides */
+  const land = (l: { a: number; b: number }) => (part.cell[l.a] < 0 || part.cell[l.b] < 0 ? null : l);
   /** the two screens separated by the lattice step from (cx,cy) in direction d, or null if it is not an inner line */
   const sides = (cx: number, cy: number, dx: number, dy: number): { a: number; b: number } | null => {
     if (dx !== 0) {
       const x = dx > 0 ? cx : cx - 1;
       if (cy < 1 || cy > gh - 1 || x < 0 || x >= gw) return null;
-      return { a: (cy - 1) * gw + x, b: cy * gw + x };
+      return land({ a: (cy - 1) * gw + x, b: cy * gw + x });
     }
     const y = dy > 0 ? cy : cy - 1;
     if (cx < 1 || cx > gw - 1 || y < 0 || y >= gh) return null;
-    return { a: y * gw + cx - 1, b: y * gw + cx };
+    return land({ a: y * gw + cx - 1, b: y * gw + cx });
   };
   const levelOf = (l: { a: number; b: number }) => Math.min(elevOf(part.cell[l.a]), elevOf(part.cell[l.b]));
 
@@ -159,7 +193,7 @@ export function traceRivers(
     let start = -1, startLevel = -1;
     for (let i = 0; i < 8; i++) {
       const cx = rng.range(1, gw - 1), cy = rng.range(1, gh - 1), c = cy * cw + cx;
-      if (taken.has(c)) continue;
+      if (taken.has(c) || edge(cx, cy)) continue;
       let best = -1;
       for (const [dx, dy] of N4) { const s = sides(cx, cy, dx, dy); if (s) best = Math.max(best, levelOf(s)); }
       if (best > startLevel) { startLevel = best; start = c; }

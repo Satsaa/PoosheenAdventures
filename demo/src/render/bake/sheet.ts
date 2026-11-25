@@ -46,6 +46,19 @@ export interface Frame {
   /** pivot: tile north-west ground corner inside the frame */
   ox: number;
   oy: number;
+  /** top-down height map origin row: ground point (gx, gy) tiles -> (x + ox + gx*16, y + ty + gy*16) in the `top` layer */
+  ty: number;
+}
+
+/** One animation clip of a character: frames per facing direction. */
+export interface Clip {
+  fps: number;
+  /** frame keys per direction, in order s, e, n (west = e mirrored when `mirrorW`) */
+  s: string;
+  e: string;
+  n: string;
+  mirrorW: boolean;
+  frames: number;
 }
 
 export interface AssetSheet {
@@ -54,8 +67,13 @@ export interface AssetSheet {
   albedo: Uint8ClampedArray;
   normal: Uint8ClampedArray;
   emissive: Uint8ClampedArray;
+  /** top-down height map (1 byte/px, (height * 40) + 1, 0 = empty) used to cast world-space shadows */
+  top: Uint8Array;
   /** key -> variants. Keys are listed in ./index.ts (ASSET_KEYS doc). */
   frames: Map<string, Frame[]>;
+  /** character animations: anim key ('c:<kind>') -> clip name ('idle', 'walk') -> clip; each clip's
+   *  direction key (e.g. 'c:bat:walk:s') maps in `frames` to its frame list */
+  anims: Map<string, Record<string, Clip>>;
 }
 
 /** One sprite with its four layers, before packing. */
@@ -63,7 +81,11 @@ export class Sprite {
   readonly alb: Uint8ClampedArray;
   readonly nrm: Uint8ClampedArray;
   readonly emi: Uint8ClampedArray;
+  readonly top: Uint8Array;
+  /** top map ground origin row */
+  ty = 0;
   constructor(readonly w: number, readonly h: number, readonly ox: number, readonly oy: number) {
+    this.top = new Uint8Array(w * h);
     this.alb = new Uint8ClampedArray(w * h * 4);
     this.nrm = new Uint8ClampedArray(w * h * 4);
     this.emi = new Uint8ClampedArray(w * h * 4);
@@ -115,6 +137,7 @@ export function packSheet(sprites: Map<string, Sprite[]>, width = 1024): AssetSh
   let h = 1;
   while (h < y + rowH + 1) h *= 2;
   const albedo = new Uint8ClampedArray(width * h * 4), normal = new Uint8ClampedArray(width * h * 4), emissive = new Uint8ClampedArray(width * h * 4);
+  const top = new Uint8Array(width * h);
   const frames = new Map<string, Frame[]>();
   items.forEach((it, k) => {
     const [px, py] = pos[k];
@@ -122,14 +145,15 @@ export function packSheet(sprites: Map<string, Sprite[]>, width = 1024): AssetSh
     for (let r = 0; r < s.h; r++) {
       const so = r * s.w * 4, d = ((py + r) * width + px) * 4;
       albedo.set(s.alb.subarray(so, so + s.w * 4), d);
+      top.set(s.top.subarray(r * s.w, r * s.w + s.w), (py + r) * width + px);
       normal.set(s.nrm.subarray(so, so + s.w * 4), d);
       emissive.set(s.emi.subarray(so, so + s.w * 4), d);
     }
     let list = frames.get(it.key);
     if (!list) frames.set(it.key, (list = []));
-    list[it.idx] = { x: px, y: py, w: s.w, h: s.h, ox: s.ox, oy: s.oy };
+    list[it.idx] = { x: px, y: py, w: s.w, h: s.h, ox: s.ox, oy: s.oy, ty: s.ty };
   });
-  return { w: width, h, albedo, normal, emissive, frames };
+  return { w: width, h, albedo, normal, emissive, top, frames, anims: new Map() };
 }
 
 export function hexToRgb(hex: string): [number, number, number] {

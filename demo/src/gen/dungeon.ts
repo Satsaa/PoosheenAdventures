@@ -2,8 +2,8 @@
 // grid, with small keys added. Interiors live in their own dimension, so they can be any size.
 import type { HNode, ItemId, LocId, Req } from '../core/types';
 import { Rng, childSeed } from '../core/rng';
-import { gateFor } from '../core/content';
-import { NONE } from '../core/req';
+import { ENEMIES, WEAPONS, gateFor } from '../core/content';
+import { NONE, has, use } from '../core/req';
 import { Ctx, hnode, type InteriorBP, type RoomBP } from './blueprint';
 import { buildLockGraph, type Payload } from './lockgraph';
 import { growBlob, neighbours } from './spatial';
@@ -60,6 +60,22 @@ export function buildDungeon(ctx: Ctx, id: string, name: string, seed: number, p
     entryPayloads: 0, freeChance: 0.65, lockScope: scope, depthBias: 1.6,
   });
 
+  // some open doorways are sealed until the room behind them is cleared: a lock made of enemies
+  const sealed = new Set<string>();
+  for (const le of lg.edges) {
+    if (le.gate !== 'open' || !rng.chance(0.45 * Math.min(1, S.enemies))) continue;
+    const owned = [...caps, ...(lg.capsAt.get(le.b) ?? [])];
+    const weapon = WEAPONS.find((x) => owned.includes(x));
+    if (!weapon) continue;
+    const ammo = weapon === 'bow' ? 'arrows' : weapon === 'bombBag' ? 'bombs' : null;
+    le.gate = 'foes';
+    le.req = ammo ? use(ammo) : has(weapon);
+    le.spends = ammo ?? undefined;
+    le.label = 'Sealed until the room is cleared';
+    sealed.add(le.a); // the fight is on the near side of the door
+  }
+  const foes = ENEMIES.filter((e) => e.biomes.includes('dungeon'));
+
   const node = hnode(id, 'place', name, seed, { placeKind: 'dungeon', dim: id });
   const rooms: RoomBP[] = [];
   const roomIdx = new Map<string, number>();
@@ -74,6 +90,13 @@ export function buildDungeon(ctx: Ctx, id: string, name: string, seed: number, p
       const it = g.provides[0];
       const c = ctx.check(loc, it, isBoss && g.kind === 'boss' ? 'boss' : 'chest', g.kind === 'boss' ? `Boss of ${name}` : `${name} chest`);
       room.objs.push({ id: 'o.' + c.id, kind: g.kind === 'boss' ? 'boss' : 'chest', label: c.label, checkId: c.id });
+    }
+    if (!isBoss) {
+      const count = Math.max(sealed.has(r) ? 1 : 0, i === 0 ? 0 : Math.min(5, Math.round(rng.next() * 2 * S.enemies)));
+      for (let k = 0; k < count; k++) {
+        const e = rng.weighted(foes, (x) => x.weight);
+        room.objs.push({ id: `o.en.${r}.${k}`, kind: 'enemy', enemy: e.id, label: e.name, icon: e.icon });
+      }
     }
     if (!got.length && i > 0 && rng.chance(0.5)) {
       const c = ctx.check(loc, 'heart', 'chest', `${name} side chest`);

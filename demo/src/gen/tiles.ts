@@ -24,14 +24,24 @@ interface Layer {
 
 export function realiseTiles(bp: Blueprint, seed: number): TileResult {
   const problems: string[] = [];
+  // loops the map has no room for are taken out of the graph again; they were never needed
+  let dropped = 0;
+  const drop = (edgeId: string) => {
+    const k = bp.ctx.edges.findIndex((e) => e.id === edgeId);
+    if (k < 0) return;
+    const e = bp.ctx.edges[k];
+    bp.ctx.edges.splice(k, 1);
+    for (const w of bp.tree.children) w.edges = w.edges.filter((h) => !(h.a === e.a && h.b === e.b && h.gate === e.gate));
+    dropped++;
+  };
   const sts = new Map<DimId, ST>();
   for (const s of bp.ctx.stacks) {
     const S = bp.ctx.settings;
-    const st = initStack(s, S.worldW, S.worldH, seed, S.borderWobble, S.scenery, S.riverWidth);
-    carveOpenings(st);
+    const st = initStack(s, S.worldW, S.worldH, seed, S.borderWobble, S.scenery, S.riverWidth, S.edgeMountains);
+    carveOpenings(st, drop);
     sts.set(s.id, st);
   }
-  const doors = placeFeatures(sts);
+  const doors = placeFeatures(sts, drop);
   const layers: Layer[] = [...sts.values()].map((st) => ({ dim: st.dim, barriers: st.barriers, anchors: st.anchors }));
   for (const st of sts.values()) problems.push(...st.problems);
 
@@ -49,7 +59,7 @@ export function realiseTiles(bp: Blueprint, seed: number): TileResult {
   for (const l of layers) zones(l, bp.graph, problems);
   const over = sts.get('over');
   const wet = over ? addRivers(bp, over, problems) : new Set<string>();
-  if (wet.size) {
+  if (wet.size || dropped) {
     settleOneWays(bp, layers);
     finishTree(bp.tree, bp.ctx);
   }

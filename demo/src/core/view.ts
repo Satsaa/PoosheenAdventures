@@ -1,9 +1,15 @@
 // What the world looks like after sphere k of the solver's playthrough. Pure function of World.
-import type { ItemId, LocId, World } from './types';
+import type { ItemId, LocId, Phase, World } from './types';
+
+/** Day runs from 6:00 to 18:00. */
+export const phaseAt = (hours: number): Phase => (hours >= 6 && hours < 18 ? 'day' : 'night');
 import { evalReq, type Caps } from './req';
 
 export interface WorldState {
   sphere: number;
+  /** time of day, 0..24 */
+  hours: number;
+  phase: Phase;
   reachable: Set<LocId>;
   fresh: Set<LocId>;
   inv: Record<ItemId, number>;
@@ -18,12 +24,13 @@ export interface WorldState {
   gained: ItemId[];
 }
 
-export function stateAt(world: World, k: number): WorldState {
+export function stateAt(world: World, k: number, hours = 10): WorldState {
+  const phase = phaseAt(hours);
   const sol = world.solution;
   k = Math.max(0, Math.min(sol.spheres.length - 1, k));
   const sp = sol.spheres[k];
   const inv = sp?.inv ?? {};
-  const caps: Caps = { inv: new Map(Object.entries(inv)), renewable: new Set(sp?.renewable ?? []) };
+  const caps: Caps = { inv: new Map(Object.entries(inv)), renewable: new Set(sp?.renewable ?? []), anyTime: world.graph.timeFlows };
   const reachable = new Set<LocId>();
   const fresh = new Set<LocId>();
   for (const [loc, s] of Object.entries(sol.locSphere)) {
@@ -43,7 +50,10 @@ export function stateAt(world: World, k: number): WorldState {
     let active = -1; // -1: this NPC has not appeared yet
     n.stages.forEach((st, i) => { if (evalReq(st.when, caps, world.items)) active = i; });
     npcStage[n.id] = active;
-    n.stages.forEach((_, i) => { if (i !== active) hidden.add(`o.${n.id}.${i}`); });
+    // an NPC that keeps hours is simply not out at the wrong time of day
+    n.stages.forEach((st, i) => { if (i !== active || (st.phase && st.phase !== phase)) hidden.add(`o.${n.id}.${i}`); });
   }
-  return { sphere: k, reachable, fresh, inv, renewable: caps.renewable, done, hidden, npcStage, gained: sp?.collected.map((c) => c.item) ?? [] };
+  // night creatures, moonlit chests, day-time stalls
+  for (const d of world.dims) for (const o of d.objects) if (o.phase && o.phase !== phase) hidden.add(o.id);
+  return { sphere: k, hours, phase, reachable, fresh, inv, renewable: caps.renewable, done, hidden, npcStage, gained: sp?.collected.map((c) => c.item) ?? [] };
 }

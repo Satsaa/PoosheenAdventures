@@ -3,10 +3,10 @@
 // `when` only reads the player's inventory/flags, which never shrink, so NPCs only ever move
 // forward. Anything an NPC offers is carried into later stages, so nothing becomes missable.
 // The validator checks one extra rule: when a stage activates, its zone is already reachable.
-import type { ItemId, Req } from '../core/types';
+import type { ItemId, NpcStage, Req } from '../core/types';
 import type { Rng } from '../core/rng';
 import { NPC_NAMES, gateFor } from '../core/content';
-import { NONE, all, has, use } from '../core/req';
+import { NONE, all, at, has, use } from '../core/req';
 import type { Ctx, RegionBP } from './blueprint';
 import type { Plan } from './plan';
 
@@ -41,15 +41,19 @@ export function addNpcs(ctx: Ctx, rng: Rng, plan: Plan, regions: RegionBP[], sta
   const T = plan.tools;
   const picks = T.length >= 6 ? [1, 3, 5] : [Math.min(1, T.length - 1), T.length >> 1, T.length - 1];
   const stops = S.merchant && T.length ? [...new Set(picks)].sort((a, b) => a - b).map((i) => T[i]) : [];
+  const timeOk = S.timeFlows || plan.tools.includes('sundial');
+  // the peddler packs up at dusk; one of the traders is a night owl
+  const dayOnly = timeOk && rng.chance(S.timeGates);
+  const owl = timeOk && rng.chance(S.timeGates) ? 1 : -1;
   if (stops.length) {
-  const merchant = { id: 'merchant', name: 'Pinjata the Peddler', role: 'Travelling shop', icon: '$', color: '#ff9f6b', stages: [] as ReturnType<typeof stageAt>[] };
-  const heart = ctx.check(regionOf(ctx.itemHome.get(stops[0])!).id, 'heart', 'shop', "Peddler's heart piece", all(has(stops[0]), use('rupees', S.pricePeddlerHeart)));
+  const merchant = { id: 'merchant', name: 'Pinjata the Peddler', role: 'Travelling shop', icon: '$', color: '#ff9f6b', stages: [] as NpcStage[] };
+  const heart = ctx.check(regionOf(ctx.itemHome.get(stops[0])!).id, 'heart', 'shop', "Peddler's heart piece", all(has(stops[0]), dayOnly ? at('day') : NONE, use('rupees', S.pricePeddlerHeart)));
   stops.forEach((tool, i) => {
     const r = regionOf(ctx.itemHome.get(tool)!);
     const when = has(tool);
     // every stage re-offers the same stock, so the supply never disappears from logic
-    for (const ammo of ['bombs', 'arrows']) ctx.source(r.id, ammo, `Peddler (${ctx.items[ammo].name})`, all(when, use('rupees', 10)));
-    merchant.stages.push(stageAt(r, when, `Fresh stock! I heard you found the ${ctx.items[tool].name}, so I followed you here.`, i === 0 ? [heart.id] : []));
+    for (const ammo of ['bombs', 'arrows']) ctx.source(r.id, ammo, `Peddler (${ctx.items[ammo].name})`, all(when, dayOnly ? at('day') : NONE, use('rupees', 10)));
+    merchant.stages.push({ ...stageAt(r, when, `Fresh stock! I heard you found the ${ctx.items[tool].name}, so I followed you here.`, i === 0 ? [heart.id] : []), phase: dayOnly ? 'day' : undefined });
   });
   ctx.npcs.push(merchant);
   }
@@ -67,10 +71,11 @@ export function addNpcs(ctx: Ctx, rng: Rng, plan: Plan, regions: RegionBP[], sta
   ];
   const steps = gives.map(([item, req, before, after], i) => {
     const r = spots[i % spots.length];
-    const c = ctx.check(r.id, item, 'npc', `${names[i]}'s trade`, req);
+    const night = i === owl;
+    const c = ctx.check(r.id, item, 'npc', `${names[i]}'s trade`, night ? all(req, at('night')) : req);
     ctx.npcs.push({
       id: 'trade' + i, name: names[i], role: 'Trade chain', icon: '☻', color: '#ff9fd0',
-      stages: [stageAt(r, NONE, before, [c.id]), stageAt(r, has(item), after)],
+      stages: [stageAt(r, NONE, before, [c.id]), stageAt(r, has(item), after)].map((st) => ({ ...st, phase: night ? ('night' as const) : undefined })),
     });
     return { text: `${names[i]} in ${r.name} gives the ${ctx.items[item].name}`, req, check: c.id };
   });

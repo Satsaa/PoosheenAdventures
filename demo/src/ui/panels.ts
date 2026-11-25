@@ -3,7 +3,8 @@
 import type { World, LocId } from '../core/types';
 import type { WorldState } from '../core/view';
 import type { GenSettings } from '../core/settings';
-import { h, buildIndex, scrollWithin, type Index, type Selection } from './shared';
+import type { GraphicsSettings } from '../render/graphics';
+import { h, buildIndex, scrollWithin, phaseOf, type Index, type Selection } from './shared';
 import type { TabCtx, TabView } from './tab';
 import { createGraphTab } from './graph';
 import { createTreeTab } from './tree';
@@ -23,12 +24,16 @@ export interface PanelCallbacks {
   runBatch(n: number, onProgress: (done: number, bad: number, firstTry: number) => void): Promise<void>;
   /** the user changed settings. main normalises them, regenerates the same seed and calls setWorld(). */
   changeSettings(next: GenSettings): void;
+  /** graphics changed. Applied live to the map; does NOT regenerate the world. */
+  changeGraphics(next: GraphicsSettings): void;
 }
 export interface Panels {
   setWorld(world: World): void;
   setState(state: WorldState): void;
   /** highlight whatever relates to this map object / zone; also switch to the most relevant tab only if `reveal` */
   select(sel: { loc?: LocId; checkId?: string; edgeId?: string; npcId?: string } | null, reveal?: boolean): void;
+  /** the effective graphics settings (called once at start and after every change) */
+  setGraphics(g: GraphicsSettings): void;
   destroy(): void;
 }
 
@@ -51,13 +56,14 @@ export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
   let state: WorldState | null = null;
   let ix: Index | null = null;
   let sel: Selection = null;
+  let stateWorld: World | null = null;
   let active: TabId = 'graph';
   try {
     const saved = localStorage.getItem(STORE_KEY) as TabId | null;
     if (saved && TAB_DEFS.some((t) => t.id === saved)) active = saved;
   } catch { /* storage unavailable */ }
 
-  const model = new SettingsModel((next) => cb.changeSettings(next));
+  const model = new SettingsModel((next) => cb.changeSettings(next), (next) => cb.changeGraphics(next));
   const settingsTab: SettingsTab = createSettingsTab(model);
   const makers: Record<TabId, () => TabView> = {
     graph: createGraphTab, tree: createTreeTab, play: createPlaythroughTab, quests: createQuestsTab, checks: createChecksTab,
@@ -207,8 +213,20 @@ export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
       }
     },
     setState(st: WorldState) {
+      const prev = state;
       state = st;
       if (!world) return;
+      // time scrubbing: same world and sphere, only hours/phase moved. Never rebuild for that.
+      if (prev && stateWorld === world && prev.sphere === st.sphere && !views.get(active)!.body.hidden) {
+        const phaseChanged = phaseOf(prev) !== phaseOf(st);
+        for (const [id, v] of views) {
+          if (v.view.keepScroll) continue;
+          if (id === active) { const c = ctxFor(id); if (c && !v.dirty) v.view.onTime?.(c); }
+          else if (phaseChanged) v.dirty = true; // re-render lazily when shown
+        }
+        return;
+      }
+      stateWorld = world;
       empty.hidden = true;
       for (const v of views.values()) if (!v.view.keepScroll) v.dirty = true;
       syncPersistent();
@@ -231,6 +249,9 @@ export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
       const ctx = ctxFor(active);
       if (sel && ctx && v.view.reveal?.(sel, ctx)) v.dirty = true;
       refresh(true);
+    },
+    setGraphics(g: GraphicsSettings) {
+      model.setGraphics(g);
     },
     destroy() {
       for (const v of views.values()) v.view.destroy?.();

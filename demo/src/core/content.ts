@@ -1,6 +1,6 @@
 // The premade set: items, the gates they open, biomes. Seeds pick order and variations.
 import type { GateKind, ItemDef, ItemId, Req } from './types';
-import { has, use } from './req';
+import { at, has, use } from './req';
 
 const def = (id: string, name: string, kind: ItemDef['kind'], icon: string, color: string, extra: Partial<ItemDef> = {}): ItemDef =>
   ({ id, name, kind, icon, color, ...extra });
@@ -13,6 +13,7 @@ export const BASE_ITEMS: ItemDef[] = [
   def('flippers', 'Swim Gear', 'tool', '≈', '#4fc4d8'),
   def('hookshot', 'Hookshot', 'tool', '⚓', '#b9c2cc'),
   def('lantern', 'Lantern', 'tool', '✦', '#ffcf5a'),
+  def('sundial', 'Sun Dial', 'tool', '◐', '#ffd98a'),
   def('wallet', 'Big Wallet', 'tool', '▣', '#7ed87e'),
   def('bombs', 'Bombs', 'consumable', '●', '#6f8fd8', { container: 'bombBag', baseCap: 10 }),
   def('arrows', 'Arrows', 'consumable', '↟', '#c9a36a', { container: 'bow', baseCap: 30 }),
@@ -23,7 +24,10 @@ export const BASE_ITEMS: ItemDef[] = [
 ];
 
 /** Tools that can be shuffled into the progression order. */
-export const PROGRESSION_TOOLS: ItemId[] = ['sword', 'glove', 'bombBag', 'bow', 'flippers', 'hookshot', 'lantern'];
+export const PROGRESSION_TOOLS: ItemId[] = ['sword', 'glove', 'bombBag', 'bow', 'flippers', 'hookshot', 'lantern', 'sundial'];
+
+/** Things that can beat an enemy, best first. */
+export const WEAPONS: ItemId[] = ['sword', 'bow', 'bombBag'];
 
 export interface GateSpec {
   gate: GateKind;
@@ -42,6 +46,8 @@ export const GATES: Record<ItemId, GateSpec> = {
   flippers: { gate: 'water', req: has('flippers'), label: 'Deep water' },
   hookshot: { gate: 'chasm', req: has('hookshot'), label: 'Chasm' },
   lantern: { gate: 'dark', req: has('lantern'), label: 'Pitch-dark passage' },
+  // free where time passes by itself (just wait for dusk); a real lock where it stands still
+  sundial: { gate: 'moon', req: at('night'), label: 'Moon door' },
 };
 
 export function gateFor(item: ItemId): GateSpec | null {
@@ -88,3 +94,30 @@ export const NPC_NAMES = ['Bober', 'Nibbles', 'Tutel', 'Monke', 'Hanko', 'Mimsy'
 export const QUEST_ITEMS = [
   ['Lost Mitten', '🧤'], ['Honey Jar', '🍯'], ['Polished Shell', '🐚'], ['Lucky Acorn', '🌰'], ['Warm Scarf', '🧣'], ['Brass Bell', '🔔'],
 ] as const;
+
+export interface EnemyKind {
+  id: string;
+  name: string;
+  plural: string;
+  icon: string;
+  /** biomes it lives in; '*' = anywhere */
+  biomes: string[];
+  /** what beating it tends to drop (a renewable source) */
+  drops: ItemId;
+  /** only out at night */
+  night?: boolean;
+  /** how common, relative to the others in its biome */
+  weight: number;
+}
+
+export const ENEMIES: EnemyKind[] = [
+  { id: 'knoblin', name: 'Knoblin', plural: 'Knoblins', icon: '♞', biomes: ['plains', 'forest', 'badlands', 'dungeon'], drops: 'rupees', weight: 5 },
+  { id: 'snapjaw', name: 'Snapjaw', plural: 'Snapjaws', icon: '≋', biomes: ['lake', 'beach', 'flooded'], drops: 'rupees', weight: 4 },
+  { id: 'frostmite', name: 'Frostmite', plural: 'Frostmites', icon: '❄', biomes: ['snow'], drops: 'arrows', weight: 4 },
+  { id: 'dustling', name: 'Dustling', plural: 'Dustlings', icon: '☼', biomes: ['desert', 'badlands'], drops: 'bombs', weight: 4 },
+  { id: 'rockback', name: 'Rockback', plural: 'Rockbacks', icon: '◭', biomes: ['mountain', 'crystal', 'magma'], drops: 'bombs', weight: 4 },
+  { id: 'bat', name: 'Cave Bat', plural: 'Cave Bats', icon: '⌄', biomes: ['cavern', 'flooded', 'crystal', 'magma', 'cave', 'dungeon'], drops: 'rupees', weight: 4 },
+  { id: 'puff', name: 'Cloud Puff', plural: 'Cloud Puffs', icon: '☁', biomes: ['sky'], drops: 'arrows', weight: 4 },
+  { id: 'wisp', name: 'Wisp', plural: 'Wisps', icon: '✧', biomes: ['*'], drops: 'rupees', night: true, weight: 1.5 },
+  { id: 'pinjata', name: 'Pinjata Poosheen', plural: 'Pinjata Poosheens', icon: '♛', biomes: ['*'], drops: 'rupees', weight: 0.3 },
+];

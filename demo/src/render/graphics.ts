@@ -1,0 +1,96 @@
+// Graphics settings: how the map is drawn, never what is generated. Changing one must not
+// regenerate the world. Described by metadata so the settings UI is built from this list.
+// The renderer owns this file: add a def here and it shows up in the UI.
+
+export interface GraphicsDef {
+  key: string;
+  label: string;
+  group: string;
+  type: 'int' | 'float' | 'bool' | 'enum';
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: { value: string; label: string; help?: string }[];
+  default: number | boolean | string;
+  help: string;
+  /** extra words the search should match */
+  keywords?: string;
+}
+
+export type GraphicsSettings = Record<string, number | boolean | string>;
+
+const L = 'Graphics: light', S = 'Graphics: shadows', DT = 'Graphics: detail', P = 'Graphics: post', O = 'Graphics: overlay', C = 'Graphics: camera';
+
+export const GRAPHICS_DEFS: GraphicsDef[] = [
+  // light
+  { key: 'exposure', label: 'Exposure', group: L, type: 'float', min: 0.25, max: 3, step: 0.05, default: 1, help: 'Overall brightness before tone mapping, on top of each scene\'s own exposure. Lower it where bright scenes wash out.', keywords: 'brightness tone blown out' },
+  { key: 'toneMap', label: 'Tone mapping', group: L, type: 'enum', options: [{ value: 'filmic', label: 'Filmic', help: 'Soft shoulder, keeps bright skies from clipping' }, { value: 'reinhard', label: 'Reinhard', help: 'Gentle, slightly flat' }, { value: 'punchy', label: 'Punchy', help: 'Contrasty, clips highlights earlier' }, { value: 'none', label: 'None (clamp)' }], default: 'filmic', help: 'How bright values are squeezed into the screen range.', keywords: 'tonemap hdr aces curve' },
+  { key: 'ambient', label: 'Ambient light', group: L, type: 'float', min: 0, max: 2.5, step: 0.05, default: 1, help: 'Strength of the sky / cave fill light that reaches everything.', keywords: 'fill dark brightness' },
+  { key: 'sunStrength', label: 'Sun / moon strength', group: L, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Strength of the key light from the sun (or the moon at night).', keywords: 'key light directional' },
+  { key: 'pointLights', label: 'Point light intensity', group: L, type: 'float', min: 0, max: 3, step: 0.05, default: 1, help: 'Brightness of lanterns, windows, crystals, lava and torches.', keywords: 'lamps torches glow' },
+  { key: 'maxLights', label: 'Max point lights', group: L, type: 'int', min: 0, max: 32, step: 1, default: 32, help: 'How many point lights near the view are evaluated per pixel. Lower is faster.', keywords: 'performance lights count' },
+  { key: 'bloom', label: 'Bloom', group: L, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Strength of the glow around bright and emissive pixels.', keywords: 'glow' },
+  { key: 'bloomThreshold', label: 'Bloom threshold', group: L, type: 'float', min: 0, max: 2, step: 0.05, default: 0.85, help: 'How bright a pixel must be (after exposure) before it glows.', keywords: 'glow' },
+  { key: 'bloomRadius', label: 'Bloom radius', group: L, type: 'float', min: 0.5, max: 3, step: 0.1, default: 1, help: 'How far the glow spreads.', keywords: 'glow size blur' },
+  // shadows
+  { key: 'shadows', label: 'Shadows', group: S, type: 'enum', options: [{ value: 'baked', label: 'From models', help: 'Projected from each sprite\'s baked 3D height map, for the current sun' }, { value: 'flat', label: 'Flat', help: 'A flattened, sheared copy of each sprite\'s silhouette' }, { value: 'off', label: 'Off' }], default: 'baked', help: 'How things standing on the ground cast shadows. Shadows are computed in world space, so they never depend on what is on screen.', keywords: 'shade sun' },
+  { key: 'shadowStrength', label: 'Shadow strength', group: S, type: 'float', min: 0, max: 1, step: 0.05, default: 0.7, help: 'How much of the sun a shadow blocks.', keywords: 'shade darkness' },
+  { key: 'shadowSoftness', label: 'Shadow softness', group: S, type: 'float', min: 0, max: 1, step: 0.05, default: 0.25, help: 'Blurs shadow edges by up to a few pixels (0 keeps hard pixel edges).', keywords: 'shade blur penumbra' },
+  { key: 'terrainShadows', label: 'Cliff shadows', group: S, type: 'bool', default: true, help: 'Raised ground and cliffs cast shadows from the tile heights.', keywords: 'shade cliff terrain' },
+  { key: 'contactShadows', label: 'Contact shadows', group: S, type: 'float', min: 0, max: 1, step: 0.05, default: 0.6, help: 'Darkening where props and walls meet the ground.', keywords: 'ao ambient occlusion grounding' },
+  // detail
+  { key: 'detailDistance', label: 'Detail distance', group: DT, type: 'float', min: 2, max: 24, step: 0.5, default: 9, help: 'Zoom level (pixels per tile) below which the low-resolution overview replaces full-detail tiles and sprites.', keywords: 'dither lod overview distance' },
+  { key: 'detailFade', label: 'Detail fade', group: DT, type: 'float', min: 0, max: 12, step: 0.5, default: 4, help: 'How many pixels per tile the cross-fade between overview and full detail lasts.', keywords: 'dither lod' },
+  { key: 'dither', label: 'Dithered fade', group: DT, type: 'bool', default: true, help: 'Cross-fade with an ordered pixel dither (on) or switch hard at the detail distance (off).', keywords: 'dither lod transition' },
+  { key: 'renderScale', label: 'Render scale', group: DT, type: 'float', min: 0.35, max: 2, step: 0.05, default: 1, help: 'Internal resolution relative to the screen (capped by the device pixel ratio). Lower is faster and chunkier.', keywords: 'resolution performance pixels dpr' },
+  { key: 'maxPixels', label: 'Max internal megapixels', group: DT, type: 'float', min: 0.3, max: 6, step: 0.1, default: 1.6, help: 'Upper bound on the lit renderer\'s internal resolution, in millions of pixels.', keywords: 'resolution performance cap' },
+  { key: 'particles', label: 'Particle density', group: DT, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Fireflies, embers, snow, mist and sparkles.', keywords: 'effects ambient' },
+  { key: 'water', label: 'Water animation', group: DT, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'How strongly water, lava and waterfalls move.', keywords: 'waves river flow' },
+  { key: 'animation', label: 'Creature animation', group: DT, type: 'bool', default: true, help: 'Animate enemies and NPCs (they always stand still with reduced motion).', keywords: 'motion wander enemies' },
+  // post
+  { key: 'saturation', label: 'Saturation', group: P, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Colour intensity after lighting (1 = each scene\'s own grade).', keywords: 'colour grade vivid' },
+  { key: 'contrast', label: 'Contrast', group: P, type: 'float', min: 0.5, max: 1.6, step: 0.02, default: 1, help: 'Contrast after lighting (1 = each scene\'s own grade).', keywords: 'grade' },
+  { key: 'vignette', label: 'Vignette', group: P, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Darkening toward the screen corners.', keywords: 'corners frame' },
+  { key: 'fogDarkness', label: 'Unreachable darkness', group: P, type: 'float', min: 0, max: 1, step: 0.05, default: 0.45, help: 'How much zones you cannot reach yet are darkened.', keywords: 'fog of war unreachable' },
+  { key: 'fogDesaturation', label: 'Unreachable desaturation', group: P, type: 'float', min: 0, max: 1, step: 0.05, default: 0.8, help: 'How much colour zones you cannot reach yet lose.', keywords: 'fog of war grey' },
+  // camera
+  { key: 'pixelSnap', label: 'Pixel-snapped camera', group: C, type: 'bool', default: true, help: 'Move the camera in whole source pixels so sprites never shimmer while panning.', keywords: 'shimmer crawl jitter' },
+  // overlay
+  { key: 'labels', label: 'Region labels', group: O, type: 'bool', default: true, help: 'Show region and river names when zoomed out.', keywords: 'names text' },
+  { key: 'labelSize', label: 'Label size', group: O, type: 'float', min: 0.6, max: 2, step: 0.05, default: 1, help: 'Size of region labels.', keywords: 'text font' },
+  { key: 'pinSize', label: 'Pin size', group: O, type: 'float', min: 0.5, max: 2, step: 0.05, default: 1, help: 'Size of the map pins shown when zoomed out.', keywords: 'markers icons' },
+  { key: 'pinDensity', label: 'Pin density', group: O, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'How many pins are kept when zoomed out (0 = only the most important).', keywords: 'markers declutter' },
+];
+
+export function defaultGraphics(): GraphicsSettings {
+  return Object.fromEntries(GRAPHICS_DEFS.map((d) => [d.key, d.default]));
+}
+
+export function normalizeGraphics(partial?: Record<string, unknown> | null): GraphicsSettings {
+  const g = defaultGraphics();
+  for (const d of GRAPHICS_DEFS) {
+    const v = partial?.[d.key];
+    if (d.type === 'bool') { if (typeof v === 'boolean') g[d.key] = v; }
+    else if (d.type === 'enum') { if (d.options!.some((o) => o.value === v)) g[d.key] = v as string; }
+    else if (typeof v === 'number' && Number.isFinite(v)) {
+      const c = Math.max(d.min!, Math.min(d.max!, v));
+      g[d.key] = d.type === 'int' ? Math.round(c) : c;
+    }
+  }
+  return g;
+}
+
+/** typed view used by the renderers */
+export interface Gfx {
+  exposure: number; toneMap: string; ambient: number; sunStrength: number; pointLights: number; maxLights: number;
+  bloom: number; bloomThreshold: number; bloomRadius: number;
+  shadows: 'baked' | 'flat' | 'off'; shadowStrength: number; shadowSoftness: number; terrainShadows: boolean; contactShadows: number;
+  detailDistance: number; detailFade: number; dither: boolean; renderScale: number; maxPixels: number;
+  particles: number; water: number; animation: boolean;
+  saturation: number; contrast: number; vignette: number; fogDarkness: number; fogDesaturation: number;
+  pixelSnap: boolean; labels: boolean; labelSize: number; pinSize: number; pinDensity: number;
+}
+
+export function gfx(g: GraphicsSettings): Gfx {
+  return normalizeGraphics(g) as unknown as Gfx;
+}

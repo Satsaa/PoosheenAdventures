@@ -206,34 +206,64 @@ export function decoModel(d: number, v: number, opt: { snow?: boolean; glow?: bo
 }
 
 /**
- * Houses are 3D-modelled at their footprint depth and sliced into 1-tile columns
- * (col 0 = west end, 1 = middle, 2 = east end, 3 = single-tile house).
+ * Modular building pieces: one per footprint tile, chosen by which of its 4 neighbours are also part
+ * of the building (mask bits N=1 E=2 S=4 W=8). Walls stand on exposed sides; the roof is a hip roof
+ * whose height grows with the distance from the nearest exposed edge, so rectangles, L and T shapes
+ * all get continuous roofs with ridges, hips and valleys. The roof is MAT.TINT (style colour per
+ * instance); `wall` picks plaster+timber or stone.
  */
-export function houseModel(depth: number, col: number): Model {
-  const W = col === 3 ? 1 : 3;
-  const x0 = col === 1 ? -1 : col === 2 ? -2 : 0;
-  const ox0 = x0 + 0.06, ox1 = x0 + W - 0.06;
-  const wallH = 0.72, roofH = 0.35 + depth * 0.2;
-  const cy = depth / 2;
+export const WALL_KINDS = ['plaster', 'stone'] as const;
+export function housePiece(mask: number, floors: number, wall: 'plaster' | 'stone'): Model {
+  const exN = !(mask & 1), exE = !(mask & 2), exS = !(mask & 4), exW = !(mask & 8);
+  const inset = 0.07, over = 0.06;
+  const wallH = floors >= 2 ? 1.0 : 0.62;
+  const rise = 0.75, maxRise = 0.42;
+  const x0 = exW ? inset : -0.01, x1 = exE ? 1 - inset : 1.01, y0 = exN ? inset : -0.01, y1 = exS ? 1 - inset : 1.01;
+  const rx0 = exW ? inset - over : -0.01, rx1 = exE ? 1 - inset + over : 1.01, ry0 = exN ? inset - over : -0.01, ry1 = exS ? 1 - inset + over : 1.01;
+  const dEdge = (x: number, y: number) => Math.min(exW ? x - rx0 : 9, exE ? rx1 - x : 9, exN ? y - ry0 : 9, exS ? ry1 - y : 9);
+  const roofH = (x: number, y: number) => {
+    const d = dEdge(x, y);
+    const h = Math.min(maxRise, d * rise);
+    // shingle rows: tiny steps along the slope
+    return wallH + h + (d < 9 ? (Math.floor(d * 14) % 2) * 0.012 : 0);
+  };
+  const rectD = (x: number, y: number, ax: number, bx: number, ay: number, by: number) => Math.max(ax - x, x - bx, ay - y, y - by);
+  const wallM: Mat = wall === 'stone' ? { ramp: ['#3c3844', '#57525f', '#76707e', '#958e9c'] } : { ramp: ['#6a5a44', '#9a8466', '#c8b08a', '#e2cfa6'] };
+  const parts: Part[] = [
+    [(x, y, z) => Math.max(rectD(x, y, x0, x1, y0, y1), z - wallH, -z), 0],
+    [(x, y, z) => Math.max(rectD(x, y, rx0, rx1, ry0, ry1), (z - roofH(x, y)) * 0.75, wallH - 0.04 - z), 1],
+  ];
+  if (wall === 'plaster') {
+    // timber frame: corner posts and a beam under the eaves on exposed faces
+    parts.push([(x, y, z) => {
+      let d = 1e9;
+      if (exS) d = Math.min(d, Math.max(rectD(x, y, x0 - 0.01, x1 + 0.01, y1 - 0.01, y1 + 0.012), Math.abs(z - (wallH - 0.05)) - 0.035));
+      for (const [px, ok] of [[x0, exW], [x1, exE]] as [number, boolean][]) if (ok && exS) d = Math.min(d, Math.max(Math.abs(x - px) - 0.035, Math.abs(y - y1) - 0.035, z - wallH, -z));
+      return d;
+    }, 2]);
+  }
+  if (exS) {
+    // windows on the south face (lit at night through the instance emissive scale)
+    parts.push([(x, y, z) => {
+      let d = 1e9;
+      for (const wx of [0.3, 0.7]) d = Math.min(d, Math.max(Math.abs(x - wx) - 0.08, Math.abs(y - y1) - 0.02, Math.abs(z - (floors >= 2 ? 0.7 : 0.34)) - 0.09));
+      if (floors >= 2) d = Math.min(d, Math.max(Math.abs(x - 0.5) - 0.08, Math.abs(y - y1) - 0.02, Math.abs(z - 0.3) - 0.09));
+      return d;
+    }, 3]);
+  }
   return model([
-    { ramp: R.wall }, { ramp: R.timber }, { ramp: R.roof }, { ramp: R.glass, emit: [150, 95, 35] }, { ramp: R.rock },
-  ], [
-    [(x, y, z) => box(x, y, z, x0 + W / 2, cy + 0.02, wallH / 2, W / 2 - 0.08, depth / 2 - 0.1, wallH / 2), 0],
-    [(x, y, z) => Math.max(box(x, y, z, x0 + W / 2, cy + 0.02, wallH / 2, W / 2 - 0.06, depth / 2 - 0.08, wallH / 2 + 0.005),
-      -box(x, y, z, x0 + W / 2, cy + 0.02, wallH / 2 + 0.02, W / 2 - 0.13, depth / 2 - 0.02, wallH / 2 - 0.06)), 1],
-    [(x, y, z) => roofX(x, y, z, ox0 - 0.04, ox1 + 0.04, cy, depth / 2 + 0.04, wallH - 0.02, roofH) + Math.max(0, Math.sin(z * 55)) * 0.012 + (Math.abs(y - cy) < 0.035 ? -0.02 : 0), 2],
-    // windows on the south wall, one per tile except where a door may sit (middle)
-    [(x, y, z) => {
-      let dd = 1e9;
-      for (let k = 0; k < W; k++) {
-        if (W === 3 && k === 1) continue;
-        dd = Math.min(dd, box(x, y, z, x0 + k + 0.5, depth - 0.07, 0.42, 0.13, 0.03, 0.1));
-      }
-      return dd;
-    }, 3],
-    [(x, y, z) => (col === 2 || col === 3 ? box(x, y, z, x0 + W - 0.35, cy - 0.15, wallH + roofH * 0.7, 0.08, 0.08, roofH * 0.5) : 1e9), 4],
-  ], { zMax: wallH + roofH + 0.25, padX: 0, fh: depth, fw: 1, outline: 0.6 });
+    wallM,
+    { ramp: ['#5a5a5a', '#828282', '#ababab', '#d2d2d2'], id: MAT.TINT, bias: 0.2 },
+    { ramp: ['#24160a', '#3a2412'] },
+    { ramp: ['#ffb040', '#ffd27a'], emit: [255, 165, 60] },
+  ], parts, { zMax: wallH + maxRise + 0.05, padX: 0.05, outline: 0.75 });
 }
+
+/** roof colour per structure style (unknown styles hash into ROOF_COLORS) */
+export const ROOF_COLORS: Record<string, [number, number, number]> = {
+  'timber-red': [0.86, 0.32, 0.24], 'timber-blue': [0.34, 0.5, 0.86], 'stone-moss': [0.42, 0.62, 0.36], marble: [0.88, 0.86, 0.8], thatch: [0.86, 0.7, 0.36],
+};
+export const ROOF_FALLBACK: [number, number, number][] = [[0.86, 0.32, 0.24], [0.34, 0.5, 0.86], [0.6, 0.36, 0.7], [0.86, 0.7, 0.36], [0.42, 0.62, 0.36]];
 
 // ---------------------------------------------------------------- objects
 
@@ -367,6 +397,15 @@ export function objectModels(): ObjSpec[] {
   ], { zMax: 0.95, padX: 0.1 }));
   const spear: Part = [(x, y, z) => Math.min(cylZ(x, y, z, 0.78, 0.6, 0, 0.95, 0.02), coneZ(x, y, z, 0.78, 0.6, 0.95, 0.15, 0.05)), 3];
   add('o:guard', figure({ ramp: R.cloth, id: MAT.TINT }, [spear], [(x, y, z) => Math.max(sph(x, y, z, 0.5, 0.56, 0.62, 0.17), 0.6 - z), 3]));
+  add('o:gate:moon', door({ ramp: ['#1a2040', '#2a3260', '#3c4888', '#5a68b0'] }, 0.82, 0.92, [
+    [(x, y, z) => Math.max(sph(x, y, z, 0.5, 0.9, 0.55, 0.13), -sph(x, y, z, 0.56, 0.86, 0.6, 0.11)), 2],
+  ]));
+  add('o:gate:moon:done', arch({ ramp: R.stone }, { ramp: ['#202a50', '#3a4a80'], emit: [40, 60, 120] }, 0.9, 0.92));
+  add('o:gate:foes', door(wood, 0.82, 0.92, [
+    [(x, y, z) => { let d = 1e9; for (let k = 0; k < 5; k++) d = Math.min(d, box(x, y, z, 0.22 + k * 0.14, 0.92, 0.42, 0.018, 0.02, 0.42)); return d; }, 2],
+    [(x, y, z) => sph(x, y, z, 0.5, 0.95, 0.68, 0.1), 3],
+  ]));
+  add('o:gate:foes:done', arch({ ramp: R.stone }, dark, 0.9, 0.92));
   // ledge chevrons (flat, glowing) per direction
   for (const dir of ['n', 'e', 's', 'w'] as const) {
     const rot = (x: number, y: number): [number, number] => {

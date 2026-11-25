@@ -7,6 +7,7 @@ import { reqItems } from '../core/req';
 import { h } from './shared';
 import type { Index } from './shared';
 import type { SettingsModel } from './settingsModel';
+import type { GraphicsDef } from '../render/graphics';
 
 export interface Row {
   el: HTMLElement;
@@ -307,9 +308,9 @@ function toolOutcome(w: World, ix: Index, id: ItemId, off: boolean): { key: stri
   });
   const opens = g
     ? nEdges + nOther
-      ? `${g.label} · ${nEdges} gate${nEdges === 1 ? '' : 's'}${nOther ? ` + ${nOther} other check${nOther === 1 ? '' : 's'}` : ''} ask for it`
+      ? `${g.label} · ${nEdges} gate${nEdges === 1 ? '' : 's'}${nOther ? ` + ${nOther} other check${nOther === 1 ? '' : 's'}` : ''} ${nEdges + nOther === 1 ? 'asks' : 'ask'} for it`
       : `${g.label} · no gate asks for it this seed`
-    : `${nEdges} gate${nEdges === 1 ? '' : 's'} ask for it`;
+    : `${nEdges} gate${nEdges === 1 ? ' asks' : 's ask'}${nOther ? `, plus ${nOther} other check${nOther === 1 ? '' : 's'}` : ''}`;
   const key = JSON.stringify([found.map((f) => [f.c.id, f.k]), opens]);
   return {
     key,
@@ -344,4 +345,109 @@ function priceLine(w: World, id: ItemId): { key: string; nodes: Node[] } {
   });
   nodes.push(box);
   return { key, nodes: [h('div', { class: 'pa-out' }, ...nodes)] };
+}
+
+// ---------------------------------------------------------------- graphics settings (generic over GRAPHICS_DEFS)
+export function fmtGraphic(d: GraphicsDef, v: number | boolean | string | undefined): string {
+  if (v === undefined) return '';
+  if (d.type === 'enum') return d.options?.find((o) => o.value === v)?.label ?? String(v);
+  if (typeof v !== 'number') return typeof v === 'boolean' ? (v ? 'on' : 'off') : String(v);
+  if (d.type === 'int') return String(v);
+  if (d.min === 0 && d.max === 1) return `${Math.round(v * 100)}%`;
+  const step = d.step ?? 0.1;
+  const dec = step >= 1 ? 0 : Math.min(3, (String(step).split('.')[1] ?? '').length);
+  return v.toFixed(dec);
+}
+
+/**
+ * A graphics row has no effect when its "master" in the same group is off: the master is another
+ * def whose key (minus a plural s) prefixes this key, e.g. shadows -> shadowStrength, bloom -> bloomThreshold.
+ * Off means: bool false, enum 'off'/'none', or a number at 0. Missing keys are simply ignored.
+ */
+export function graphicsMaster(defs: GraphicsDef[], d: GraphicsDef): GraphicsDef | undefined {
+  return defs.find((m) => {
+    if (m === d || m.group !== d.group) return false;
+    const stem = m.key.replace(/s$/, '');
+    return stem.length >= 3 && d.key.startsWith(stem) && d.key !== m.key;
+  });
+}
+const isOff = (m: GraphicsDef, v: unknown) =>
+  m.type === 'bool' ? v === false : m.type === 'enum' ? v === 'off' || v === 'none' : typeof v === 'number' && m.min === 0 && v === 0;
+
+export function graphicsRow(model: SettingsModel, d: GraphicsDef, defs: GraphicsDef[], prefix: string): Row {
+  const id = uid(`${prefix}-${d.key.replace(/[^a-z0-9]/gi, '')}`);
+  const lbl = h('span', { class: 'pa-set-lbl' }, d.label);
+  const label = h('label', { for: id, class: 'pa-set-label' }, lbl);
+  const val = h('span', { class: 'pa-set-val pa-num' });
+  const reset = resetBtn(d.label, () => { if (d.default !== undefined) model.setG(d.key, d.default); });
+  const help = h('p', { class: 'pa-set-help', id: id + '-help' }, d.help);
+  const note = h('p', { class: 'pa-set-note' });
+  const el = h('div', { class: `pa-set is-${d.type} is-gfx`, 'data-gkey': d.key });
+  let sync: () => void = () => {};
+  const master = graphicsMaster(defs, d);
+
+  if (d.type === 'bool') {
+    const sw = switchInput(id, (v) => model.setG(d.key, v));
+    sw.setAttribute('aria-describedby', id + '-help');
+    el.append(h('div', { class: 'pa-set-top' }, label, reset, sw), help, note);
+    sync = () => { sw.checked = model.getG(d.key) === true; };
+  } else if (d.type === 'enum') {
+    const opts = d.options ?? [];
+    if (opts.length <= 4) {
+      const box = h('div', { class: 'pa-seg', role: 'radiogroup', 'aria-labelledby': id + '-l' });
+      const inputs: HTMLInputElement[] = [];
+      opts.forEach((o, i) => {
+        const oid = `${id}-${i}`;
+        const r = h('input', { type: 'radio', name: id, id: i === 0 ? id : oid, value: o.value, class: 'pa-seg-in', 'aria-description': o.help });
+        r.addEventListener('input', () => { if (r.checked) model.setG(d.key, o.value); });
+        inputs.push(r);
+        box.append(r, h('label', { for: i === 0 ? id : oid, class: 'pa-seg-l', title: o.help ?? o.label }, o.label));
+      });
+      label.id = id + '-l';
+      label.removeAttribute('for');
+      el.append(h('div', { class: 'pa-set-top' }, label, reset), h('div', { class: 'pa-set-ctl' }, box), help, note);
+      sync = () => { const v = model.getG(d.key); for (const r of inputs) r.checked = r.value === v; };
+    } else {
+      const sel = h('select', { id, class: 'pa-select', 'aria-describedby': id + '-help' },
+        ...opts.map((o) => h('option', { value: o.value, title: o.help }, o.label)));
+      sel.addEventListener('input', () => model.setG(d.key, sel.value));
+      el.append(h('div', { class: 'pa-set-top' }, label, reset), h('div', { class: 'pa-set-ctl' }, sel), help, note);
+      sync = () => { if (notFocused(sel)) sel.value = String(model.getG(d.key)); };
+    }
+  } else {
+    const min = d.min ?? 0, max = d.max ?? 1;
+    const range = h('input', { type: 'range', id, min, max, step: d.step ?? (d.type === 'int' ? 1 : 0.01), 'aria-describedby': id + '-help' });
+    range.addEventListener('input', () => {
+      const n = Number(range.value);
+      if (!Number.isFinite(n)) return;
+      const v = d.type === 'int' ? Math.round(n) : n;
+      model.setG(d.key, v);
+      val.textContent = fmtGraphic(d, v);
+    });
+    el.append(h('div', { class: 'pa-set-top' }, label, reset), h('div', { class: 'pa-set-ctl' }, range, val), help, note);
+    sync = () => {
+      const v = model.getG(d.key);
+      if (notFocused(range) && typeof v === 'number') range.value = String(v);
+      val.textContent = fmtGraphic(d, v);
+    };
+  }
+
+  return {
+    el, group: d.group,
+    text: `${d.label} ${d.group} ${d.help} ${d.keywords ?? ''} ${d.key} graphics ${(d.options ?? []).map((o) => o.label).join(' ')}`.toLowerCase(),
+    sync() {
+      sync();
+      const mod = model.modifiedG(d.key);
+      el.classList.toggle('is-mod', mod);
+      reset.hidden = !mod;
+      const inert = !!master && isOff(master, model.effG(master.key));
+      el.classList.toggle('is-inert', inert);
+      const asked = model.getG(d.key), eff = model.effG(d.key);
+      note.textContent = asked !== eff ? `Using ${fmtGraphic(d, eff)}: limited by the renderer.` : inert ? `No effect right now: ${master!.label} is off.` : '';
+      note.className = asked !== eff ? 'pa-set-note is-warn' : 'pa-set-note';
+      note.hidden = !note.textContent;
+    },
+    highlight(words) { lbl.replaceChildren(...marked(d.label, words)); },
+    changed: () => (model.effG(d.key) !== model.defG(d.key) ? 1 : 0),
+  };
 }

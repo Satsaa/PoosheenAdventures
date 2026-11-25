@@ -1,6 +1,7 @@
 // Checks tab: validator lints, generation stats, world counts, and a batch test over many seeds.
 import { countChanges } from '../core/settings';
-import { h } from './shared';
+import { h, reqPhases, enemySummary, PHASE_GLYPH } from './shared';
+import { TIME_ITEM } from '../core/req';
 import type { TabCtx, TabView } from './tab';
 
 const BATCH = 200;
@@ -64,7 +65,23 @@ export function createChecksTab(): TabView {
       ['locked doors', g.edges.filter((e) => e.lock).length],
       ['tile maps', world.dims.length],
       ['spheres', world.solution.spheres.length],
+      ['enemies', ctx.ix.enemies.length],
     ];
+    const timed = (r: Parameters<typeof reqPhases>[0]) => reqPhases(r).size > 0;
+    const tEdges = g.edges.filter((e) => timed(e.req)).length;
+    const tChecks = g.checks.filter((c) => timed(c.req)).length + g.sources.filter((x) => timed(x.req)).length;
+    const tStages = world.npcs.reduce((a, n) => a + n.stages.filter((st) => st.phase || timed(st.when)).length, 0);
+    const tFoes = ctx.ix.enemies.filter((e) => e.obj.phase).length;
+    const dial = g.checks.find((c) => c.item === TIME_ITEM);
+    const dialK = dial ? world.solution.checkSphere[dial.id] : undefined;
+    const dialName = world.items[TIME_ITEM]?.name ?? 'Sun Dial';
+    const flows = g.timeFlows === undefined ? null : !!g.timeFlows;
+    const timeLine = flows === null
+      ? 'This world has no time of day.'
+      : flows
+        ? `${PHASE_GLYPH.day} ${PHASE_GLYPH.night} Time flows: day and night alternate by themselves, so time gates only mean waiting.`
+        : `Time is frozen until the ${dialName} is found${dial ? (dialK !== undefined ? ` (sphere ${dialK})` : ' (never reached)') : ' (it is not in this world)'}; before that, time gates stay shut.`;
+    const foeSum = enemySummary(ctx.ix.enemies);
 
     const track = h('div', {
       class: 'pa-bar', role: 'progressbar', 'aria-label': 'Seeds tested', 'aria-valuemin': '0', 'aria-valuemax': String(batch.n), 'aria-valuenow': String(batch.done),
@@ -85,6 +102,10 @@ export function createChecksTab(): TabView {
       settingsHint(ctx) ?? '',
       h('h3', { class: 'pa-label pa-sec-t' }, 'This world'),
       h('dl', { class: 'pa-counts' }, ...counts.flatMap(([k, v]) => [h('div', null, h('dt', null, k), h('dd', { class: 'pa-num' }, String(v)))])),
+      h('h3', { class: 'pa-label pa-sec-t' }, 'Time and enemies'),
+      h('p', { class: 'pa-line' }, timeLine),
+      h('p', { class: 'pa-line pa-muted pa-num' }, `Depends on the time of day: ${tEdges} edge${tEdges === 1 ? '' : 's'}, ${tChecks} check${tChecks === 1 ? '' : 's'} or source${tChecks === 1 ? '' : 's'}, ${tStages} NPC stage${tStages === 1 ? '' : 's'}, ${tFoes} enem${tFoes === 1 ? 'y' : 'ies'}.`),
+      h('p', { class: 'pa-line pa-num' }, ctx.ix.enemies.length ? `${ctx.ix.enemies.length} enemies: ${foeSum.text}` : 'No enemies in this world.'),
       h('h3', { class: 'pa-label pa-sec-t' }, 'Batch test'),
       h('div', { class: 'pa-batch' }, btn, track, tally),
     );

@@ -1,17 +1,17 @@
 // Seed -> blueprint (logic graph + features to realise). No tiles yet.
 import type { HNode, ItemId, LogicGraph } from '../core/types';
 import { Rng, childSeed } from '../core/rng';
-import { BASE_ITEMS, BIOMES, GATES, UNDER_BIOMES } from '../core/content';
-import { NONE, any, has, reqItems, use } from '../core/req';
+import { BASE_ITEMS, BIOMES, ENEMIES, GATES, UNDER_BIOMES, WEAPONS } from '../core/content';
+import { NONE, all, any, at, has, reqItems, use } from '../core/req';
 import { solve } from '../core/solver';
 import { Ctx, hnode, type RegionBP, type StackBP } from './blueprint';
 import { makePlan, type Plan } from './plan';
 import { buildStack, localSource, placeItem } from './regions';
 import { singleRoom } from './dungeon';
 import { addNpcs } from './npcs';
-import { growRegions, splitByRivers, traceRivers, type Partition } from './spatial';
+import { growRegions, landMask, splitByRivers, traceRivers, type Partition } from './spatial';
 import { oneWaySafe, requiredTable } from './validate';
-import type { GenSettings } from '../core/settings';
+import { landScreens, screensPerRegion, type GenSettings } from '../core/settings';
 
 export interface Blueprint {
   ctx: Ctx;
@@ -43,8 +43,18 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   const plan = makePlan(new Rng(childSeed(seed, 'plan')), ctx);
 
   // 1. worlds: partition space first
-  const base = growRegions(new Rng(childSeed(seed, 'over')), GW, GH, S.regions);
-  const startScreen = Math.max(0, GH - 2) * GW + Math.max(0, (GW >> 1) - 1);
+  //    (the land need not fill the rectangle: what is left over becomes sea and mountain range)
+  const land = landMask(childSeed(seed, 'land'), GW, GH, landScreens(S));
+  const isLand = (s: number) => land[s] === 1;
+  let landCount = 0;
+  for (let s = 0; s < land.length; s++) landCount += land[s];
+  const base = growRegions(new Rng(childSeed(seed, 'over')), GW, GH, Math.max(1, Math.min(S.regions, Math.floor(landCount / screensPerRegion(S)))), { allowed: isLand });
+  // home is the land screen nearest the bottom middle
+  let startScreen = 0, startDist = Infinity;
+  for (let s = 0; s < land.length; s++) {
+    const d = Math.abs((s % GW) - ((GW >> 1) - 1)) + Math.abs(((s / GW) | 0) - (GH - 2));
+    if (land[s] && base.cell[s] >= 0 && d < startDist) { startDist = d; startScreen = s; }
+  }
   const baseEntry = base.cell[startScreen];
   let others = rng.shuffle(BIOMES.filter((b) => b.id !== 'plains'));
   const usedNames = new Set<string>();
@@ -89,9 +99,9 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
     const seedScreen = prng.pick(part.regions[region.idx]);
     const size = kind === 'under' ? S.underworldSize : S.skySize;
     const maxRegions = Math.min(kind === 'under' ? S.underworldRegions : 2, Math.max(1, Math.floor(size / 3)));
-    let sub = growRegions(prng, GW, GH, 1, { budget: size, seeds: [seedScreen] });
+    let sub = growRegions(prng, GW, GH, 1, { budget: size, seeds: [seedScreen], allowed: isLand });
     for (let i = 0; i < 6 && maxRegions > 1; i++) {
-      const tryP = growRegions(prng, GW, GH, prng.range(Math.min(2, maxRegions), maxRegions), { budget: Math.max(2, prng.range(size - 1, size + 1)), seeds: [seedScreen] });
+      const tryP = growRegions(prng, GW, GH, prng.range(Math.min(2, maxRegions), maxRegions), { budget: Math.max(2, prng.range(size - 1, size + 1)), seeds: [seedScreen], allowed: isLand });
       if (connected(tryP)) { sub = tryP; break; }
     }
     const theme = (idx: number) => {
@@ -160,12 +170,45 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
     if (asked.has(t) || (spent && asked.has(spent))) continue;
     placeItem(ctx, drng, drng.pick(roomy), 'heart', [t], false, true);
   }
+  // time of day only matters if the player can ever reach the other half of it
+  const timeOk = S.timeFlows || plan.tools.includes('sundial');
+  const trng = new Rng(childSeed(seed, 'time'));
+  if (timeOk) {
+    // moonlit chests: some secrets only show themselves at night
+    for (const r of roomy) for (const f of r.feats) {
+      const obj = f.f === 'spot' || f.f === 'pocket' ? f.obj : null;
+      const c = obj?.checkId ? ctx.checks.find((k) => k.id === obj.checkId) : undefined;
+      if (!obj || !c || c.item !== 'heart' || c.kind !== 'chest' || !trng.chance(S.timeGates * 0.4)) continue;
+      c.req = all(c.req, at('night'));
+      c.label = `Moonlit ${c.label.charAt(0).toLowerCase()}${c.label.slice(1)}`;
+      obj.label = c.label;
+      obj.phase = 'night';
+    }
+  }
+  // enemies: they roam regions, and beating them is a renewable source of what they drop
+  const weapon = WEAPONS.find((x) => plan.tools.includes(x));
+  const fight = weapon === 'sword' ? has('sword') : weapon === 'bow' ? use('arrows') : weapon === 'bombBag' ? use('bombs') : null;
+  for (const r of roomy) {
+    const erng = new Rng(childSeed(r.hnode.seed, 'enemies'));
+    const pool = ENEMIES.filter((e) => (e.biomes.includes(r.biome) || e.biomes.includes('*')) && (!e.night || timeOk));
+    const count = Math.min(16, Math.round(r.stack.part.regions[r.idx].length * 0.7 * S.enemies * (r === start ? 0.4 : 1)));
+    const seen = new Set<string>();
+    for (let k = 0; k < count && pool.length; k++) {
+      const e = erng.weighted(pool, (x) => x.weight);
+      r.feats.push({ f: 'spot', obj: { id: `o.en.${r.id}.${k}`, kind: 'enemy', enemy: e.id, label: e.name, icon: e.icon, phase: e.night ? 'night' : undefined } });
+      if (!fight || seen.has(e.drops + (e.night ? 'n' : ''))) continue;
+      seen.add(e.drops + (e.night ? 'n' : ''));
+      ctx.source(r.id, e.drops, `${e.plural} (${ctx.items[e.drops].name})`, e.night ? all(fight, at('night')) : fight);
+    }
+  }
+  // home should look like a village
+  for (let k = 0; k < S.village; k++) start.feats.push({ f: 'house' });
   // without the trade chain the wallet would not exist; hide it in a chest instead
   if (!S.tradeQuest) placeItem(ctx, drng, drng.pick(roomy), 'wallet', drng.shuffle(plan.tools).slice(0, 2), false);
   addNpcs(ctx, new Rng(childSeed(seed, 'npc')), plan, regions, start);
 
   const graph: LogicGraph = {
-    start: start.id, goal: 'flag:victory',
+    timeFlows: S.timeFlows, start: start.id, goal: 'flag:victory',
     locs: [...ctx.locs].map(([id, l]) => ({ id, ...l, x: 0, y: 0 })),
     edges: ctx.edges, checks: ctx.checks, sources: ctx.sources,
   };
@@ -191,14 +234,14 @@ function addLoops(ctx: Ctx, rng: Rng, graph: LogicGraph, over: StackBP): void {
         if (a.elev < b.elev) [a, b] = [b, a];
         // proposed now, judged below once every other loop exists
         const e = ctx.edge(a.id, b.id, NONE, 'ledge', { oneWay: true });
-        stack.openings.push({ edgeId: e.id, a: a.idx, b: b.idx, gate: 'ledge', req: NONE, label: 'Ledge (one-way drop)', oneWay: true });
+        stack.openings.push({ edgeId: e.id, a: a.idx, b: b.idx, gate: 'ledge', req: NONE, label: 'Ledge (one-way drop)', oneWay: true, optional: true });
         stack.hnode.edges.push({ a: a.id, b: b.id, req: NONE, gate: 'ledge', oneWay: true });
       } else {
         const pool = tools(a, b);
         if (!pool.length) continue;
         const g = GATES[rng.pick(pool)];
         const e = ctx.edge(a.id, b.id, g.req, g.gate);
-        stack.openings.push({ edgeId: e.id, a: a.idx, b: b.idx, gate: g.gate, req: g.req, label: g.label + ' (shortcut)' });
+        stack.openings.push({ edgeId: e.id, a: a.idx, b: b.idx, gate: g.gate, req: g.req, label: g.label + ' (shortcut)', optional: true });
         stack.hnode.edges.push({ a: a.id, b: b.id, req: g.req, gate: g.gate });
         if (g.spends) { localSource(ctx, a, g.spends); localSource(ctx, b, g.spends); }
       }
@@ -212,7 +255,7 @@ function addLoops(ctx: Ctx, rng: Rng, graph: LogicGraph, over: StackBP): void {
       if (top.barren) continue;
       const e = ctx.edge(top.id, r.id, NONE, 'portal');
       const down = stack.stack < 0;
-      top.feats.push({ f: 'vertical', edgeId: e.id, style: down ? 'stairs-down' : 'beanstalk', label: down ? 'Stairs to the Underworld (shortcut)' : 'Beanstalk (shortcut)', req: NONE, other: r });
+      top.feats.push({ f: 'vertical', edgeId: e.id, style: down ? 'stairs-down' : 'beanstalk', label: down ? 'Stairs to the Underworld (shortcut)' : 'Beanstalk (shortcut)', req: NONE, other: r, optional: true });
     }
   }
   // dungeon shortcuts only join rooms on the same side of every locked door, so key logic should

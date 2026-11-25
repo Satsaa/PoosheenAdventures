@@ -1,8 +1,12 @@
-import type { ItemDef, ItemId, Req } from './types';
+import type { ItemDef, ItemId, Phase, Req } from './types';
+
+/** The item that sets the time of day at will. */
+export const TIME_ITEM = 'sundial';
 
 export const NONE: Req = { t: 'none' };
 export const has = (item: ItemId, n?: number): Req => (n && n > 1 ? { t: 'has', item, n } : { t: 'has', item });
 export const use = (item: ItemId, n?: number): Req => (n && n > 1 ? { t: 'use', item, n } : { t: 'use', item });
+export const at = (phase: Phase): Req => ({ t: 'time', phase });
 
 export function all(...of: Req[]): Req {
   const flat = of.flatMap((r) => (r.t === 'all' ? r.of : r.t === 'none' ? [] : [r]));
@@ -19,6 +23,8 @@ export interface Caps {
   inv: Map<ItemId, number>;
   /** consumables with an owned container and a reachable source */
   renewable: Set<ItemId>;
+  /** time passes on its own in this world, so any time of day can simply be waited for */
+  anyTime?: boolean;
 }
 
 export function capacity(items: Record<ItemId, ItemDef>, inv: Map<ItemId, number>, item: ItemId): number {
@@ -38,6 +44,8 @@ export function evalReq(req: Req, caps: Caps, items: Record<ItemId, ItemDef>): b
       return (caps.inv.get(req.item) ?? 0) >= (req.n ?? 1);
     case 'use':
       return caps.renewable.has(req.item) && capacity(items, caps.inv, req.item) >= (req.n ?? 1);
+    case 'time':
+      return !!caps.anyTime || (caps.inv.get(TIME_ITEM) ?? 0) > 0;
     case 'all':
       return req.of.every((r) => evalReq(r, caps, items));
     case 'any':
@@ -48,6 +56,7 @@ export function evalReq(req: Req, caps: Caps, items: Record<ItemId, ItemDef>): b
 /** Every item id mentioned anywhere in the requirement. */
 export function reqItems(req: Req, out: Set<ItemId> = new Set()): Set<ItemId> {
   if (req.t === 'has' || req.t === 'use') out.add(req.item);
+  else if (req.t === 'time') out.add(TIME_ITEM);
   else if (req.t === 'all' || req.t === 'any') for (const r of req.of) reqItems(r, out);
   return out;
 }
@@ -61,6 +70,8 @@ export function fmtReq(req: Req, items: Record<ItemId, ItemDef>): string {
       return req.n && req.n > 1 ? `${req.n}× ${name(req.item)}` : name(req.item);
     case 'use':
       return req.n && req.n > 1 ? `spend ${req.n} ${name(req.item)}` : `spend ${name(req.item)}`;
+    case 'time':
+      return req.phase === 'night' ? 'at night' : 'by day';
     case 'all':
       return req.of.map((r) => (r.t === 'any' ? `(${fmtReq(r, items)})` : fmtReq(r, items))).join(' + ');
     case 'any':

@@ -2,7 +2,7 @@
 // needs (entry gate), provides (items inside), and, when expanded, what is promised on entry.
 import type { HNode } from '../core/types';
 import { fmtReq } from '../core/req';
-import { h, chipList, focusLocOf, lockIcon, selLoc, type Selection } from './shared';
+import { h, chipList, focusLocOf, lockIcon, selLoc, enemySummary, enemyDrops, enemyName, type Selection } from './shared';
 import type { TabCtx, TabView } from './tab';
 
 const KIND_LABEL: Record<string, string> = { game: 'Game', world: 'World', region: 'Region', place: 'Place', room: 'Room' };
@@ -49,6 +49,19 @@ export function createTreeTab(): TabView {
       h('div', { class: 'pa-tf' }, h('span', { class: 'pa-tf-k' }, 'gives'), chipList(world, n.provides, { empty: 'nothing' })),
       isOpen ? h('div', { class: 'pa-tf' }, h('span', { class: 'pa-tf-k' }, 'on entry'), chipList(world, n.entryCaps, { empty: 'nothing promised' })) : null,
     );
+    const foes = n.kind === 'game' || n.kind === 'world' ? [] : ix.nodeEnemies.get(n.id) ?? [];
+    if (foes.length) {
+      const sum = enemySummary(foes);
+      const icon = foes.find((f) => enemyName(f.obj) === sum.kinds[0][0])?.obj.icon || '⚔';
+      fields.append(h('div', { class: 'pa-tf' }, h('span', { class: 'pa-tf-k' }, 'enemies'),
+        h('span', { class: 'pa-foe', title: `${foes.length} enem${foes.length === 1 ? 'y' : 'ies'} inside` },
+          h('span', { class: 'pa-foe-i', 'aria-hidden': 'true' }, icon), sum.text)));
+      if (isOpen) {
+        const drops = enemyDrops(world, sum.kinds.map((k) => k[0]), new Set(sub));
+        fields.append(h('div', { class: 'pa-tf' }, h('span', { class: 'pa-tf-k' }, 'drops'),
+          drops.length ? chipList(world, [...new Set(drops.map((d) => d.gives))]) : h('span', { class: 'pa-none' }, 'nothing listed')));
+      }
+    }
     const r = h('div', {
       class: `pa-trow is-${n.kind}${reach ? '' : ' is-dim'}`, 'data-node': n.id,
       style: { '--depth': String(depth) },

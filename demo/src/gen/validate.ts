@@ -78,7 +78,7 @@ export function runLints(g: LogicGraph, items: Items, sol: Solution, npcs: Npc[]
 
   // shops and other paid refills must be payable with the best wallet the world offers
   const last = sol.spheres[sol.spheres.length - 1];
-  const endCaps = { inv: new Map(Object.entries(last?.inv ?? {})), renewable: new Set(last?.renewable ?? []) };
+  const endCaps = { inv: new Map(Object.entries(last?.inv ?? {})), renewable: new Set(last?.renewable ?? []), anyTime: g.timeFlows };
   add('sources', 'Every refill and shop shelf can actually be used',
     g.sources.filter((s) => !evalReq(s.req, endCaps, items)).map((s) => s.label), `${g.sources.length} sources`);
 
@@ -95,7 +95,7 @@ export function runLints(g: LogicGraph, items: Items, sol: Solution, npcs: Npc[]
     for (const st of n.stages) {
       stages++;
       if (st === n.stages[0]) continue; // where an NPC starts is free; only MOVES can strand the player
-      const k = sol.spheres.findIndex((sp) => evalReq(st.when, { inv: new Map(Object.entries(sp.inv)), renewable: new Set(sp.renewable) }, items));
+      const k = sol.spheres.findIndex((sp) => evalReq(st.when, { inv: new Map(Object.entries(sp.inv)), renewable: new Set(sp.renewable), anyTime: g.timeFlows }, items));
       const first = st.when.t === 'none' ? -1 : k;
       if (k < 0 && st.when.t !== 'none') npcBad.push(`${n.name}: stage never activates`);
       else if ((sol.locSphere[st.loc] ?? 99) > first + 1) npcBad.push(`${n.name} moves to ${locName.get(st.loc)} before it is reachable`);
@@ -125,7 +125,7 @@ export function runLints(g: LogicGraph, items: Items, sol: Solution, npcs: Npc[]
       // room's promise obtainable without entering that room? (a small local solve per room)
       const locs = new Set(rooms.flatMap((r) => r.locs));
       const sub: LogicGraph = {
-        start: rooms[0].locs[0], goal: '', locs: g.locs.filter((l) => locs.has(l.id)),
+        timeFlows: g.timeFlows, start: rooms[0].locs[0], goal: '', locs: g.locs.filter((l) => locs.has(l.id)),
         edges: g.edges.filter((e) => locs.has(e.a) && locs.has(e.b)), checks: g.checks.filter((c) => locs.has(c.loc)), sources: g.sources.filter((x) => locs.has(x.loc)),
       };
       const inv: [ItemId, number][] = n.entryCaps.map((c) => [c, 99]);

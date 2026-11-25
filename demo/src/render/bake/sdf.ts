@@ -134,8 +134,25 @@ export function renderModel(m: Model, seed = 1): Sprite {
   const ox = Math.round(pad * TILE_PX);
   const oy = Math.ceil(m.zMax * TILE_PX) + 1;
   const w = Math.round((fw + 2 * pad) * TILE_PX);
-  const h = oy + Math.ceil((fh - zMin) * TILE_PX) + 1;
+  const ty = Math.round(pad * TILE_PX);
+  const topRows = Math.round((fh + 2 * pad) * TILE_PX);
+  const h = Math.max(oy + Math.ceil((fh - zMin) * TILE_PX) + 1, topRows);
   const s = new Sprite(w, h, ox, oy);
+  s.ty = ty;
+  // top-down height map (for world-space shadows): straight down from above
+  if (m.zMax > 0.08) {
+    for (let j = 0; j < topRows; j++)
+      for (let i = 0; i < w; i++) {
+        const gx = (i + 0.5 - ox) / TILE_PX, gy = (j + 0.5 - ty) / TILE_PX;
+        let z = m.zMax + 0.02;
+        for (let k = 0; k < 48; k++) {
+          const d = m.sdf(gx, gy, z);
+          if (d < 0.004) { if (z > 0.03) s.top[j * w + i] = Math.min(255, Math.round(z * 40) + 1); break; }
+          z -= Math.max(d, 0.006);
+          if (z < 0.02) break;
+        }
+      }
+  }
   const grain = m.grain ?? 0.6;
   for (let j = 0; j < h; j++) {
     for (let i = 0; i < w; i++) {

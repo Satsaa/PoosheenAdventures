@@ -1,6 +1,6 @@
 // Playthrough tab: the solver's spheres as a timeline, plus the inventory at the current sphere.
 import { capacity } from '../core/req';
-import { h, chip, selLoc, type Selection } from './shared';
+import { h, chip, selLoc, reqPhases, phaseMark, type Selection } from './shared';
 import type { TabCtx, TabView } from './tab';
 
 export function createPlaythroughTab(): TabView {
@@ -79,7 +79,8 @@ export function createPlaythroughTab(): TabView {
           const chk = ix.check.get(c.check);
           ul.append(h('li', { 'data-check': c.check },
             chip(world, c.item),
-            h('button', { class: 'pa-link', type: 'button', onclick: () => chk && cb.focusLoc(chk.loc), title: chk ? ix.loc.get(chk.loc)?.name : undefined }, chk?.label ?? c.check)));
+            h('button', { class: 'pa-link', type: 'button', onclick: () => chk && cb.focusLoc(chk.loc), title: chk ? ix.loc.get(chk.loc)?.name : undefined }, chk?.label ?? c.check),
+            ...(chk ? [...reqPhases(chk.req)].map((p) => phaseMark(p)) : [])));
         }
         li.append(ul);
       }

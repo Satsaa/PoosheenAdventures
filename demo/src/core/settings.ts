@@ -17,13 +17,14 @@ export interface ItemSetting {
 }
 
 export interface GenSettings {
-  worldW: number; worldH: number; regions: number; borderWobble: number; cliffs: boolean; scenery: number;
+  worldW: number; worldH: number; regions: number; borderWobble: number; cliffs: boolean; scenery: number; landCoverage: number; edgeMountains: number;
   rivers: number; riverWidth: number; riverCaves: number;
   underworld: boolean; underworldSize: number; underworldRegions: number; sky: boolean; skySize: number;
   dungeons: number; sealMedallions: number; lockDensity: number; linearity: number; secrets: number; everyToolUsed: boolean;
   dungeonRooms: number; smallKeys: number; dungeonLoops: number;
   shortcuts: number; ledges: boolean; extraStairs: number;
   favorQuest: boolean; tradeQuest: boolean; merchant: boolean;
+  timeFlows: boolean; timeGates: number; enemies: number; village: number;
   priceBombs: number; priceArrows: number; priceHeart: number; pricePeddlerHeart: number;
   maxAttempts: number;
   items: Record<ItemId, ItemSetting>;
@@ -56,6 +57,8 @@ export const SETTING_DEFS: SettingDef[] = [
   num('worldH', 'World', 'World height', 'int', 3, 48, 1, 6, 'Overworld height in screens.', 'size map rows'),
   num('regions', 'World', 'Regions', 'int', 1, 96, 1, 7, 'How many biomes the overworld is split into. Limited by the map size, the border wobble and the river width, so each region keeps room for its places.', 'biomes areas count'),
   num('borderWobble', 'World', 'Border wobble', 'float', 0, 8, 0.5, 4.5, 'How far region borders stray from the screen grid, in tiles. 0 gives straight, blocky borders. A screen is 12×10 tiles, so more than 8 would tear small regions apart.', 'warp noise organic shape'),
+  num('landCoverage', 'World', 'Land coverage', 'float', 0.3, 1, 0.02, 0.8, 'Share of the map rectangle that is land. Below 1 the world gets an irregular outline, with open sea or mountain ranges filling the rest. 1 fills the whole rectangle.', 'shape island coast outline rectangle ocean'),
+  num('edgeMountains', 'World', 'Mountain borders', 'float', 0, 1, 0.05, 0.3, 'How much of the area outside the land is impassable mountain range instead of open sea.', 'edge ocean sea peaks'),
   flag('cliffs', 'World', 'Height differences', true, 'Regions sit at different heights, which makes cliffs, stairs and one-way ledges. Off puts everything on one level.', 'elevation layers cliffs flat'),
   num('scenery', 'World', 'Scenery density', 'float', 0, 5, 0.25, 1, 'Multiplier for trees, rocks and ponds inside regions. Scenery can never block a path.', 'trees rocks decoration props'),
 
@@ -88,6 +91,13 @@ export const SETTING_DEFS: SettingDef[] = [
   flag('tradeQuest', 'Quests & NPCs', 'Trade chain', true, 'Three NPCs trade up to the Big Wallet. When off, the wallet becomes a hidden chest.', 'npc optional side quest wallet'),
   flag('merchant', 'Quests & NPCs', 'Travelling peddler', true, 'An NPC that follows the player\'s progress and is a moving ammo source. Needs at least one tool in the world to follow.', 'npc dynamic shop moving'),
 
+  flag('timeFlows', 'Time', 'Time passes on its own', true, 'On: day and night alternate, so anything tied to the time of day only means waiting, and the Sun Dial just skips the wait. Off: it stays day until the Sun Dial is found, which makes night doors and night-only things real locks.', 'day night clock sundial'),
+  num('timeGates', 'Time', 'Time-of-day content', 'float', 0, 1, 0.05, 0.5, 'How much is tied to the time of day: moonlit chests, night creatures, NPCs that keep hours. Needs time to pass or the Sun Dial in the world.', 'day night schedule moon'),
+
+  num('enemies', 'Enemies', 'Enemy density', 'float', 0, 4, 0.25, 1, 'How many enemies roam regions and dungeon rooms. Beating them is a renewable source of rupees and ammo, and some dungeon doors stay sealed until their room is cleared.', 'monsters creatures foes combat'),
+
+  num('village', 'Quests & NPCs', 'Village houses', 'int', 0, 12, 1, 3, 'Extra houses around the start, so home looks like a village. Houses are built from tiles in different shapes.', 'buildings town home'),
+
   num('priceBombs', 'Economy', 'Bomb price', 'int', 0, 999, 1, 20, 'Rupees per refill at shops. A price above the wallet capacity makes the shelf unusable, and the checks will say so.', 'shop cost rupees'),
   num('priceArrows', 'Economy', 'Arrow price', 'int', 0, 999, 1, 10, 'Rupees per refill at shops.', 'shop cost rupees'),
   num('priceHeart', 'Economy', 'Shop heart price', 'int', 0, 999, 1, 200, 'Above the base wallet (99) this needs the Big Wallet.', 'shop cost rupees wallet'),
@@ -115,6 +125,7 @@ export const ITEM_SETTING_DEFS: ItemSettingDef[] = [
   tool('flippers', 'Lets you enter rivers and swim along them, wade through deep-water gates and cross underground rivers. Without it in the world, rivers are plain barriers.'),
   tool('hookshot', 'Crosses chasms.'),
   tool('lantern', 'Lights pitch-dark passages and caves.'),
+  { ...tool('sundial', 'Sets the time of day at will, so nothing tied to day or night means waiting. Where time stands still it is the only way to reach the night.'), default: { enabled: true, order: 'early', home: 'any' } },
   { id: 'bombs', fields: ['cap'], default: { cap: 10 }, capRange: [1, 999], help: 'Carried in the Bomb Bag. Never counted by the logic: renewable or unusable.' },
   { id: 'arrows', fields: ['cap'], default: { cap: 30 }, capRange: [1, 999], help: 'Carried with the Bow.' },
   { id: 'rupees', fields: ['cap'], default: { cap: 99 }, capRange: [1, 9999], help: 'Base wallet capacity. Prices above it need the Big Wallet.' },
@@ -132,6 +143,17 @@ export const HOME_OPTIONS: { value: ItemHome; label: string; help: string }[] = 
   { value: 'overworld', label: 'Loose', help: 'A chest, cave or alcove, never a dungeon treasure' },
   { value: 'dungeon', label: 'Dungeon', help: 'A dungeon treasure when a dungeon is free' },
 ];
+
+/** How many screens of the rectangle are land. Small maps are all land. */
+export function landScreens(s: GenSettings): number {
+  const total = s.worldW * s.worldH;
+  return Math.min(total, Math.max(Math.round(total * s.landCoverage), 8));
+}
+
+/** Screens a region needs so its places fit: more with wobbly borders and wide rivers. */
+export function screensPerRegion(s: GenSettings): number {
+  return 3 + s.borderWobble / 2 + (s.rivers > 0 ? (s.riverWidth - 1) * 1.5 : 0);
+}
 
 export function defaultSettings(): GenSettings {
   const s = { items: {} } as GenSettings;
@@ -165,13 +187,12 @@ export function normalizeSettings(partial?: Partial<GenSettings> | null): GenSet
   // a region needs room for its places. Measured: three screens each is enough with straight
   // borders, and wobblier borders eat into small regions, so they need more
   // (and wide rivers take a strip off every region they touch)
-  const perRegion = 3 + s.borderWobble / 2 + (s.rivers > 0 ? (s.riverWidth - 1) * 1.5 : 0);
-  s.regions = Math.max(1, Math.min(s.regions, Math.floor((s.worldW * s.worldH) / perRegion)));
+  s.regions = Math.max(1, Math.min(s.regions, Math.floor(landScreens(s) / screensPerRegion(s))));
   // the Big Wallet is an upgrade: it can never hold less than the base wallet
   s.items.wallet.cap = Math.max(s.items.wallet.cap ?? 0, s.items.rupees.cap ?? 0);
   s.sealMedallions = Math.min(s.sealMedallions, s.dungeons);
-  s.underworldSize = Math.min(s.underworldSize, s.worldW * s.worldH);
-  s.skySize = Math.min(s.skySize, s.worldW * s.worldH);
+  s.underworldSize = Math.min(s.underworldSize, landScreens(s));
+  s.skySize = Math.min(s.skySize, landScreens(s));
   return s;
 }
 

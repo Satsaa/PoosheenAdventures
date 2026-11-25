@@ -424,7 +424,7 @@ export function makeFixtureWorld(seedStr = 'fixture'): World {
     items: {},
     dims,
     tree: { id: 'game', kind: 'game', name: 'Fixture', seed, entryCaps: [], provides: [], needs: { t: 'none' }, edges: [], children: [], locs: [], meta: {} },
-    graph: { start: ow.zoneLoc[0] || 'ow:z0', goal: 'triforce', locs, edges: [], checks: [], sources: [] },
+    graph: { timeFlows: true, start: ow.zoneLoc[0] || 'ow:z0', goal: 'triforce', locs, edges: [], checks: [], sources: [] },
     npcs: [],
     quests: [],
     solution: { ok: true, spheres: [], locSphere: {}, checkSphere: {}, unreachedChecks: [] },

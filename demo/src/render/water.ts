@@ -23,6 +23,19 @@ export function computeWater(dim: Dimension, ve: Float32Array): WaterInfo {
   const n = w * h;
   const kind = new Uint8Array(n);
   const flow = new Uint8Array(n);
+  // the generator's per-tile downstream direction is the truth when present
+  const given = (dim as Dimension & { flow?: Uint8Array }).flow;
+  if (given && given.length === n) {
+    for (let i = 0; i < n; i++) {
+      const g = ground[i];
+      if (g === T.DEEP) kind[i] = WK.ROUGH;
+      else if (g === T.WATER || g === T.SWAMP) {
+        const f = given[i];
+        if (f >= 1 && f <= 4 && g === T.WATER) { kind[i] = WK.RIVER; flow[i] = f; } else if (g === T.WATER) kind[i] = WK.CALM;
+      }
+    }
+    return { kind, flow };
+  }
   const isW = (i: number) => ground[i] === T.WATER;
   for (let i = 0; i < n; i++) if (ground[i] === T.DEEP) kind[i] = WK.ROUGH;
   // horizontal / vertical run lengths through each water tile (capped) -> local band axis and thickness

@@ -24,7 +24,7 @@ export interface SolveOpts {
 export function solve(g: LogicGraph, items: Record<ItemId, ItemDef>, opts: SolveOpts = {}): Solution {
   const inv = new Map<ItemId, number>(opts.inv ?? []);
   const without = opts.without ?? new Set<ItemId>();
-  const caps: Caps = { inv, renewable: new Set() };
+  const caps: Caps = { inv, renewable: new Set(), anyTime: g.timeFlows };
   const reach = new Set<LocId>();
   const opened = new Set<string>();
   const openedByScope = new Map<string, number>();

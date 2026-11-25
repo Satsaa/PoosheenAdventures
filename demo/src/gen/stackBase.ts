@@ -49,6 +49,8 @@ export interface ST {
   river: Int16Array;
   /** 1 = bridge deck over river water */
   bridge: Uint8Array;
+  /** downstream direction per river tile: 1 n, 2 e, 3 s, 4 w */
+  flow: Uint8Array;
   /** every stretch of every river: a new stretch starts at each waterfall */
   segs: { river: number; seg: number; level: number }[];
   /** 1 = something was placed here or wants this tile kept clear */
@@ -65,7 +67,7 @@ export interface ST {
 
 const N8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] as const;
 
-export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wobble: number, scenery: number, riverWidth = 1): ST {
+export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wobble: number, scenery: number, riverWidth = 1, edgeMountains = 0): ST {
   const w = gw * SW, h = gh * SH, n = w * h;
   const dim: Dimension = {
     id: bp.id, name: bp.name, kind: bp.kind, w, h, sw: SW, sh: SH, stack: bp.stack,
@@ -74,7 +76,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
   };
   const st: ST = {
     bp, dim, rng: new Rng(childSeed(seed, 'tiles' + bp.id)), w, h, scenery, owner: new Int16Array(n).fill(-1),
-    border: new Uint8Array(n), river: new Int16Array(n), bridge: new Uint8Array(n), segs: [], reserved: new Uint8Array(n), interior: bp.regions.map(() => []),
+    border: new Uint8Array(n), river: new Int16Array(n), bridge: new Uint8Array(n), flow: new Uint8Array(n), segs: [], reserved: new Uint8Array(n), interior: bp.regions.map(() => []),
     barriers: new Map(), anchors: new Map(), mouths: bp.regions.map(() => []), problems: [],
   };
   const reg = st.owner;
@@ -141,11 +143,24 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
   for (let i = 0; i < n; i++) {
     const r = reg[i];
     dim.region[i] = r;
-    if (r < 0) { dim.ground[i] = T.VOID; continue; }
+    if (r < 0) {
+      dim.ground[i] = T.VOID;
+      if (bp.kind !== 'overworld') continue;
+      // outside the land: open sea, or a mountain range nobody can cross
+      const sx = scr[i] % gw, sy = (scr[i] / gw) | 0;
+      if (valueNoise(seed ^ 0x7a11, sx * 0.45, sy * 0.45) < edgeMountains) {
+        const peak = valueNoise(seed ^ 0x99, (i % w) / 5, ((i / w) | 0) / 5);
+        dim.elev[i] = 4 + (peak > 0.55 ? 1 : 0) + (peak > 0.75 ? 1 : 0);
+        dim.ground[i] = dim.elev[i] >= 5 ? T.SNOW : T.STONE;
+        if (st.rng.chance(0.1)) dim.deco[i] = D.ROCK;
+      } else dim.ground[i] = T.DEEP;
+      continue;
+    }
     const region = bp.regions[r], style = STYLES[region.biome];
     dim.elev[i] = region.elev;
     dim.ground[i] = style.ground;
     if (st.river[i]) { dim.ground[i] = T.WATER; dim.elev[i] = st.segs[st.river[i] - 1].level; continue; }
+    st.flow[i] = 0;
     if (!st.border[i]) { dim.solid[i] = 0; continue; }
     if (style.rimGround !== undefined) {
       dim.ground[i] = style.rimGround;
@@ -153,22 +168,28 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
       if (style.rimGround === T.VOID) dim.region[i] = -1; // sky islands simply end
     } else dim.deco[i] = st.rng.pick(style.rim);
   }
+  if (st.segs.length) dim.flow = st.flow;
   return st;
 }
 
 /** Carve one gated opening per region edge: a straight, one-tile-wide cut through both rims. */
-export function carveOpenings(st: ST): void {
+export function carveOpenings(st: ST, drop: (edgeId: string) => void): void {
   const { w, h, dim, border } = st;
   const regOf = st.owner;
   const carved = new Uint8Array(w * h);
   for (const op of st.bp.openings) {
-    type Cand = { pa: number; pb: number; path: number[]; d: number };
-    const cands: Cand[] = [];
+    type Cand = { pa: number; pb: number; path: number[]; d: number; walls: number[] };
+    let cands: Cand[] = [];
+    // First look for a cut whose sides are already solid. If the border runs too diagonally for
+    // that, accept a cut with open ground beside it and wall that ground up.
+    for (const force of [false, true]) {
+    if (cands.length) break;
     for (const i of st.interior[op.a]) {
       if (st.reserved[i]) continue;
       const x = i % w, y = (i / w) | 0;
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const path: number[] = [];
+        const walls: number[] = [];
         let cx = x + dx, cy = y + dy, ok = true, seenB = false;
         while (ok && path.length < 12) {
           if (cx < 1 || cy < 1 || cx >= w - 1 || cy >= h - 1) { ok = false; break; }
@@ -178,17 +199,32 @@ export function carveOpenings(st: ST): void {
           else if (rj !== op.a || seenB) { ok = false; break; }
           // both sides of the cut must stay solid, or the gate could be walked around
           const l = (cy + dx) * w + cx + dy, r2 = (cy - dx) * w + cx - dy;
-          if (!border[l] || !border[r2] || carved[l] || carved[r2] || carved[j]) { ok = false; break; }
+          if (carved[l] || carved[r2] || carved[j]) { ok = false; break; }
+          for (const side of [l, r2]) {
+            if (border[side]) continue;
+            if (!force || st.reserved[side] || (regOf[side] !== op.a && regOf[side] !== op.b)) { ok = false; break; }
+            walls.push(side);
+          }
+          if (!ok) break;
           path.push(j);
           cx += dx; cy += dy;
         }
-        if (ok && path.length >= 2 && path.length < 12 && !border[cy * w + cx]) cands.push({ pa: i, pb: cy * w + cx, path, d: dy !== 0 ? (dy > 0 ? 2 : 0) : dx > 0 ? 1 : 3 });
+        if (ok && path.length >= 2 && path.length < 12 && !border[cy * w + cx]) cands.push({ pa: i, pb: cy * w + cx, path, walls, d: dy !== 0 ? (dy > 0 ? 2 : 0) : dx > 0 ? 1 : 3 });
       }
     }
+    }
+    if (!cands.length && op.optional) { drop(op.edgeId); continue; }
     if (!cands.length) { st.problems.push(`no room for ${op.label} between ${st.bp.regions[op.a].name} and ${st.bp.regions[op.b].name}`); continue; }
     const min = Math.min(...cands.map((c) => c.path.length));
-    const c = st.rng.pick(cands.filter((k) => k.path.length <= min + 1));
+    cands = cands.filter((k) => k.path.length <= min + 1);
+    const fewest = Math.min(...cands.map((k) => k.walls.length));
+    const c = st.rng.pick(cands.filter((k) => k.walls.length === fewest));
     const ra = st.bp.regions[op.a], rb = st.bp.regions[op.b];
+    for (const t of c.walls) {
+      border[t] = 1;
+      dim.solid[t] = 1;
+      dim.deco[t] = STYLES[st.bp.regions[regOf[t]].biome].rim[0] ?? D.ROCK;
+    }
     let lastA = 0;
     c.path.forEach((j, k) => {
       const side = regOf[j] === op.a ? ra : rb;
@@ -232,15 +268,21 @@ function markRivers(st: ST, scr: Int32Array, gw: number, width: number): void {
   const cw = gw + 1;
   const lineAt = new Map<number, number>();
   const cornerAt = new Map<number, number>();
+  // the course is known exactly, so every tile is told which way its water runs
+  const lineDir = new Map<number, number>();
+  const cornerDir = new Map<number, number>();
+  const dirOf = (from: number, to: number) => (to - from === 1 ? 2 : to - from === -1 ? 4 : to > from ? 3 : 1);
   rivers.forEach((r, ri) => {
     const base = st.segs.length;
     const count = r.seg[r.seg.length - 1] + 1;
     for (let k = 0; k < count; k++) st.segs.push({ river: ri, seg: k, level: r.level[r.seg.indexOf(k)] });
-    r.lines.forEach((l, k) => lineAt.set(lineKey(l.a, l.b), base + r.seg[k]));
+    r.lines.forEach((l, k) => { lineAt.set(lineKey(l.a, l.b), base + r.seg[k]); lineDir.set(lineKey(l.a, l.b), dirOf(r.corners[k], r.corners[k + 1])); });
+    r.corners.forEach((c, k) => { const j = Math.min(Math.max(k - 1, 0), r.lines.length - 1); cornerDir.set(c, dirOf(r.corners[j], r.corners[j + 1])); });
     r.corners.forEach((c, k) => cornerAt.set(c, base + r.seg[Math.min(Math.max(k - 1, 0), r.seg.length - 1)]));
   });
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const i = y * w + x, s = scr[i], sx = s % gw, sy = (s / gw) | 0;
+    if (st.owner[i] < 0) continue; // the sea is not a river
     for (const [dx, dy] of N8) {
       const nx = x + dx, ny = y + dy;
       if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
@@ -248,7 +290,11 @@ function markRivers(st: ST, scr: Int32Array, gw: number, width: number): void {
       if (t === s) continue;
       const tx = t % gw, ty = (t / gw) | 0, ax = Math.abs(tx - sx), ay = Math.abs(ty - sy);
       const g = ax + ay === 1 ? lineAt.get(lineKey(s, t)) : ax === 1 && ay === 1 ? cornerAt.get(Math.max(sy, ty) * cw + Math.max(sx, tx)) : undefined;
-      if (g !== undefined) { river[i] = g + 1; break; }
+      if (g !== undefined) {
+        river[i] = g + 1;
+        st.flow[i] = (ax + ay === 1 ? lineDir.get(lineKey(s, t)) : cornerDir.get(Math.max(sy, ty) * cw + Math.max(sx, tx))) ?? 0;
+        break;
+      }
     }
   }
   tidyRivers(st);
@@ -260,7 +306,7 @@ function markRivers(st: ST, scr: Int32Array, gw: number, width: number): void {
       if (prev[i] || st.owner[i] < 0) continue;
       for (const [dx, dy] of N8) {
         const g = prev[(y + dy) * w + x + dx];
-        if (g && st.bp.regions[st.owner[i]].elev >= st.segs[g - 1].level) { river[i] = g; break; }
+        if (g && st.bp.regions[st.owner[i]].elev >= st.segs[g - 1].level) { river[i] = g; st.flow[i] = st.flow[(y + dy) * w + x + dx]; break; }
       }
     }
   }

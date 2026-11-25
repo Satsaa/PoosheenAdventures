@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 mkdirSync('dist', { recursive: true });
 
 if (process.argv.includes('--test')) {
-  for (const t of ['test-logic', 'test-world', 'test-determinism', 'test-settings', 'test-scale', 'test-rivers']) {
+  for (const t of ['test-logic', 'test-world', 'test-determinism', 'test-settings', 'test-scale', 'test-rivers', 'test-features']) {
     await build({ entryPoints: [`src/${t}.ts`], bundle: true, platform: 'node', outfile: `dist/${t}.cjs`, logLevel: 'warning' });
   }
   execFileSync('node', ['dist/test-logic.cjs', '300'], { stdio: 'inherit' });
@@ -17,6 +17,7 @@ if (process.argv.includes('--test')) {
   execFileSync('node', ['dist/test-settings.cjs', '300'], { stdio: 'inherit' });
   execFileSync('node', ['dist/test-scale.cjs'], { stdio: 'inherit' });
   execFileSync('node', ['dist/test-rivers.cjs', '200'], { stdio: 'inherit' });
+  execFileSync('node', ['dist/test-features.cjs', '100'], { stdio: 'inherit' });
 }
 
 const js = await build({

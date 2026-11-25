@@ -1,5 +1,5 @@
 // Shared helpers for the side panels: tiny DOM builders, item chips, and an index over the World.
-import type { HNode, ItemId, Loc, LocId, World, Check, Edge, Npc } from '../core/types';
+import type { HNode, ItemId, Loc, LocId, World, Check, Edge, Npc, MapObject, Phase, Req, Source } from '../core/types';
 import type { WorldState } from '../core/view';
 import { evalReq, type Caps } from '../core/req';
 
@@ -117,6 +117,9 @@ export interface Index {
   locRegion: Map<LocId, HNode>;
   /** every loc inside a node's subtree */
   subLocs: Map<string, LocId[]>;
+  enemies: EnemyInfo[];
+  /** enemies inside each node's subtree */
+  nodeEnemies: Map<string, EnemyInfo[]>;
 }
 
 export function buildIndex(world: World): Index {
@@ -145,8 +148,16 @@ export function buildIndex(world: World): Index {
     while (n && n.kind !== 'region') n = parent.get(n.id);
     if (n) locRegion.set(l.id, n);
   }
+  const enemies = collectEnemies(world);
+  const nodeEnemies = new Map<string, EnemyInfo[]>();
+  for (const e of enemies) {
+    for (let n: HNode | undefined = locNode.get(e.loc); n; n = parent.get(n.id)) {
+      if (!nodeEnemies.has(n.id)) nodeEnemies.set(n.id, []);
+      nodeEnemies.get(n.id)!.push(e);
+    }
+  }
   return {
-    node, parent, loc, locNode, locRegion, subLocs,
+    node, parent, loc, locNode, locRegion, subLocs, enemies, nodeEnemies,
     check: new Map(world.graph.checks.map((c) => [c.id, c])),
     edge: new Map(world.graph.edges.map((e) => [e.id, e])),
     npc: new Map(world.npcs.map((n) => [n.id, n])),
@@ -161,12 +172,103 @@ export function focusLocOf(ix: Index, n: HNode): LocId | undefined {
   return undefined;
 }
 
-export function capsOf(state: WorldState): Caps {
-  return { inv: new Map(Object.entries(state.inv)), renewable: state.renewable };
+export function capsOf(world: World, state: WorldState): Caps {
+  return { inv: new Map(Object.entries(state.inv)), renewable: state.renewable, anyTime: !!world.graph.timeFlows };
 }
 
-export function reqOk(world: World, state: WorldState, req: Parameters<typeof evalReq>[0]): boolean {
-  return evalReq(req, capsOf(state), world.items);
+/** Logically satisfiable at this sphere (time requirements count as "can be waited for"). */
+export function reqOk(world: World, state: WorldState, req: Req): boolean {
+  return evalReq(req, capsOf(world, state), world.items);
+}
+
+// ---------------------------------------------------------------- time of day
+/** state.hours / state.phase arrive with the time-of-day change; tolerate their absence */
+export function phaseOf(state: WorldState | null | undefined): Phase | undefined {
+  const p = (state as { phase?: unknown } | null | undefined)?.phase;
+  return p === 'day' || p === 'night' ? p : undefined;
+}
+export function hoursOf(state: WorldState | null | undefined): number | undefined {
+  const v = (state as { hours?: unknown } | null | undefined)?.hours;
+  return typeof v === 'number' ? v : undefined;
+}
+
+/** Phases a requirement mentions (empty for timeless requirements). */
+export function reqPhases(req: Req, out: Set<Phase> = new Set()): Set<Phase> {
+  if (req.t === 'time') out.add(req.phase);
+  else if (req.t === 'all' || req.t === 'any') for (const r of req.of) reqPhases(r, out);
+  return out;
+}
+
+/** Like evalReq, but a time requirement only holds in its own phase (when `phase` is known). */
+export function evalNow(req: Req, caps: Caps, world: World, phase: Phase | undefined): boolean {
+  switch (req.t) {
+    case 'time': return evalReq(req, caps, world.items) && (phase === undefined || phase === req.phase);
+    case 'all': return req.of.every((r) => evalNow(r, caps, world, phase));
+    case 'any': return req.of.some((r) => evalNow(r, caps, world, phase));
+    default: return evalReq(req, caps, world.items);
+  }
+}
+
+/** 'open' = passable now, 'wait' = only the time of day is wrong, 'locked' = something else is missing */
+export function reqStatus(world: World, state: WorldState, req: Req): 'open' | 'wait' | 'locked' {
+  const caps = capsOf(world, state);
+  if (!evalReq(req, caps, world.items)) return 'locked';
+  return evalNow(req, caps, world, phaseOf(state)) ? 'open' : 'wait';
+}
+
+export const PHASE_GLYPH: Record<Phase, string> = { day: '☀', night: '☾' };
+export const PHASE_ONLY: Record<Phase, string> = { day: 'by day only', night: 'at night only' };
+
+export function phaseMark(p: Phase, extra = ''): HTMLElement {
+  return h('span', { class: `pa-phase is-${p}`, title: p === 'night' ? 'Only at night' : 'Only by day' }, PHASE_GLYPH[p], extra);
+}
+
+// ---------------------------------------------------------------- enemies
+export interface EnemyInfo { obj: MapObject; loc: LocId; dim: string }
+
+/** Enemy map objects, each mapped through its tile's zone to a logic node. */
+export function collectEnemies(world: World): EnemyInfo[] {
+  const out: EnemyInfo[] = [];
+  for (const d of world.dims) {
+    for (const o of d.objects) {
+      if (o.kind !== 'enemy') continue;
+      const i = Math.round(o.y) * d.w + Math.round(o.x);
+      const z = i >= 0 && i < d.zone.length ? d.zone[i] : -1;
+      let loc = z >= 0 ? d.zoneLoc[z] : undefined;
+      if (!loc) {
+        // standing on a solid tile: take the nearest walkable neighbour
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]]) {
+          const j = (Math.round(o.y) + dy) * d.w + Math.round(o.x) + dx;
+          if (j >= 0 && j < d.zone.length && d.zone[j] >= 0) { loc = d.zoneLoc[d.zone[j]]; break; }
+        }
+      }
+      if (loc) out.push({ obj: o, loc, dim: d.id });
+    }
+  }
+  return out;
+}
+
+export function enemyName(o: MapObject): string {
+  return o.label || o.enemy || 'enemy';
+}
+
+/** "4 Knoblin, 2 Wisp (night)" */
+export function enemySummary(list: EnemyInfo[]): { text: string; kinds: [string, number, Phase | undefined][] } {
+  const m = new Map<string, [string, number, Phase | undefined]>();
+  for (const e of list) {
+    const k = `${enemyName(e.obj)}|${e.obj.phase ?? ''}`;
+    const cur = m.get(k) ?? [enemyName(e.obj), 0, e.obj.phase];
+    cur[1]++;
+    m.set(k, cur);
+  }
+  const kinds = [...m.values()].sort((a, b) => b[1] - a[1]);
+  return { kinds, text: kinds.map(([n, c, p]) => `${c} ${n}${p ? ` (${p})` : ''}`).join(', ') };
+}
+
+/** Sources dropped by enemies: their label starts with the enemy's name. */
+export function enemyDrops(world: World, names: string[], locs: Set<LocId> | null): Source[] {
+  const roots = names.map((n) => n.toLowerCase().replace(/s$/, ''));
+  return world.graph.sources.filter((s) => (!locs || locs.has(s.loc)) && roots.some((r) => r && s.label.toLowerCase().startsWith(r)));
 }
 
 export type Selection = { loc?: LocId; checkId?: string; edgeId?: string; npcId?: string } | null;

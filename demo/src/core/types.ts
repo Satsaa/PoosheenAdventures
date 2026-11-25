@@ -7,12 +7,16 @@ export type LocId = string; // one logic node = one walkable zone
 export type DimId = string;
 
 // ---------------------------------------------------------------- requirements
+export type Phase = 'day' | 'night';
+
 export type Req =
   | { t: 'none' }
   /** owns >= n (default 1). Tools, skills, quest flags, counted collectibles. */
   | { t: 'has'; item: ItemId; n?: number }
   /** spends n of a renewable consumable: needs capacity >= n AND a reachable source. */
   | { t: 'use'; item: ItemId; n?: number }
+  /** only at this time of day. Free where time passes on its own; otherwise needs the time-control item. */
+  | { t: 'time'; phase: Phase }
   | { t: 'all'; of: Req[] }
   | { t: 'any'; of: Req[] };
 
@@ -39,7 +43,9 @@ export type GateKind =
   | 'open' | 'bush' | 'boulder' | 'cracked' | 'water' | 'chasm' | 'dark' | 'eye'
   | 'locked' | 'bossdoor' | 'seal' | 'guard' | 'stairs' | 'ledge' | 'portal'
   /** river logic: wading in or out at a level bank, and going over a fall */
-  | 'shore' | 'waterfall';
+  | 'shore' | 'waterfall'
+  /** a door that only opens at night; a room that opens once its enemies are beaten */
+  | 'moon' | 'foes';
 
 export interface Loc {
   id: LocId;
@@ -85,6 +91,8 @@ export interface Source {
 }
 
 export interface LogicGraph {
+  /** true: day and night alternate by themselves, so time requirements only mean waiting */
+  timeFlows: boolean;
   start: LocId;
   /** item id that ends the game when collected */
   goal: ItemId;
@@ -128,7 +136,7 @@ export const D = {
 } as const;
 
 export type ObjKind =
-  | 'gate' | 'chest' | 'entrance' | 'npc' | 'source' | 'ledge' | 'stairs' | 'boss' | 'start';
+  | 'gate' | 'chest' | 'entrance' | 'npc' | 'source' | 'ledge' | 'stairs' | 'boss' | 'start' | 'enemy';
 
 export interface MapObject {
   id: string;
@@ -148,6 +156,10 @@ export interface MapObject {
   /** npc: which npc and which stage stands here */
   npcId?: string;
   stage?: number;
+  /** enemy: which kind (see ENEMIES in core/content), e.g. 'knoblin', 'bat', 'wisp' */
+  enemy?: string;
+  /** only present during this part of the day (night creatures, day-time stalls) */
+  phase?: Phase;
   /** place kind for entrances: house, cave, dungeon, shop, shrine, sanctum */
   style?: string;
   icon?: string;
@@ -162,6 +174,21 @@ export interface RegionInfo {
   x: number;
   y: number;
   color: string;
+}
+
+/** A building: a footprint of tiles (not always a rectangle) with its door on the south side. */
+export interface Structure {
+  id: string;
+  /** what it is: house, shop, dungeon, sanctum, cave */
+  kind: string;
+  /** look, e.g. 'timber-red', 'stone-moss', 'marble': the same style always looks the same */
+  style: string;
+  /** tile indices (y * w + x) the building stands on; all have deco D.HOUSE */
+  tiles: number[];
+  /** the walkable tile in front of the door; the door is in the wall just north of it */
+  door: { x: number; y: number };
+  /** floors above ground, 1 or 2: taller buildings have taller walls */
+  floors: number;
 }
 
 export type DimKind = 'overworld' | 'underworld' | 'sky' | 'interior';
@@ -180,12 +207,16 @@ export interface Dimension {
   deco: Uint8Array; // D.*
   elev: Int8Array; // height level; a tile renders elev steps higher, with wall faces below
   solid: Uint8Array; // 1 = not walkable
+  /** which way river water flows on each tile: 0 = still, 1 = north, 2 = east, 3 = south, 4 = west */
+  flow?: Uint8Array;
   region: Int16Array; // index into regions, -1 = none
   /** walk component -> logic node; -1 for solid tiles. zone[i] indexes zoneLoc */
   zone: Int32Array;
   zoneLoc: LocId[];
   regions: RegionInfo[];
   objects: MapObject[];
+  /** buildings standing in this dimension, built from tiles */
+  structures?: Structure[];
   /** stacked worlds share tile coordinates: -1 underworld, 0 overworld, 1 sky */
   stack?: number;
   /** interiors: the overworld entrance that leads here */
@@ -203,6 +234,8 @@ export interface NpcStage {
   line: string;
   /** checks offered from this stage onward (carried to later stages) */
   offers: string[];
+  /** the NPC is only out during this part of the day */
+  phase?: Phase;
 }
 
 export interface Npc {
