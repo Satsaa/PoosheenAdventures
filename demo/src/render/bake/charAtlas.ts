@@ -50,6 +50,9 @@ export class CharAtlas {
 
   pending() { return this.queue.length; }
 
+  /** after a GL context restore: everything must be uploaded again */
+  markAll() { this.dirty = [{ x: 0, y: 0, w: CHAR_W, h: CHAR_H }]; }
+
   /** bake queued frames for up to `budgetMs` */
   step(budgetMs: number): boolean {
     if (!this.queue.length) return false;

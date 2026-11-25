@@ -8,6 +8,7 @@ import { TILE_PX } from '../bake/sheet';
 import { pal } from '../palette';
 import { hash2 } from '../util';
 import { isWallG } from '../terrain';
+import { DECAL } from '../props';
 
 export const FLAG = { FACE: 1, BEV_N: 2, BEV_W: 4, BEV_E: 8, TINTALL: 32 } as const;
 export const FLOATS = 16;
@@ -158,25 +159,9 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
       const d = deco[i];
       if (ground[i] === T.VOID) continue;
       const L = liftPx[i];
-      if (d === D.HOUSE) {
-        if (dAt(x, y + 1) === D.HOUSE) continue;
-        let depth = 1;
-        while (depth < 3 && dAt(x, y - depth) === D.HOUSE) depth++;
-        const wl = dAt(x - 1, y) !== D.HOUSE, wr = dAt(x + 1, y) !== D.HOUSE;
-        const col = wl && wr ? 3 : wl ? 0 : wr ? 2 : 1;
-        const hf = get(`h:${depth}:${col}`);
-        if (hf) {
-          const f = hf[0];
-          inst.push(x * P - f.ox, top + (y - depth + 1) * P - L - f.oy, f.w, f.h, f.x, f.y, -1, -1, L / P, x, y, 0);
-          if (col !== 1 || x % 2 === 0) windows.push([x + 0.5, y + 1.1, L / P + 0.45]);
-        }
-        continue;
-      }
-      if (d) {
-        let key = 'd:' + d;
-        if (d === D.PINE && ground[i] === T.SNOW) key += ':snow';
-        if (d === D.MUSHROOM && under) key += ':glow';
-        const dl = get(key);
+      // standing props are per-frame sprite instances (props.ts); only flat decals stay in the chunk
+      if (d && DECAL.has(d)) {
+        const dl = get('d:' + d);
         if (dl) inst.sprite(dl[variant(x, y, seed + d * 7, dl.length)], x, y, x, y, L, top);
       }
       // bridge rails on plank tiles spanning water
@@ -212,9 +197,7 @@ export function staticFeatures(dim: Dimension, lay: Layout): { torches: [number,
       if (ground[i] === T.VOID) continue;
       if (deco[i] === D.HOUSE) {
         if (y + 1 < h && deco[i + w] === D.HOUSE) continue;
-        const wl = x === 0 || deco[i - 1] !== D.HOUSE, wr = x === w - 1 || deco[i + 1] !== D.HOUSE;
-        const col = wl && wr ? 3 : wl ? 0 : wr ? 2 : 1;
-        if (col !== 1 || x % 2 === 0) windows.push([x + 0.5, y + 1.1, lay.liftPx[i] / P + 0.45]);
+        if (x % 2 === 0) windows.push([x + 0.5, y + 1.1, lay.liftPx[i] / P + 0.4]);
       } else if (dim.kind === 'interior' && isWallG(ground[i]) && y + 1 < h && !isWallG(ground[i + w]) && ground[i + w] !== T.VOID && (x * 7 + y * 3) % 5 === 0) {
         torches.push([x + 0.5, y + 1.05, lay.liftPx[i + w] / P + 0.6]);
       }

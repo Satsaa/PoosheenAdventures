@@ -107,6 +107,9 @@ export function objectLights(objs: { o: MapObject; done: boolean; z: number }[])
       case 'source':
         out.push(L(x, y, z + 0.3, 1.5, [0.35, 0.7, 0.4], 0));
         break;
+      case 'enemy' as MapObject['kind']:
+        if ((o as MapObject & { enemy?: string }).enemy === 'wisp') out.push(L(x, y, z + 0.7, 2.6, [0.4, 0.9, 1.4], 2));
+        break;
       case 'boss':
         if (!done) out.push(L(x, y + 0.2, z + 0.6, 3.6, [1.8, 0.2, 0.25], 2));
         break;
@@ -114,7 +117,8 @@ export function objectLights(objs: { o: MapObject; done: boolean; z: number }[])
         if ((o.gate as string) === 'waterfall') { out.push(L(x, y - 0.3, z + 0.6, 3.0, [0.22, 0.4, 0.6], 0.7)); break; }
         if (done) break;
         const g = o.gate;
-        if (g === 'seal') out.push(L(x, y + 0.2, z + 0.5, 3.6, [1.7, 0.35, 1.6], 2.5));
+        if ((g as string) === 'moon') out.push(L(x, y + 0.2, z + 0.6, 2.4, [0.5, 0.6, 1.3], 0.8));
+        else if (g === 'seal') out.push(L(x, y + 0.2, z + 0.5, 3.6, [1.7, 0.35, 1.6], 2.5));
         else if (g === 'portal') out.push(L(x, y + 0.2, z + 0.5, 3.6, [0.9, 0.4, 2.0], 2));
         else if (g === 'eye') out.push(L(x, y + 0.4, z + 0.4, 2.2, [1.5, 0.6, 0.15], 1.5));
         else if (g === 'dark') out.push(L(x, y + 0.3, z + 0.4, 1.8, [0.5, 0.2, 1.0], 1));
@@ -127,6 +131,10 @@ export function objectLights(objs: { o: MapObject; done: boolean; z: number }[])
 }
 
 export interface Mood {
+  /** scene exposure (multiplied by the graphics setting) */
+  exposure: number;
+  /** follows the time of day (outdoor dimensions) */
+  outdoor: boolean;
   keyDir: [number, number, number];
   keyCol: [number, number, number];
   ambTop: [number, number, number];
@@ -161,6 +169,7 @@ export function interiorStyle(world: World, dim: Dimension): string {
 
 export function moodFor(world: World | null, dim: Dimension): Mood {
   const base: Mood = {
+    exposure: 1, outdoor: true,
     keyDir: norm([-0.72, 0.38, 0.46]), keyCol: [1.2, 0.8, 0.5], ambTop: [0.24, 0.28, 0.46], ambBot: [0.1, 0.08, 0.15],
     bg0: [0.02, 0.04, 0.08], bg1: [0.04, 0.08, 0.14], fogTint: [0.55, 0.62, 0.85], rock: 0, shadowLen: 3,
     bloom: 0.9, bloomThr: 0.95, sat: 1.15, contrast: 1.08, vig: 1.1, shadowTint: [0.1, 0.45, 0.55], highTint: [1.05, 1.0, 0.9],
@@ -168,14 +177,14 @@ export function moodFor(world: World | null, dim: Dimension): Mood {
   };
   switch (dim.kind) {
     case 'underworld':
-      return { ...base, keyDir: norm([-0.3, -0.2, 0.9]), keyCol: [0.3, 0.24, 0.5], ambTop: [0.27, 0.22, 0.42], ambBot: [0.1, 0.07, 0.15],
+      return { ...base, exposure: 1.2, outdoor: false, keyDir: norm([-0.3, -0.2, 0.9]), keyCol: [0.3, 0.24, 0.5], ambTop: [0.27, 0.22, 0.42], ambBot: [0.1, 0.07, 0.15],
         bg0: [0.015, 0.01, 0.025], bg1: [0.03, 0.02, 0.045], rock: 1, shadowLen: 0, bloom: 1.25, bloomThr: 0.55, sat: 1.25, shadowTint: [0.35, 0.1, 0.55], haze: 0, highTint: [1.05, 0.98, 1.0] };
     case 'sky':
-      return { ...base, keyDir: norm([-0.55, -0.15, 0.82]), keyCol: [1.25, 1.02, 0.78], ambTop: [0.5, 0.6, 0.85], ambBot: [0.22, 0.26, 0.42],
-        bg0: [0.03, 0.07, 0.22], bg1: [0.2, 0.36, 0.7], shadowLen: 2, bloom: 0.8, bloomThr: 0.85, shadowTint: [0.1, 0.25, 0.6], haze: 0.06, hazeCol: [0.7, 0.8, 1.0], ghostTint: [0.45, 0.6, 1.1] };
+      return { ...base, exposure: 0.72, keyDir: norm([-0.55, -0.15, 0.82]), keyCol: [1.25, 1.02, 0.78], ambTop: [0.5, 0.6, 0.85], ambBot: [0.22, 0.26, 0.42],
+        bg0: [0.03, 0.07, 0.22], bg1: [0.2, 0.36, 0.7], shadowLen: 2, bloom: 0.55, bloomThr: 1.15, shadowTint: [0.1, 0.25, 0.6], haze: 0.06, hazeCol: [0.7, 0.8, 1.0], ghostTint: [0.45, 0.6, 1.1] };
     case 'interior': {
       const st = world ? interiorStyle(world, dim) : 'dungeon';
-      const dark = { ...base, keyDir: norm([-0.3, 0.2, 0.9]), shadowLen: 0, rock: 1, haze: 0, bg0: [0.012, 0.01, 0.018] as [number, number, number], bg1: [0.025, 0.02, 0.03] as [number, number, number] };
+      const dark = { ...base, exposure: 1.15, outdoor: false, keyDir: norm([-0.3, 0.2, 0.9]), shadowLen: 0, rock: 1, haze: 0, bg0: [0.012, 0.01, 0.018] as [number, number, number], bg1: [0.025, 0.02, 0.03] as [number, number, number] };
       if (st === 'house' || st === 'shop')
         return { ...dark, keyCol: [0.45, 0.32, 0.2], ambTop: [0.42, 0.3, 0.2], ambBot: [0.16, 0.1, 0.08], bloom: 0.9, bloomThr: 0.7, shadowTint: [0.4, 0.2, 0.1], highTint: [1.08, 1.0, 0.86] };
       if (st === 'sanctum')
@@ -186,4 +195,46 @@ export function moodFor(world: World | null, dim: Dimension): Mood {
     }
   }
   return base;
+}
+
+export interface Sun {
+  /** direction toward the light (x east, y south, z up), normalized */
+  dir: [number, number, number];
+  keyCol: [number, number, number];
+  /** ambient multiplier and tint */
+  amb: number;
+  ambTint: [number, number, number];
+  /** 0 = full day, 1 = deep night */
+  night: number;
+}
+
+const lerp3 = (a: number[], b: number[], t: number): [number, number, number] => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+
+/**
+ * Sun (or moon) for a time of day in hours. The sun rises in the east (6:00), passes high in the
+ * north of the map at noon (shadows fall south, toward the viewer) and sets in the west (18:00);
+ * at night a dim, cool moon takes the opposite arc.
+ */
+export function sunAt(hours: number): Sun {
+  const h = ((hours % 24) + 24) % 24;
+  const dayT = (h - 6) / 12; // 0 sunrise .. 1 sunset
+  const isDay = dayT > -0.04 && dayT < 1.04;
+  const arc = isDay ? Math.min(1, Math.max(0, dayT)) : (((h + 6) % 24) / 12); // moon: 18 -> 6
+  const az = Math.PI * arc; // 0 = east, pi/2 = north, pi = west
+  const elevMax = isDay ? 1.15 : 0.75;
+  const el = Math.max(0.12, Math.sin(Math.PI * Math.min(1, Math.max(0, arc))) * elevMax);
+  const dir = [Math.cos(az) * Math.cos(el), -Math.sin(az) * Math.cos(el) * 0.8 - 0.15, Math.sin(el)];
+  const l = Math.hypot(dir[0], dir[1], dir[2]);
+  // day amount with soft dawn / dusk transitions
+  const day = Math.min(1, Math.max(0, Math.min((h - 5.2) / 1.6, (19.2 - h) / 1.6)));
+  const low = 1 - Math.min(1, Math.sin(Math.PI * Math.min(1, Math.max(0, dayT))) * 1.6); // 1 near horizon
+  const sunCol = lerp3([1.2, 1.05, 0.88], [1.45, 0.72, 0.38], low);
+  const moonCol: [number, number, number] = [0.22, 0.3, 0.52];
+  return {
+    dir: [dir[0] / l, dir[1] / l, dir[2] / l],
+    keyCol: isDay ? lerp3(moonCol, sunCol, day) : moonCol,
+    amb: 0.35 + 0.75 * day,
+    ambTint: lerp3([0.45, 0.6, 1.25], lerp3([1.0, 0.92, 0.95], [1.1, 0.85, 0.8], low), day),
+    night: 1 - day,
+  };
 }

@@ -4,6 +4,7 @@
 import { D, T, type Dimension } from '../core/types';
 import { valueNoise } from '../core/rng';
 import { decoOverhang, drawDeco } from './deco';
+import { isProp } from './props';
 import { pal, flatColor } from './palette';
 import { ctx2d, hash2, hexRgb, makeCanvas, mixHex, prng, rgbStr, withAlpha } from './util';
 
@@ -733,6 +734,7 @@ export function paintRegion(dr: DimRender, c: CanvasRenderingContext2D, rx0: num
       const i = y * w + x;
       const d = deco[i];
       if (ground[i] === T.PLANK && dim.kind !== 'interior') drawRails(c, x, y, top + y * S - ve[i] * H, S, gAt);
+      if (d && isProp(d)) continue; // standing props are drawn per frame as sprites (flatProps in mapView)
       if (!d || ground[i] === T.VOID) continue;
       const px = x * S;
       const py = top + y * S - ve[i] * H;

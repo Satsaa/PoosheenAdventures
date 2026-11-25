@@ -42,6 +42,7 @@ function glow(col: string): HTMLCanvasElement {
 export class Particles {
   list: P[] = [];
   cap = 300;
+  density = 1;
 
   clear() {
     this.list.length = 0;
@@ -59,7 +60,7 @@ export class Particles {
     const { w, h, ground, deco } = dim;
     const area = (vx1 - vx0) * (vy1 - vy0);
     // spawn density independent of zoom, with a ceiling
-    const tries = Math.min(14, Math.max(1, Math.round(area * dt * 0.05)));
+    const tries = Math.min(28, Math.round(Math.min(14, Math.max(1, area * dt * 0.05)) * this.density));
     for (let k = 0; k < tries && this.list.length < this.cap; k++) {
       const fx = vx0 + Math.random() * (vx1 - vx0);
       const fy = vy0 + Math.random() * (vy1 - vy0) + dr.maxVe * dr.hT * 0.5;

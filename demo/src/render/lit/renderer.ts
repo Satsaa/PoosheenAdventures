@@ -24,9 +24,14 @@ import { hexRgb } from '../util';
 import { computeWater } from '../water';
 import { FLOATS, InstBuf, type Layout, buildStatic, layout, objectKey, staticFeatures, wallStyle } from './compose';
 import { type Prog, delFramebuffer, delTexture, framebuffer, glStats, program, texture } from './gl';
-import { type Light, LightGrid, type Mood, moodFor, staticLights } from './lights';
+import { type Light, LightGrid, type Mood, type Sun, moodFor, staticLights } from './lights';
+import { CHAR_H, CHAR_W, charAtlas } from '../bake/charAtlas';
+import { type Dir as CDir, FLYERS } from '../bake/creatures';
+import { type PropGrid, buildPropGrid, forProps, propLook } from '../props';
+import type { Gfx } from '../graphics';
+import { defaultGraphics, gfx as toGfx } from '../graphics';
 import {
-  BLIT_FS, BLUR_FS, BRIGHT_FS, COMPOSITE_FS, FULL_VS, LIGHT_FS, MAX_LIGHTS, POINT_FS, POINT_VS, QUAD_VS, SPRITE_FS, SPRITE_VS,
+  BLIT_FS, BLUR_FS, BRIGHT_FS, CASTER_FS, COMPOSITE_FS, FULL_VS, LIGHT_FS, MAX_LIGHTS, POINT_FS, POINT_VS, QUAD_VS, SPRITE_FS, SPRITE_VS, TERRAIN_H_FS,
 } from './shaders';
 
 export interface DimMetaIn {
@@ -55,6 +60,27 @@ export interface LitFrame {
   lights: Light[];
   particles: Particles | null;
   fresh: number;
+  /** animated characters (NPCs, enemies, the player marker) */
+  actors: Actor[];
+  gfx: Gfx;
+  /** time-of-day sun; applied to outdoor moods only */
+  sun: Sun | null;
+}
+
+export interface Actor {
+  /** creature kind (see bake/creatures.ts) */
+  kind: string;
+  /** world position in tiles (may be fractional while wandering) and the tile it stands on */
+  x: number;
+  y: number;
+  tile: number;
+  dir: CDir | 'w';
+  clip: 'idle' | 'walk';
+  /** animation time in seconds */
+  at: number;
+  tint: [number, number, number];
+  /** emissive scale */
+  e: number;
 }
 
 const CHUNK_TILES = 32;
@@ -89,6 +115,8 @@ interface DimGL {
   nLights: number;
   mask: WebGLTexture;
   maskData: Uint8Array;
+  liftTex: WebGLTexture;
+  props: PropGrid;
   mood: Mood;
   chunks: Map<number, Chunk>;
   lastUse: number;
@@ -139,6 +167,22 @@ export class LitRenderer {
   private pointData = new Float32Array(7 * 320);
   private objInst = new InstBuf();
   private chunkInst = new InstBuf();
+  private propInst = new InstBuf();
+  private castInst = new InstBuf();
+  private castCharInst = new InstBuf();
+  private charInst = new InstBuf();
+  private topTex: WebGLTexture | null = null;
+  private charTex: WebGLTexture[] = [];
+  private charVersion = -1;
+  private pCaster!: Prog;
+  private pTerrH!: Prog;
+  private castTex: WebGLTexture | null = null;
+  private castFbo: WebGLFramebuffer | null = null;
+  private occTex: WebGLTexture | null = null;
+  private occFbo: WebGLFramebuffer | null = null;
+  private depthRb: WebGLRenderbuffer | null = null;
+  /** instance counts of the last frame (for tests) */
+  lastCounts = { props: 0, casters: 0, actors: 0, objects: 0 };
   private lp = new Float32Array(MAX_LIGHTS * 4);
   private lc = new Float32Array(MAX_LIGHTS * 4);
   private colCache = new Map<string, [number, number, number]>();
@@ -176,6 +220,16 @@ export class LitRenderer {
     litStats.atlasMs = lastBakeMs || performance.now() - t0;
     const s = this.sheet;
     this.atlas = [s.albedo, s.normal, s.emissive].map((d) => texture(gl, s.w, s.h, { data: new Uint8Array(d.buffer, d.byteOffset, d.byteLength) }));
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    this.topTex = texture(gl, s.w, s.h, { internal: gl.R8, format: gl.RED, data: s.top });
+    this.charTex = [0, 1, 2].map(() => texture(gl, CHAR_W, CHAR_H));
+    this.charTex.push(texture(gl, CHAR_W, CHAR_H, { internal: gl.R8, format: gl.RED }));
+    this.charVersion = -1;
+    charAtlas().markAll();
+    this.castTex = texture(gl, 1024, 1024);
+    this.castFbo = framebuffer(gl, [this.castTex]);
+    this.pCaster = program(gl, SPRITE_VS, CASTER_FS, 'caster');
+    this.pTerrH = program(gl, FULL_VS, TERRAIN_H_FS, 'terrainH');
     this.colors = this.atlasColors(false);
     this.colorsUnder = this.atlasColors(true);
     this.pSprite = program(gl, SPRITE_VS, SPRITE_FS, 'sprite');
@@ -294,6 +348,7 @@ export class LitRenderer {
       if (!this.lost) {
         d.ovTex.forEach((t) => delTexture(gl, t));
         delTexture(gl, d.mask);
+        delTexture(gl, d.liftTex);
       }
       this.dims.delete(id);
     }
@@ -329,7 +384,12 @@ export class LitRenderer {
     const wi = computeWater(dim, meta.ve);
     for (let i = 0; i < n; i++) { maskData[i * 4 + 2] = wi.flow[i]; maskData[i * 4 + 3] = wi.kind[i]; }
     const mask = texture(gl, dim.w, dim.h, { data: maskData });
+    const liftData = new Uint8Array(n);
+    for (let i = 0; i < n; i++) liftData[i] = dim.ground[i] === T.VOID ? 0 : Math.max(0, Math.min(255, lay.liftPx[i]));
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    const liftTex = texture(gl, dim.w, dim.h, { internal: gl.R8, format: gl.RED, data: liftData });
     d = {
+      liftTex, props: buildPropGrid(dim),
       id: dim.id, dim, lay, cols: Math.ceil(lay.W / CPX), rows: Math.ceil(lay.H / CPX), ov, ovTex,
       lights: new LightGrid(lights), nLights: lights.length, mask, maskData, mood: moodFor(this.world, dim),
       chunks: new Map(), lastUse: performance.now(),
@@ -355,17 +415,29 @@ export class LitRenderer {
     litStats.maskMs = performance.now() - t0;
   }
 
-  private drawSprites(inst: InstBuf, k: number, ox: number, oy: number, tw: number, th: number) {
+  private drawSprites(inst: InstBuf, k: number, ox: number, oy: number, tw: number, th: number,
+    tex: WebGLTexture[] = this.atlas, occ: { lift: WebGLTexture } | null = null, fade = 1) {
     if (!inst.n) return;
     const gl = this.gl, p = this.pSprite;
     gl.useProgram(p.p);
     for (let i = 0; i < 3; i++) {
       gl.activeTexture(gl.TEXTURE0 + i);
-      gl.bindTexture(gl.TEXTURE_2D, this.atlas[i]);
+      gl.bindTexture(gl.TEXTURE_2D, tex[i]);
     }
     gl.uniform1i(p.u.uA, 0);
     gl.uniform1i(p.u.uN, 1);
     gl.uniform1i(p.u.uE, 2);
+    gl.uniform1i(p.u.uOccOn, occ ? 1 : 0);
+    gl.uniform1f(p.u.uDepthOn, occ ? 1 : 0);
+    gl.uniform1f(p.u.uFade, fade);
+    if (occ) {
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, this.occTex);
+      gl.activeTexture(gl.TEXTURE4);
+      gl.bindTexture(gl.TEXTURE_2D, occ.lift);
+      gl.uniform1i(p.u.uOcc, 3);
+      gl.uniform1i(p.u.uLift, 4);
+    }
     gl.uniform2f(p.u.uOff, ox, oy);
     gl.uniform1f(p.u.uK, k);
     gl.uniform2f(p.u.uTarget, tw, th);
@@ -440,6 +512,17 @@ export class LitRenderer {
     this.iw = iw; this.ih = ih;
     this.gTex = [0, 1, 2, 3].map(() => texture(gl, iw, ih));
     this.gFbo = framebuffer(gl, this.gTex);
+    if (this.depthRb) gl.deleteRenderbuffer(this.depthRb);
+    this.depthRb = gl.createRenderbuffer()!;
+    gl.bindRenderbuffer(gl.RENDERBUFFER, this.depthRb);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, iw, ih);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.gFbo);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, this.depthRb);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    delTexture(gl, this.occTex);
+    delFramebuffer(gl, this.occFbo);
+    this.occTex = texture(gl, iw, ih);
+    this.occFbo = framebuffer(gl, [this.occTex]);
     const hdrOpt = this.hdr ? { internal: gl.RGBA16F, type: gl.HALF_FLOAT, min: gl.LINEAR, mag: gl.LINEAR } : { min: gl.LINEAR, mag: gl.LINEAR };
     this.litTex = texture(gl, iw, ih, hdrOpt);
     this.litFbo = framebuffer(gl, [this.litTex]);
@@ -476,7 +559,8 @@ export class LitRenderer {
     if (this.lost) return;
     const gl = this.gl;
     const t0 = performance.now();
-    const rs = Math.min(f.dpr, Math.sqrt(MAX_INTERNAL_PX / Math.max(1, f.cssW * f.cssH)), 2);
+    const G = f.gfx;
+    const rs = Math.max(0.2, Math.min(f.dpr * G.renderScale, Math.sqrt((G.maxPixels * 1e6) / Math.max(1, f.cssW * f.cssH)), 2 * G.renderScale));
     const iw = Math.max(1, Math.min(this.maxTex, Math.round(f.cssW * rs))), ih = Math.max(1, Math.min(this.maxTex, Math.round(f.cssH * rs)));
     if (this.canvas.width !== iw || this.canvas.height !== ih) { this.canvas.width = iw; this.canvas.height = ih; }
     this.ensureTargets(iw, ih);
@@ -495,15 +579,21 @@ export class LitRenderer {
     const lay = d.lay, mood = d.mood;
     const s = f.cam.s;
     const k = (s * rs) / TILE_PX;
-    const offX = Math.round((f.cssW / 2 - f.cam.x * s) * rs);
-    const offY = Math.round((f.cssH / 2 - f.cam.y * s) * rs - lay.top * k);
+    // pixel-snapped camera: move in whole source pixels so sprites never shimmer
+    const camX = G.pixelSnap && k >= 1 ? Math.round(f.cam.x * TILE_PX) / TILE_PX : f.cam.x;
+    const camY = G.pixelSnap && k >= 1 ? Math.round(f.cam.y * TILE_PX) / TILE_PX : f.cam.y;
+    const offX = Math.round((f.cssW / 2 - camX * s) * rs);
+    const offY = Math.round((f.cssH / 2 - camY * s) * rs - lay.top * k);
+    const S0 = G.detailDistance, S1 = G.detailDistance + Math.max(0.01, G.detailFade);
+    const sun = mood.outdoor ? f.sun : null;
 
     // ---- which chunks this frame needs; compose a few, evict only what this frame does not use
     const vx0 = -offX / k, vx1 = (iw - offX) / k, vy0 = -offY / k, vy1 = (ih - offY) / k; // dim px
     const cx0 = Math.max(0, Math.floor(vx0 / CPX)), cx1 = Math.min(d.cols - 1, Math.floor(vx1 / CPX));
     const cy0 = Math.max(0, Math.floor(vy0 / CPX)), cy1 = Math.min(d.rows - 1, Math.floor(vy1 / CPX));
     const nVis = Math.max(0, cx1 - cx0 + 1) * Math.max(0, cy1 - cy0 + 1);
-    let fade = s <= CHUNK_S0 ? 0 : s >= CHUNK_S1 ? 1 : (s - CHUNK_S0) / (CHUNK_S1 - CHUNK_S0);
+    let fade = s <= S0 ? 0 : s >= S1 ? 1 : (s - S0) / (S1 - S0);
+    if (!G.dither) fade = s >= S0 ? 1 : 0;
     if (nVis > MAX_VISIBLE_CHUNKS) fade = 0;
     const visible: Chunk[] = [];
     let missing: [number, number, number][] = [];
@@ -544,10 +634,55 @@ export class LitRenderer {
     const ovK = k * TILE_PX / d.ov.opx;
     if (fade < 1 || missing.length) this.blitLayer(d.ovTex, offX, offY, ovK, d.ov.w, d.ov.h, 1, iw, ih);
     if (fade > 0) for (const c of visible) this.blitLayer(c.tex, offX + c.cx * CPX * k, offY + c.cy * CPX * k, k, CPX, CPX, fade, iw, ih);
-    // dynamic objects
-    const oi = this.objInst;
-    oi.n = 0;
+    // copy the terrain tile ids: sprites test against them for occlusion by raised ground further south
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.gFbo);
+    gl.readBuffer(gl.COLOR_ATTACHMENT3);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.occFbo);
+    gl.blitFramebuffer(0, 0, iw, ih, 0, 0, iw, ih, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.gFbo);
+    gl.readBuffer(gl.COLOR_ATTACHMENT0);
+    this.syncChars();
+
+    // standing sprites: props from the grid, objects, characters (depth = row order, occluded by terrain)
     const fr = this.sheet.frames;
+    const wx0 = Math.floor(vx0 / TILE_PX) - 1, wx1 = Math.ceil(vx1 / TILE_PX) + 1;
+    const wy0 = Math.floor((vy0 - lay.top) / TILE_PX) - 1, wy1 = Math.ceil((vy1 - lay.top + lay.maxLiftPx) / TILE_PX) + 3;
+    // caster region (world tiles): the view plus the reach of shadows toward the sun
+    const sdir = sun ? sun.dir : mood.keyDir;
+    const tanE = Math.max(0.12, sdir[2] / Math.max(1e-3, Math.hypot(sdir[0], sdir[1])));
+    const reach = Math.min(9, 3.4 / tanE + 1);
+    const ux = sdir[0] / Math.max(1e-3, Math.hypot(sdir[0], sdir[1])), uy = sdir[1] / Math.max(1e-3, Math.hypot(sdir[0], sdir[1]));
+    const cr = {
+      x0: Math.floor(wx0 + Math.min(0, ux * reach)) - 2, x1: Math.ceil(wx1 + Math.max(0, ux * reach)) + 2,
+      y0: Math.floor(wy0 + Math.min(0, uy * reach)) - 2, y1: Math.ceil(wy1 + Math.max(0, uy * reach)) + 2,
+    };
+    let castR = 16;
+    while (castR > 1 && ((cr.x1 - cr.x0) * castR > 1024 || (cr.y1 - cr.y0) * castR > 1024)) castR /= 2;
+    cr.x1 = Math.min(cr.x1, cr.x0 + Math.floor(1024 / castR));
+    cr.y1 = Math.min(cr.y1, cr.y0 + Math.floor(1024 / castR));
+    const shadowsOn = G.shadows !== 'off' && fade > 0;
+    const card = G.shadows === 'flat';
+    const pi = this.propInst, ci = this.castInst, ai = this.charInst, aci = this.castCharInst;
+    pi.n = ci.n = ai.n = aci.n = 0;
+    const night = sun ? sun.night : mood.outdoor ? 0 : 1;
+    const pushCaster = (buf: InstBuf, frm: { x: number; y: number; w: number; h: number; ox: number; oy: number; ty: number }, gx: number, gy: number, L: number, flip: boolean) => {
+      if (card) buf.push(gx * TILE_PX - frm.ox, gy * TILE_PX + 9, frm.w, 2, frm.x, frm.y, frm.oy, frm.h, L, 0, 0, 256 | (flip ? 128 : 0));
+      else buf.push(gx * TILE_PX - frm.ox, gy * TILE_PX - frm.ty, frm.w, frm.h, frm.x, frm.y, -1, -1, L, 0, 0, flip ? 128 : 0);
+    };
+    if (fade > 0 || shadowsOn) {
+      const px0 = shadowsOn ? Math.min(wx0, cr.x0) : wx0, px1 = shadowsOn ? Math.max(wx1, cr.x1) : wx1;
+      const py0 = shadowsOn ? Math.min(wy0, cr.y0) : wy0, py1 = shadowsOn ? Math.max(wy1, cr.y1) : wy1;
+      const W = f.dim.w;
+      forProps(d.props, f.dim, px0, py0, px1, py1, (i) => {
+        const look = propLook(f.dim, d.props, i, this.sheet, this.seed);
+        if (!look) return;
+        const x = i % W, y = (i / W) | 0, L = lay.liftPx[i], fm = look.frame;
+        if (fade > 0 && x >= wx0 && x <= wx1 && y >= wy0 && y <= wy1)
+          pi.push(x * TILE_PX - fm.ox, lay.top + y * TILE_PX - L - fm.oy, fm.w, fm.h, fm.x, fm.y, -1, -1, L / TILE_PX, x, y, 0, look.r, look.g, look.b, look.windows ? night * 1.2 : 1);
+        if (shadowsOn && x >= cr.x0 && x <= cr.x1 && y >= cr.y0 && y <= cr.y1) pushCaster(ci, fm, x, y, L / TILE_PX, false);
+      });
+    }
+    let nObj = 0;
     if (s >= 4) {
       for (const { o, done, attach } of f.objs) {
         const key = objectKey(o, done, this.sheet);
@@ -555,12 +690,80 @@ export class LitRenderer {
         const frm = fr.get(key)![0];
         const i = o.y * f.dim.w + o.x;
         const L = lay.liftPx[i] ?? 0;
-        const tint = o.kind === 'npc' ? hexRgb(npcColor(o)).map((v) => v / 255) : o.kind === 'gate' && o.gate === 'guard' ? [0.85, 0.45, 0.2] : [1, 1, 1];
+        const tint = o.kind === 'gate' && o.gate === 'guard' ? [0.85, 0.45, 0.2] : [1, 1, 1];
         const dy = attach && wallStyle(o, key) ? -13 : 0;
         const dx = o.kind === 'gate' && o.gate === 'guard' && done ? 9 : 0;
-        oi.push(o.x * TILE_PX - frm.ox + dx, lay.top + o.y * TILE_PX - L - frm.oy + dy, frm.w, frm.h, frm.x, frm.y, -1, -1, L / TILE_PX, o.x, o.y, 64, tint[0], tint[1], tint[2], 1);
+        const e = (o.gate as string) === 'moon' ? 0.3 + night * 1.4 : 1;
+        if (fade > 0) { pi.push(o.x * TILE_PX - frm.ox + dx, lay.top + o.y * TILE_PX - L - frm.oy + dy, frm.w, frm.h, frm.x, frm.y, -1, -1, L / TILE_PX, o.x, o.y, 64, tint[0], tint[1], tint[2], e); nObj++; }
+        if (shadowsOn && !dy) pushCaster(ci, frm, o.x + dx / TILE_PX, o.y, L / TILE_PX, false);
       }
-      this.drawSprites(oi, k, offX, offY, iw, ih);
+      const ca = charAtlas();
+      for (const a of f.actors) {
+        const dir = a.dir === 'w' ? 'e' : a.dir;
+        const cf = ca.get(a.kind, a.clip, dir) || ca.get(a.kind, 'idle', dir) || ca.get(a.kind, 'idle', 's');
+        if (!cf) { ca.request(a.kind); continue; }
+        const frm = cf.frames[Math.floor(a.at * cf.fps) % cf.frames.length];
+        const flip = a.dir === 'w';
+        const L = lay.liftPx[a.tile] ?? 0;
+        const tx = a.tile % f.dim.w, ty = (a.tile / f.dim.w) | 0;
+        if (fade > 0) ai.push(Math.round(a.x * TILE_PX) - frm.ox, lay.top + Math.round(a.y * TILE_PX) - L - frm.oy, frm.w, frm.h, frm.x, frm.y, -1, -1, L / TILE_PX, tx, ty, 64 | (flip ? 128 : 0), a.tint[0], a.tint[1], a.tint[2], a.e);
+        if (shadowsOn) pushCaster(aci, frm, a.x, a.y, L / TILE_PX, flip);
+      }
+    }
+    this.lastCounts = { props: pi.n - nObj, casters: ci.n + aci.n, actors: ai.n, objects: nObj };
+    if (pi.n || ai.n) {
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LESS);
+      gl.depthMask(true);
+      gl.clear(gl.DEPTH_BUFFER_BIT);
+      this.drawSprites(pi, k, offX, offY, iw, ih, this.atlas, { lift: d.liftTex }, fade);
+      this.drawSprites(ai, k, offX, offY, iw, ih, this.charTex, { lift: d.liftTex }, fade);
+      gl.disable(gl.DEPTH_TEST);
+    }
+
+    // ---- world-space shadow caster height map (R = props / characters, G = terrain)
+    if (shadowsOn || G.terrainShadows) {
+      const cw = (cr.x1 - cr.x0) * castR, ch = (cr.y1 - cr.y0) * castR;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.castFbo);
+      gl.viewport(0, 0, cw, ch);
+      const pt = this.pTerrH;
+      gl.useProgram(pt.p);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, d.liftTex);
+      gl.uniform1i(pt.u.uLift, 0);
+      gl.uniform2f(pt.u.uOrigin, cr.x0, cr.y0);
+      gl.uniform1f(pt.u.uR, castR);
+      gl.uniform2i(pt.u.uDim, f.dim.w, f.dim.h);
+      gl.bindVertexArray(this.vaoEmpty);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      if (shadowsOn && (ci.n || aci.n)) {
+        gl.enable(gl.BLEND);
+        gl.blendEquation(gl.MAX);
+        gl.blendFunc(gl.ONE, gl.ONE);
+        const drawCast = (buf: InstBuf, top: WebGLTexture, alb: WebGLTexture) => {
+          if (!buf.n) return;
+          const pc = this.pCaster;
+          gl.useProgram(pc.p);
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, top);
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, alb);
+          gl.uniform1i(pc.u.uTop, 0);
+          gl.uniform1i(pc.u.uA, 1);
+          gl.uniform2f(pc.u.uOff, -cr.x0 * castR, -cr.y0 * castR);
+          gl.uniform1f(pc.u.uK, castR / TILE_PX);
+          gl.uniform2f(pc.u.uTarget, cw, ch);
+          gl.bindVertexArray(this.vaoSprite);
+          gl.bindBuffer(gl.ARRAY_BUFFER, this.instBuf);
+          gl.bufferData(gl.ARRAY_BUFFER, buf.f.subarray(0, buf.n * FLOATS), gl.DYNAMIC_DRAW);
+          gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, buf.n);
+          gl.bindVertexArray(null);
+        };
+        drawCast(ci, this.topTex!, this.atlas[0]);
+        drawCast(aci, this.charTex[3], this.charTex[0]);
+        gl.blendEquation(gl.FUNC_ADD);
+        gl.disable(gl.BLEND);
+      }
     }
 
     // ---- pass B: lighting
@@ -582,10 +785,31 @@ export class LitRenderer {
     gl.uniform1f(pl.u.uK, k);
     gl.uniform1f(pl.u.uTop, lay.top);
     gl.uniform2f(pl.u.uIS, iw, ih);
-    gl.uniform3fv(pl.u.uKeyDir, mood.keyDir);
-    gl.uniform3fv(pl.u.uKeyCol, mood.keyCol);
-    gl.uniform3fv(pl.u.uAmbTop, mood.ambTop);
-    gl.uniform3fv(pl.u.uAmbBot, mood.ambBot);
+    gl.uniform3fv(pl.u.uKeyDir, sdir);
+    gl.uniform3fv(pl.u.uKeyCol, sun ? sun.keyCol : mood.keyCol);
+    const at = sun ? sun.ambTint : [1, 1, 1], am = sun ? sun.amb : 1;
+    gl.uniform3f(pl.u.uAmbTop, mood.ambTop[0] * at[0] * am, mood.ambTop[1] * at[1] * am, mood.ambTop[2] * at[2] * am);
+    gl.uniform3f(pl.u.uAmbBot, mood.ambBot[0] * at[0] * am, mood.ambBot[1] * at[1] * am, mood.ambBot[2] * at[2] * am);
+    gl.activeTexture(gl.TEXTURE6);
+    gl.bindTexture(gl.TEXTURE_2D, this.castTex);
+    gl.uniform1i(pl.u.uCast, 6);
+    gl.uniform2f(pl.u.uCastO, cr.x0, cr.y0);
+    gl.uniform1f(pl.u.uCastR, castR);
+    gl.uniform2f(pl.u.uCastSize, (cr.x1 - cr.x0) * castR, (cr.y1 - cr.y0) * castR);
+    gl.uniform3fv(pl.u.uSun, sdir);
+    const shadowAny = (shadowsOn || G.terrainShadows) && s >= 3 && (mood.shadowLen > 0 || mood.outdoor);
+    gl.uniform1f(pl.u.uShadowMode, shadowAny ? 1 : 0);
+    gl.uniform1f(pl.u.uShadowStr, G.shadowStrength * (sun ? 1 - sun.night * 0.45 : 1));
+    gl.uniform1f(pl.u.uShadowSoft, G.shadowSoftness + (sun ? sun.night * 0.6 : 0));
+    gl.uniform1f(pl.u.uTerrainSh, G.terrainShadows ? 1 : 0);
+    gl.uniform1f(pl.u.uContact, G.contactShadows);
+    gl.uniform1f(pl.u.uAmbK, G.ambient);
+    gl.uniform1f(pl.u.uSunK, G.sunStrength);
+    gl.uniform1f(pl.u.uPointK, G.pointLights * (0.45 + 1.25 * night));
+    gl.uniform1f(pl.u.uSea, f.dim.kind === 'overworld' ? 1 : 0);
+    gl.uniform1f(pl.u.uFogDark, G.fogDarkness);
+    gl.uniform1f(pl.u.uFogDesat, G.fogDesaturation);
+    gl.uniform1f(pl.u.uWaterK, G.water);
     gl.uniform3fv(pl.u.uBg0, mood.bg0);
     gl.uniform3fv(pl.u.uBg1, mood.bg1);
     gl.uniform3fv(pl.u.uFogTint, mood.fogTint);
@@ -595,7 +819,6 @@ export class LitRenderer {
     gl.uniform1f(pl.u.uFresh, f.fresh);
     gl.uniform1f(pl.u.uHdr, this.hdr ? 1 : 0.5);
     gl.uniform1f(pl.u.uRock, mood.rock);
-    gl.uniform1f(pl.u.uShadowLen, s >= 4 ? mood.shadowLen : 0);
     if (gd) {
       // blur level: about 2 css px of the ghost overview per screen px
       const gScale = gd.ov.opx / TILE_PX;
@@ -609,7 +832,8 @@ export class LitRenderer {
     // lights: spatial-grid query around the view, keep the strongest MAX_LIGHTS
     let nl = 0;
     if (s >= 5) {
-      const wx0 = vx0 / TILE_PX, wx1 = vx1 / TILE_PX, wy0 = (vy0 - lay.top) / TILE_PX, wy1 = (vy1 - lay.top) / TILE_PX + 2;
+      const lx0 = vx0 / TILE_PX, lx1 = vx1 / TILE_PX, ly0 = (vy0 - lay.top) / TILE_PX, ly1 = (vy1 - lay.top) / TILE_PX + 2;
+      const [wx0, wx1, wy0, wy1] = [lx0, lx1, ly0, ly1];
       const ccx = (wx0 + wx1) / 2, ccy = (wy0 + wy1) / 2, half = Math.max(4, (wx1 - wx0) * 0.5);
       const cand: [Light, number][] = [];
       const consider = (l: Light) => {
@@ -620,7 +844,7 @@ export class LitRenderer {
       d.lights.query(wx0, wy0, wx1, wy1, consider);
       for (const l of f.lights) consider(l);
       cand.sort((a, b) => b[1] - a[1]);
-      nl = Math.min(MAX_LIGHTS, cand.length);
+      nl = Math.min(MAX_LIGHTS, G.maxLights, cand.length);
       for (let i = 0; i < nl; i++) {
         const l = cand[i][0];
         this.lp.set([l.x, l.y, l.z, l.r], i * 4);
@@ -681,7 +905,8 @@ export class LitRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.litTex);
     gl.uniform1i(this.pBright.u.uSrc, 0);
     gl.uniform2f(this.pBright.u.uSrcSize, iw, ih);
-    gl.uniform1f(this.pBright.u.uThr, mood.bloomThr);
+    gl.uniform1f(this.pBright.u.uThr, mood.bloomThr * (G.bloomThreshold / 0.85));
+    gl.uniform1f(this.pBright.u.uExp, mood.exposure * G.exposure);
     gl.uniform1f(this.pBright.u.uHdr, this.hdr ? 1 : 0.5);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     const blur = (src: number, dst: number, dx: number, dy: number) => {
@@ -689,7 +914,7 @@ export class LitRenderer {
       gl.useProgram(this.pBlur.p);
       gl.bindTexture(gl.TEXTURE_2D, this.bTex[src]);
       gl.uniform1i(this.pBlur.u.uSrc, 0);
-      gl.uniform2f(this.pBlur.u.uDir, dx, dy);
+      gl.uniform2f(this.pBlur.u.uDir, dx * G.bloomRadius, dy * G.bloomRadius);
       gl.uniform2f(this.pBlur.u.uSize, bw, bh);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     };
@@ -712,10 +937,12 @@ export class LitRenderer {
     gl.uniform1i(pc.u.uLit, 0); gl.uniform1i(pc.u.uB1, 1); gl.uniform1i(pc.u.uB2, 2);
     gl.uniform2f(pc.u.uOut, iw, ih);
     gl.uniform1f(pc.u.uHdr, this.hdr ? 1 : 0.5);
-    gl.uniform1f(pc.u.uBloom, mood.bloom);
-    gl.uniform1f(pc.u.uSat, mood.sat);
-    gl.uniform1f(pc.u.uContrast, mood.contrast);
-    gl.uniform1f(pc.u.uVig, mood.vig);
+    gl.uniform1f(pc.u.uBloom, mood.bloom * G.bloom);
+    gl.uniform1f(pc.u.uSat, mood.sat * G.saturation);
+    gl.uniform1f(pc.u.uContrast, mood.contrast * G.contrast);
+    gl.uniform1f(pc.u.uVig, mood.vig * G.vignette);
+    gl.uniform1f(pc.u.uExp, mood.exposure * G.exposure);
+    gl.uniform1i(pc.u.uTone, ({ filmic: 0, reinhard: 1, punchy: 2, none: 3 } as Record<string, number>)[G.toneMap] ?? 0);
     gl.uniform1f(pc.u.uTime, f.t);
     gl.uniform1f(pc.u.uMotion, f.motion ? 1 : 0);
     gl.uniform1f(pc.u.uHaze, mood.haze);
@@ -732,6 +959,31 @@ export class LitRenderer {
     litStats.worstFrameMs = Math.max(litStats.worstFrameMs, litStats.lastFrameMs);
   }
 
+  /** upload character frames baked since the last frame */
+  private syncChars() {
+    const ca = charAtlas();
+    ca.step(6);
+    if (!ca.dirty.length) return;
+    const gl = this.gl;
+    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, CHAR_W);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    for (const r of ca.dirty) {
+      gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, r.x);
+      gl.pixelStorei(gl.UNPACK_SKIP_ROWS, r.y);
+      const layers = [ca.albedo, ca.normal, ca.emissive];
+      for (let i = 0; i < 3; i++) {
+        gl.bindTexture(gl.TEXTURE_2D, this.charTex[i]);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, r.x, r.y, r.w, r.h, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(layers[i].buffer));
+      }
+      gl.bindTexture(gl.TEXTURE_2D, this.charTex[3]);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, r.x, r.y, r.w, r.h, gl.RED, gl.UNSIGNED_BYTE, ca.top);
+    }
+    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+    gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
+    gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
+    ca.dirty.length = 0;
+  }
+
   /** world-tile bounds of the static lights / tiles: for tests */
   stats() {
     return { dims: this.dims.size, chunks: this.chunkCount(), ...glStats };
@@ -742,6 +994,12 @@ export class LitRenderer {
     this.freeDims();
     if (!this.lost) {
       this.atlas.forEach((t) => delTexture(gl, t));
+      this.charTex.forEach((t) => delTexture(gl, t));
+      delTexture(gl, this.topTex);
+      delTexture(gl, this.castTex);
+      delTexture(gl, this.occTex);
+      delFramebuffer(gl, this.castFbo);
+      delFramebuffer(gl, this.occFbo);
       this.gTex.forEach((t) => delTexture(gl, t));
       delTexture(gl, this.litTex);
       this.bTex.forEach((t) => delTexture(gl, t));

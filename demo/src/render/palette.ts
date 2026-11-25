@@ -59,6 +59,7 @@ export const OBJ_COL = {
   gate: '#c9a3ff',
   ledge: '#ffe08a',
   stairs: '#d8d2c4',
+  enemy: '#ff7a5c',
 } as Record<string, string>;
 
 export const GATE_COL: Record<string, string> = {
@@ -78,4 +79,6 @@ export const GATE_COL: Record<string, string> = {
   portal: '#b06cff',
   open: '#ffffff',
   waterfall: '#8fd3f7',
+  moon: '#9fb4ff',
+  foes: '#ff6a6a',
 };

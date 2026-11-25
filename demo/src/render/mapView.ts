@@ -6,14 +6,21 @@ import { hashStr } from '../core/rng';
 import {
   buildDimRender, buildGhostFill, buildOutline, footprint, rockPattern, type DimRender,
 } from './terrain';
-import { drawObject, drawPin, pinRank, pinColor } from './objects';
+import { drawObject, drawPin, npcColor, pinRank, pinColor } from './objects';
 import { Particles } from './particles';
 import { FLOW_VEC, WK, type WaterInfo, computeWater, isWaterfall } from './water';
 import { FlatChunks, type FChunk, type FlatOverview, buildFlatOverview, flatOverviewFog } from './flatChunks';
-import { LitRenderer, type ObjDraw } from './lit/renderer';
+import { type Actor, LitRenderer, type ObjDraw } from './lit/renderer';
+import { type Gfx, type GraphicsSettings, defaultGraphics, gfx as toGfx } from './graphics';
+import { sunAt } from './lit/lights';
+import { charAtlas } from './bake/charAtlas';
+import { FLYERS, creatureFor } from './bake/creatures';
+import { bakeAtlas } from './bake/index';
+import { type PropGrid, buildPropGrid, forProps, propLook } from './props';
+import { atlasCanvases, charCanvases } from './flatSprites';
 import { type Layout, layout } from './lit/compose';
 import { objectLights } from './lit/lights';
-import { FONT, clamp, ctx2d, hash2, makeCanvas, shade, smoothstep } from './util';
+import { FONT, clamp, ctx2d, hash2, hexRgb, makeCanvas, shade, smoothstep } from './util';
 
 export interface MapState {
   /** logic zones the player can currently reach; tiles whose zone's LocId is not in here are fogged. null = no fog */
@@ -41,6 +48,10 @@ export interface MapView {
   /** 'lit' = WebGL2 normal-mapped pipeline, 'flat' = the existing Canvas 2D renderer */
   setRenderer(mode: 'lit' | 'flat'): void;
   readonly renderer: 'lit' | 'flat';
+  /** apply graphics settings live (no regeneration); cheap enough for every slider tick */
+  setGraphics(g: GraphicsSettings): void;
+  /** time of day in hours (0..24): sun direction / colour, shadows, night lights */
+  setTime(hours: number): void;
 }
 
 const MAX_ZOOM = 48;
@@ -83,6 +94,10 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   let freshT0 = -1;
   let freshPath: Path2D | null = null;
   let sortedObjs: MapObject[] = [];
+  let G: Gfx = toGfx(defaultGraphics());
+  let hours = 10;
+  let sun = sunAt(hours);
+  const propGrids = new Map<DimId, PropGrid>();
 
   // lit (WebGL2) pipeline: draws into its own canvas inserted beneath `canvas`, which becomes the 2D overlay
   let wantMode: 'lit' | 'flat' = 'lit';
@@ -149,11 +164,10 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   function clampCam(c: { x: number; y: number; s: number }) {
     const b = worldBounds();
     c.s = clamp(c.s, minS, maxS());
+    // the world may cover as little as ~10% of the view: the centre can go 80% of a half-view past each edge
     const hw = W / 2 / c.s, hh = Hh / 2 / c.s;
-    const cx0 = b.x0 + hw, cx1 = b.x1 - hw, cy0 = b.y0 + hh, cy1 = b.y1 - hh;
-    const m = 40 / c.s;
-    c.x = cx0 > cx1 ? (b.x0 + b.x1) / 2 : clamp(c.x, cx0 - m, cx1 + m);
-    c.y = cy0 > cy1 ? (b.y0 + b.y1) / 2 : clamp(c.y, cy0 - m, cy1 + m);
+    c.x = clamp(c.x, b.x0 - hw * 0.8, b.x1 + hw * 0.8);
+    c.y = clamp(c.y, b.y0 - hh * 0.8, b.y1 + hh * 0.8);
   }
 
   function tileElevY(x: number, y: number): number {
@@ -255,6 +269,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     flat.clear();
     flatOv.clear();
     waterCache.clear();
+    propGrids.clear();
     dim = null;
     dr = null;
     hover = null;
@@ -294,13 +309,13 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     fogDirty = true;
     maskDirty = true;
     freshPath = null;
-    minS = fitScale();
+    minS = fitScale() * 0.3;
     if (keepCam) clampCam(cam);
     else {
       const b = worldBounds();
       cam.x = (b.x0 + b.x1) / 2;
       cam.y = (b.y0 + b.y1) / 2;
-      cam.s = minS;
+      cam.s = fitScale();
       target = null;
     }
     start();
@@ -342,12 +357,25 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     fogDirty = true;
     if (dim && dr) {
       litLay = layout(dim, dr.ve, dr.voidElev);
-      const wasFit = Math.abs(cam.s - minS) < 1e-3;
-      minS = fitScale();
-      if (wasFit) cam.s = minS;
+      const wasFit = Math.abs(cam.s - fitScale()) < 1e-3;
+      minS = fitScale() * 0.3;
+      if (wasFit) cam.s = fitScale();
       clampCam(cam);
       if (mode === 'flat' && state.fresh.size) buildFresh();
     }
+    start();
+  }
+
+  function setGraphics(g: GraphicsSettings) {
+    G = toGfx(g);
+    particles.density = G.particles;
+    particles.cap = Math.round(300 * Math.min(1.5, G.particles));
+    start();
+  }
+
+  function setTime(h: number) {
+    hours = h;
+    sun = sunAt(h);
     start();
   }
 
@@ -395,15 +423,15 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     const nw = Math.max(1, Math.round(rect.width || canvas.clientWidth || 300));
     const nh = Math.max(1, Math.round(rect.height || canvas.clientHeight || 150));
     const nd = Math.min(3, window.devicePixelRatio || 1);
-    const wasFit = Math.abs(cam.s - minS) < 1e-3;
+    const wasFit = dim ? Math.abs(cam.s - fitScale()) < 1e-3 : false;
     W = nw; Hh = nh; dpr = nd;
     canvas.width = Math.round(W * dpr);
     canvas.height = Math.round(Hh * dpr);
     vignette = null;
     syncGlCanvas();
     if (dim) {
-      minS = fitScale();
-      if (wasFit) { const b = worldBounds(); cam.x = (b.x0 + b.x1) / 2; cam.y = (b.y0 + b.y1) / 2; cam.s = minS; }
+      minS = fitScale() * 0.3;
+      if (wasFit) { const b = worldBounds(); cam.x = (b.x0 + b.x1) / 2; cam.y = (b.y0 + b.y1) / 2; cam.s = fitScale(); }
       clampCam(cam);
     }
     start();
@@ -610,9 +638,10 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       c.restore();
       return;
     }
-    const g = c.createRadialGradient(W / 2, Hh / 2, 0, W / 2, Hh / 2, Math.max(W, Hh) * 0.7);
-    g.addColorStop(0, '#102a44');
-    g.addColorStop(1, '#060d18');
+    // open sea continues past the map edge
+    const g = c.createRadialGradient(W / 2, Hh / 2, 0, W / 2, Hh / 2, Math.max(W, Hh) * 0.8);
+    g.addColorStop(0, '#174478');
+    g.addColorStop(1, '#0d2c58');
     c.fillStyle = g;
     c.fillRect(0, 0, W, Hh);
   }
@@ -804,6 +833,38 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     return dim.deco[j] === D.HOUSE || (dim.ground[j] !== T.VOID && liftT(j) > liftT(i) + 0.12);
   }
 
+  const isActorObj = (o: MapObject) => o.kind === 'npc' || o.kind === 'start' || (o.kind as string) === 'enemy';
+
+  /** animated character for an NPC / enemy / start object; enemies wander a tile or so (visual only) */
+  function actorFor(o: MapObject): Actor {
+    const d = dim!;
+    const kind = o.kind === 'npc' ? 'npc' : o.kind === 'start' ? 'hero' : creatureFor((o as MapObject & { enemy?: string }).enemy);
+    const h = hashStr(o.id);
+    const ph = (h % 1000) / 1000 * 6.283;
+    const moving = !reduced && G.animation;
+    let dx = 0, dy = 0, dir: Actor['dir'] = 's', clip: Actor['clip'] = 'idle';
+    if (moving && (o.kind as string) === 'enemy') {
+      const fly = FLYERS.has(kind);
+      const sp = kind === 'wisp' ? 0.25 : 0.45;
+      const T = t * sp + ph;
+      // stop-and-go path: u advances fast, then slowly (an idle pause)
+      const u = T - 0.85 * Math.sin(T);
+      const du = 1 - 0.85 * Math.cos(T);
+      const ax = fly ? 1.1 : 0.7, ay = fly ? 0.7 : 0.45;
+      dx = ax * Math.sin(u);
+      dy = ay * Math.sin(u * 0.7 + 1);
+      const vx = ax * Math.cos(u) * du, vy = ay * 0.7 * Math.cos(u * 0.7 + 1) * du;
+      if (du > 0.35) {
+        clip = 'walk';
+        dir = Math.abs(vx) > Math.abs(vy) ? (vx > 0 ? 'e' : 'w') : vy > 0 ? 's' : 'n';
+      }
+    }
+    const x = o.x + dx, y = o.y + dy;
+    const tx = clamp(Math.round(x), 0, d.w - 1), ty = clamp(Math.round(y), 0, d.h - 1);
+    const tint = o.kind === 'npc' ? (hexRgb(npcColor(o)).map((v) => v / 255) as [number, number, number]) : [1, 1, 1] as [number, number, number];
+    return { kind, x, y, tile: ty * d.w + tx, dir, clip, at: moving ? t + ph : 0, tint, e: kind === 'wisp' ? 1 + sun.night : 1 };
+  }
+
   function objScreen(o: MapObject): [number, number] {
     return [sx(o.x + 0.5), sy(o.y + 0.5 - tileElevY(o.x, o.y))];
   }
@@ -812,14 +873,20 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     const s = cam.s;
     const sprites = s >= SPRITE_MIN;
     hits = [];
-    const vis: { o: MapObject; x: number; y: number; fog: boolean; done: boolean }[] = [];
+    const vis: { o: MapObject; x: number; y: number; fog: boolean; done: boolean; act: Actor | null }[] = [];
     for (const o of sortedObjs) {
       if (state.hidden.has(o.id)) continue;
       if (o.kind === 'gate' && o.gate === 'open') continue;
-      const [x, y] = objScreen(o);
+      let [x, y] = objScreen(o);
       const m = Math.max(60, s * 2);
       if (x < -m || y < -m || x > W + m || y > Hh + m) continue;
-      vis.push({ o, x, y, fog: objFogged(o), done: state.done.has(o.id) });
+      let act: Actor | null = null;
+      if (isActorObj(o)) {
+        act = actorFor(o);
+        x = sx(act.x + 0.5);
+        y = sy(act.y + 0.5 - tileElevY(o.x, o.y));
+      }
+      vis.push({ o, x, y, fog: objFogged(o), done: state.done.has(o.id), act });
     }
     // lights / halos (additive; the lit pipeline has real lights instead)
     if (!litMode) ctx.save();
@@ -852,10 +919,10 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     // zoomed out: thin pins by importance and declutter in screen space (huge worlds have thousands)
     const pinSel = new Set<MapObject>();
     if (!sprites) {
-      const minPri = s < 3 ? 4 : s < 6 ? 3 : s < 10 ? 2 : s < 16 ? 1 : 0;
+      const minPri = Math.max(0, (s < 3 ? 4 : s < 6 ? 3 : s < 10 ? 2 : s < 16 ? 1 : 0) + (G.pinDensity < 0.5 ? 1 : G.pinDensity > 1.5 ? -1 : 0));
       const cand = vis.filter((q) => pinPriority(q.o) >= minPri).sort((a, b) => pinPriority(b.o) - pinPriority(a.o));
       const occ = new Set<number>();
-      const cell = 15;
+      const cell = 15 * G.pinSize / Math.max(0.25, G.pinDensity);
       for (const q of cand) {
         const key = Math.floor(q.x / cell) * 100003 + Math.floor(q.y / cell);
         if (occ.has(key)) continue;
@@ -863,16 +930,17 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
         pinSel.add(q.o);
       }
     }
-    for (const { o, x, y, fog, done } of vis) {
+    for (const { o, x, y, fog, done, act } of vis) {
       ctx.globalAlpha = fog ? 0.55 : 1;
       if (sprites) {
-        if (!litMode) drawObject(ctx, o, x, y, s, { done, t: reduced ? 0 : t, attach: attachUp(o) });
+        if (!litMode && act) drawFlatActor(act, o);
+        else if (!litMode) drawObject(ctx, o, x, y, s, { done, t: reduced ? 0 : t, attach: attachUp(o) });
         else if (o.kind === 'npc' && o.icon && s >= 22) drawBubble(o.icon, x, y - s * 1.15, s);
         hits.push({ o, x, y: y - s * 0.1, r: s * 0.55 });
       } else {
         if (!pinSel.has(o)) continue;
         const rank = pinRank(o);
-        const r = rank === 2 ? 8 : rank === 1 ? 6.5 : 3.5;
+        const r = (rank === 2 ? 8 : rank === 1 ? 6.5 : 3.5) * G.pinSize;
         drawPin(ctx, o, x, y, r, done);
         hits.push({ o, x, y: rank === 0 ? y : y - r * 1.55, r: Math.max(r + 3, 8) });
       }
@@ -893,6 +961,103 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
         drawTooltip(hover, h.x, h.y - h.r - 8);
       }
     }
+  }
+
+  function propGridFor(d: Dimension): PropGrid {
+    let g = propGrids.get(d.id);
+    if (!g) propGrids.set(d.id, (g = buildPropGrid(d)));
+    return g;
+  }
+
+  /** direction toward the light used by flat shadows (sun outdoors, a fixed high NW light indoors) */
+  function flatSunDir(): [number, number, number] {
+    const outdoor = dim && (dim.kind === 'overworld' || dim.kind === 'sky');
+    return outdoor ? sun.dir : [-0.55, -0.45, 0.7];
+  }
+
+  /** shear transform that lays a standing sprite flat on the ground away from the light (flat shadows) */
+  function shadowXform(base: number): [number, number] | null {
+    const sd = flatSunDir();
+    const lxy = Math.hypot(sd[0], sd[1]);
+    if (sd[2] < 0.05 || lxy < 1e-3) return null;
+    const tanE = Math.max(0.3, sd[2] / lxy);
+    const a = clamp(-sd[0] / lxy / tanE, -2.5, 2.5), b = clamp(-sd[1] / lxy / tanE, -2.5, 2.5);
+    ctx.setTransform(dpr, 0, -a * dpr, -b * dpr, a * base * dpr, base * (1 + b) * dpr);
+    return [a, b];
+  }
+
+  /** flat path: standing props as sprites from the same sheet as the lit renderer, with sheared shadows */
+  function drawFlatProps(v: ReturnType<typeof visibleTiles>) {
+    const d = dim!;
+    const s = cam.s;
+    if (s < G.detailDistance) return;
+    const sheet = bakeAtlas();
+    const { img, shadow } = atlasCanvases();
+    const g = propGridFor(d);
+    const k = s / 16;
+    const list: number[] = [];
+    forProps(g, d, v.x0 - 2, v.y0 - 2, v.x1 + 2, v.y1 + 3, (i) => list.push(i));
+    list.sort((p, q) => p - q); // row-major index order == painter order
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    const sh = G.shadows !== 'off' ? G.shadowStrength * 0.5 * (1 - sun.night * 0.4) : 0;
+    const looks = list.map((i) => propLook(d, g, i, sheet, dr!.seed));
+    if (sh > 0) {
+      ctx.globalAlpha = sh;
+      list.forEach((i, n) => {
+        const lk = looks[n];
+        if (!lk) return;
+        const x = i % d.w, y = (i / d.w) | 0, f = lk.frame;
+        const base = sy(y + 0.62 - liftT(i));
+        if (!shadowXform(base)) return;
+        ctx.drawImage(shadow, f.x, f.y, f.w, f.h, sx(x) - f.ox * k, sy(y - liftT(i)) - f.oy * k, f.w * k, f.h * k);
+      });
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    ctx.globalAlpha = 1;
+    list.forEach((i, n) => {
+      const lk = looks[n];
+      if (!lk) return;
+      const x = i % d.w, y = (i / d.w) | 0, f = lk.frame, L = liftT(i);
+      const dx = sx(x) - f.ox * k, dy = sy(y - L) - f.oy * k;
+      // crop where raised ground further south covers the sprite
+      let hSrc = f.h;
+      for (let r = 1; r <= 3 && y + r < d.h; r++) {
+        const j = i + r * d.w;
+        if (d.ground[j] !== T.VOID && liftT(j) > L + 0.01) { hSrc = Math.max(0, Math.min(f.h, Math.floor((sy(y + r - liftT(j)) - dy) / k))); break; }
+      }
+      if (hSrc > 0) ctx.drawImage(img, f.x, f.y, f.w, hSrc, dx, dy, f.w * k, hSrc * k);
+    });
+    ctx.restore();
+  }
+
+  /** flat path: an animated character frame */
+  function drawFlatActor(a: Actor, o: MapObject) {
+    const ca = charAtlas();
+    ca.step(4);
+    const dir = a.dir === 'w' ? 'e' : a.dir;
+    const cf = ca.get(a.kind, a.clip, dir) || ca.get(a.kind, 'idle', dir) || ca.get(a.kind, 'idle', 's');
+    if (!cf) { ca.request(a.kind); drawObject(ctx, o, sx(a.x + 0.5), sy(a.y + 0.5 - tileElevY(o.x, o.y)), cam.s, { done: false, t }); return; }
+    const f = cf.frames[Math.floor(a.at * cf.fps) % cf.frames.length];
+    const { img, shadow } = charCanvases();
+    const k = cam.s / 16, L = tileElevY(o.x, o.y);
+    const dx = sx(a.x) - f.ox * k, dy = sy(a.y - L) - f.oy * k;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    const alpha = ctx.globalAlpha;
+    if (G.shadows !== 'off') {
+      ctx.globalAlpha = alpha * G.shadowStrength * 0.5;
+      if (shadowXform(sy(a.y + 0.62 - L))) {
+        if (a.dir === 'w') { ctx.translate(dx * 2 + f.w * k, 0); ctx.scale(-1, 1); }
+        ctx.drawImage(shadow, f.x, f.y, f.w, f.h, dx, dy, f.w * k, f.h * k);
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.globalAlpha = alpha;
+    }
+    if (a.dir === 'w') { ctx.translate(dx * 2 + f.w * k, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(img, f.x, f.y, f.w, f.h, dx, dy, f.w * k, f.h * k);
+    ctx.restore();
+    if (o.kind === 'npc' && o.icon && cam.s >= 22) drawBubble(o.icon, sx(a.x + 0.5), sy(a.y - L) - cam.s * 0.65, cam.s);
   }
 
   function drawBubble(icon: string, x: number, y: number, s: number) {
@@ -920,6 +1085,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       case 'npc': return 2;
       case 'gate': return o.gate === 'ledge' || o.gate === 'open' ? 0 : 2;
       case 'chest': return 1;
+      case 'enemy' as MapObject['kind']: return 1;
       default: return 0;
     }
   }
@@ -954,11 +1120,11 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   function drawLabels() {
     if (!dim || !dr) return;
     const a = 1 - smoothstep(16, 30, cam.s);
-    if (a <= 0.01) return;
+    if (a <= 0.01 || !G.labels) return;
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const fs = Math.round(clamp(cam.s * 0.95, 11, 15));
+    const fs = Math.round(clamp(cam.s * 0.95, 11, 15) * G.labelSize);
     ctx.font = `700 ${fs}px ${FONT}`;
     (ctx as unknown as { letterSpacing: string }).letterSpacing = '1.5px';
     ctx.lineJoin = 'round';
@@ -1040,6 +1206,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
         (i) => fresh.size > 0 && r.owner[i] >= 0 && fresh.has(d.zoneLoc[r.owner[i]]));
     }
     const objs: ObjDraw[] = [];
+    const actors: Actor[] = [];
     const lz: { o: MapObject; done: boolean; z: number }[] = [];
     const mx = 4 * cam.s + 60;
     for (const o of sortedObjs) {
@@ -1048,6 +1215,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       if (ox2 < -mx || oy2 < -mx || ox2 > W + mx || oy2 > Hh + mx * 1.5) continue;
       if (o.kind === 'gate' && o.gate === 'open') continue;
       const done = state.done.has(o.id);
+      if (isActorObj(o)) { actors.push(actorFor(o)); lz.push({ o, done, z: o.x >= 0 && o.y >= 0 && o.x < d.w && o.y < d.h ? liftT(o.y * d.w + o.x) : 0 }); continue; }
       objs.push({ o, done, attach: attachUp(o) });
       lz.push({ o, done, z: o.x >= 0 && o.y >= 0 && o.x < d.w && o.y < d.h ? liftT(o.y * d.w + o.x) : 0 });
     }
@@ -1060,7 +1228,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     lit.render({
       dim: d, meta: r, cam, cssW: W, cssH: Hh, dpr, t, motion: !reduced,
       ghost: gd ? { dim: gd, meta: getDr(gd) } : null,
-      objs, lights: objectLights(lz), particles: reduced ? null : particles, fresh,
+      objs, lights: objectLights(lz), particles: reduced ? null : particles, fresh, actors, gfx: G, sun,
     });
     const ghost = ghostOn ? ghostFor(d) : null;
     if (ghost?.outline) {
@@ -1118,6 +1286,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
 
     const v = visibleTiles();
     drawShimmer(v);
+    drawFlatProps(v);
 
     // fresh-zone pulse
     if (freshPath && !reduced) {
@@ -1150,6 +1319,18 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     }
     drawObjects(v, dt);
     if (!reduced) particles.draw(ctx, W / 2 - cam.x * cam.s, Hh / 2 - cam.y * cam.s, cam.s, t);
+    if (dim.kind === 'overworld' || dim.kind === 'sky') {
+      // time of day: darken and cool the flat view at night, warm it at dawn / dusk
+      const nt = sun.night;
+      if (nt > 0.01) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.globalAlpha = Math.min(0.85, nt * 0.85);
+        ctx.fillStyle = '#34447e';
+        ctx.fillRect(0, 0, W, Hh);
+        ctx.restore();
+      }
+    }
     drawLabels();
     drawGrade();
     if (mouse && !drag?.moved && !target) updateHover();
@@ -1180,7 +1361,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   resize();
   applyMode();
   return {
-    setWorld, setDimension, setState, setGhost, focus, fitAll, resize, destroy, setRenderer,
+    setWorld, setDimension, setState, setGhost, focus, fitAll, resize, destroy, setRenderer, setGraphics, setTime,
     get renderer() { return mode; },
   };
 }

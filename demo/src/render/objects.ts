@@ -470,6 +470,26 @@ function drawEntrance(c: C, o: MapObject, style: string, x: number, y: number, s
 function drawGate(c: C, o: MapObject, x: number, y: number, s: number, t: number, done: boolean) {
   const g = o.gate || 'open';
   if ((g as string) === 'waterfall') { drawWaterfall(c, o, x, y, s, t); return; }
+  if ((g as string) === 'moon' || (g as string) === 'foes') {
+    const moon = (g as string) === 'moon';
+    const base = y + s * 0.42, w = s * 0.78, h = s * 0.86;
+    c.fillStyle = '#3a3040';
+    arch(c, x, base, w + s * 0.1, h + s * 0.06);
+    c.fill();
+    if (done) { c.fillStyle = '#0a0608'; arch(c, x, base, w * 0.8, h * 0.85); c.fill(); return; }
+    c.fillStyle = moon ? '#2a3260' : '#6a4424';
+    arch(c, x, base, w, h);
+    c.fill();
+    if (moon) {
+      circle(c, x, base - h * 0.55, s * 0.13, '#dfe8ff');
+      circle(c, x + s * 0.06, base - h * 0.58, s * 0.11, '#2a3260');
+    } else {
+      c.fillStyle = '#20202a';
+      for (let k = 0; k < 4; k++) c.fillRect(x - w * 0.36 + k * w * 0.24, base - h * 0.85, s * 0.04, h * 0.8);
+      circle(c, x, base - h * 0.5, s * 0.1, '#efe6d6');
+    }
+    return;
+  }
   switch (g) {
     case 'open':
       return;
