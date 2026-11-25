@@ -161,14 +161,15 @@ function scenery(st: ST): void {
     for (const i of st.interior[r.idx]) {
       if (st.reserved[i] || dim.solid[i]) continue;
       const roll = rng.next();
-      if (roll < style.density) {
+      const density = style.density * st.scenery;
+      if (roll < density) {
         let open = true;
         for (const j of [i - 1, i + 1, i - w, i + w, i - w - 1, i - w + 1, i + w - 1, i + w + 1]) if (dim.solid[j] || st.barriers.has(j)) open = false;
         if (!open) continue;
         dim.solid[i] = 1;
         if (style.pond !== undefined && rng.chance(0.6)) dim.ground[i] = style.pond;
         else if (style.solid.length) dim.deco[i] = rng.pick(style.solid);
-      } else if (roll < style.density + 0.07 && style.soft.length && dim.ground[i] === style.ground) {
+      } else if (roll < density + 0.07 * Math.min(1.5, st.scenery) && style.soft.length && dim.ground[i] === style.ground) {
         dim.deco[i] = rng.pick(style.soft);
       }
     }

@@ -3,6 +3,7 @@ import { solve } from './core/solver';
 import { fmtReq } from './core/req';
 import { buildBlueprint } from './gen/logic';
 import { runLints } from './gen/validate';
+import { defaultSettings } from './core/settings';
 
 let fail = 0, thrown = 0;
 const N = Number(process.argv[2] ?? 300);
@@ -10,7 +11,7 @@ const t0 = Date.now();
 const stats = { spheres: 0, checks: 0, locs: 0, oneWay: 0 };
 for (let i = 0; i < N; i++) {
   try {
-    const bp = buildBlueprint(hashStr('seed' + i));
+    const bp = buildBlueprint(hashStr('seed' + i), defaultSettings());
     const sol = solve(bp.graph, bp.ctx.items);
     const dimKind = (loc: string) => (bp.ctx.stacks.some((s) => s.id === bp.ctx.locs.get(loc)!.dim) ? 'stack' : 'interior');
     const lints = runLints(bp.graph, bp.ctx.items, sol, bp.ctx.npcs, bp.tree, dimKind);

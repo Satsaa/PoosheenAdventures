@@ -7,7 +7,7 @@ let bad = 0, attempts = 0, first = 0, thrown = 0;
 const why = new Map<string, number>();
 for (let i = 0; i < N; i++) {
   try {
-    const w = generateWorld('seed' + i, Number(process.argv[3] ?? 12));
+    const w = generateWorld('seed' + i, { maxAttempts: Number(process.argv[3] ?? 12) });
     attempts += w.stats.attempts;
     if (w.stats.attempts === 1 && w.ok) first++;
     if (!w.ok) {

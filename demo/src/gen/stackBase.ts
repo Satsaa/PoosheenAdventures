@@ -41,6 +41,8 @@ export interface ST {
   h: number;
   /** region that owns each tile (rims included), -1 = nothing */
   owner: Int16Array;
+  /** scenery density multiplier */
+  scenery: number;
   /** 1 = rim tile (solid edge of a region) */
   border: Uint8Array;
   /** 1 = something was placed here or wants this tile kept clear */
@@ -57,7 +59,7 @@ export interface ST {
 
 const N8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] as const;
 
-export function initStack(bp: StackBP, gw: number, gh: number, seed: number): ST {
+export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wobble: number, scenery: number): ST {
   const w = gw * SW, h = gh * SH, n = w * h;
   const dim: Dimension = {
     id: bp.id, name: bp.name, kind: bp.kind, w, h, sw: SW, sh: SH, stack: bp.stack,
@@ -65,7 +67,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number): ST
     region: new Int16Array(n).fill(-1), zone: new Int32Array(n).fill(-1), zoneLoc: [], regions: [], objects: [],
   };
   const st: ST = {
-    bp, dim, rng: new Rng(childSeed(seed, 'tiles' + bp.id)), w, h, owner: new Int16Array(n).fill(-1),
+    bp, dim, rng: new Rng(childSeed(seed, 'tiles' + bp.id)), w, h, scenery, owner: new Int16Array(n).fill(-1),
     border: new Uint8Array(n), reserved: new Uint8Array(n), interior: bp.regions.map(() => []),
     barriers: new Map(), anchors: new Map(), mouths: bp.regions.map(() => []), problems: [],
   };
@@ -73,7 +75,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number): ST
 
   // 1. organic region shapes: screens, warped by smooth noise. The warp is the same for every
   //    stacked world, so a cave really lies under the land that owns its entrance.
-  const A = 4.5;
+  const A = wobble;
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const wx = x + (valueNoise(seed, x / 9, y / 9) - 0.5) * 2 * A;
     const wy = y + (valueNoise(seed ^ 0x51ed, x / 9, y / 9) - 0.5) * 2 * A;

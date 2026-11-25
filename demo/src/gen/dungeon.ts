@@ -30,22 +30,26 @@ export function singleRoom(ctx: Ctx, id: string, name: string, style: string, se
 export function buildDungeon(ctx: Ctx, id: string, name: string, seed: number, payload: Payload): PlaceResult {
   const rng = new Rng(seed);
   const scope = payload.data!.scope as string;
-  const tool = payload.data!.tool as ItemId;
+  const tool = payload.data!.tool as ItemId | null;
+  const S = ctx.settings;
   const caps = payload.caps ?? [];
   const GW = 4, GH = 3;
   const key = ctx.item({ id: 'key:' + scope, name: `Small Key (${name})`, kind: 'key', icon: '⚷', color: '#d8d8e8' });
   const big = ctx.item({ id: 'bigkey:' + scope, name: `Boss Key (${name})`, kind: 'key', icon: '♛', color: '#ffd24a' });
 
   const entryCell = (GH - 1) * GW + rng.range(1, 2);
-  const cells = growBlob(rng, GW, GH, entryCell, rng.range(7, 9));
+  const cells = growBlob(rng, GW, GH, entryCell, Math.max(4, Math.min(GW * GH, rng.range(S.dungeonRooms - 1, S.dungeonRooms + 1))));
   const rid = (c: number) => `${id}.r${c}`;
   const candidates: [string, string][] = [];
   for (const c of cells) for (const n of neighbours(GW, GH, c)) if (n > c && cells.includes(n)) candidates.push([rid(c), rid(n)]);
 
   // The brief for the rooms: order of what must be found. Keys come before the doors they open.
   const p = (it: ItemId, extra: Partial<Payload> = {}): Payload => ({ id: it, kind: 'item', provides: [it], ...extra });
-  const payloads: Payload[] = [p(key), p(tool)];
-  if (rng.chance(0.7)) payloads.push(p(key));
+  let keys = S.smallKeys === 0 ? 0 : rng.range(Math.max(1, S.smallKeys - 1), S.smallKeys);
+  const payloads: Payload[] = [];
+  if (keys-- > 0) payloads.push(p(key));
+  if (tool) payloads.push(p(tool));
+  while (keys-- > 0) payloads.push(p(key));
   payloads.push(p(big), { id: 'boss', kind: 'boss', provides: ['medallion'], terminal: true });
 
   const lg = buildLockGraph({

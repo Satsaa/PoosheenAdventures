@@ -11,9 +11,7 @@ import { singleRoom } from './dungeon';
 import { addNpcs } from './npcs';
 import { growRegions, type Partition } from './spatial';
 import { oneWaySafe } from './validate';
-
-export const GW = 8;
-export const GH = 6;
+import type { GenSettings } from '../core/settings';
 
 export interface Blueprint {
   ctx: Ctx;
@@ -34,20 +32,27 @@ function connected(p: Partition): boolean {
   return seen.size === p.regions.length;
 }
 
-export function buildBlueprint(seed: number): Blueprint {
-  const ctx = new Ctx();
-  BASE_ITEMS.forEach((d) => ctx.item({ ...d }));
+export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
+  const ctx = new Ctx(S);
+  const GW = S.worldW, GH = S.worldH;
+  BASE_ITEMS.forEach((d) => ctx.item({ ...d, upgrades: d.upgrades?.map((u) => ({ ...u })) }));
+  // item settings: how much can be carried
+  for (const id of ['bombs', 'arrows', 'rupees']) ctx.items[id].baseCap = S.items[id]?.cap ?? ctx.items[id].baseCap;
+  ctx.items.rupees.upgrades![0].cap = S.items.wallet?.cap ?? 300;
   const rng = new Rng(childSeed(seed, 'world'));
   const plan = makePlan(new Rng(childSeed(seed, 'plan')), ctx);
-  plan.over[0].data = { gift: true };
 
   // 1. worlds: partition space first
-  const part = growRegions(new Rng(childSeed(seed, 'over')), GW, GH, 7);
-  const entryRegion = part.cell[4 * GW + 3];
-  const others = rng.shuffle(BIOMES.filter((b) => b.id !== 'plains'));
+  const part = growRegions(new Rng(childSeed(seed, 'over')), GW, GH, S.regions);
+  const entryRegion = part.cell[Math.max(0, GH - 2) * GW + Math.max(0, (GW >> 1) - 1)];
+  let others = rng.shuffle(BIOMES.filter((b) => b.id !== 'plains'));
+  const usedNames = new Set<string>();
   const themes = part.regions.map((_, i) => {
+    if (!others.length) others = rng.shuffle(BIOMES.filter((b) => b.id !== 'plains'));
     const b = i === entryRegion ? BIOMES[0] : others.pop()!;
-    return { biome: b.id, elev: rng.pick(b.elev), name: rng.pick(b.name), color: b.color };
+    const name = rng.shuffle(b.name).find((n) => !usedNames.has(n)) ?? `${b.name[0]} ${i}`;
+    usedNames.add(name);
+    return { biome: b.id, elev: S.cliffs ? rng.pick(b.elev) : 1, name, color: b.color };
   });
   const game = hnode('game', 'game', 'Poosheen Adventures', seed);
 
@@ -56,9 +61,11 @@ export function buildBlueprint(seed: number): Blueprint {
     const kind = p.data!.world as 'under' | 'sky';
     const prng = new Rng(childSeed(seed, kind));
     const seedScreen = prng.pick(part.regions[region.idx]);
-    let sub = growRegions(prng, GW, GH, 1, { budget: kind === 'under' ? 9 : 5, seeds: [seedScreen] });
-    for (let i = 0; i < 6; i++) {
-      const tryP = growRegions(prng, GW, GH, kind === 'under' ? prng.range(2, 3) : 2, { budget: kind === 'under' ? prng.range(11, 15) : prng.range(6, 9), seeds: [seedScreen] });
+    const size = kind === 'under' ? S.underworldSize : S.skySize;
+    const maxRegions = Math.min(kind === 'under' ? S.underworldRegions : 2, Math.max(1, Math.floor(size / 3)));
+    let sub = growRegions(prng, GW, GH, 1, { budget: size, seeds: [seedScreen] });
+    for (let i = 0; i < 6 && maxRegions > 1; i++) {
+      const tryP = growRegions(prng, GW, GH, prng.range(Math.min(2, maxRegions), maxRegions), { budget: Math.max(2, prng.range(size - 1, size + 1)), seeds: [seedScreen] });
       if (connected(tryP)) { sub = tryP; break; }
     }
     const theme = (idx: number) => {
@@ -85,7 +92,7 @@ export function buildBlueprint(seed: number): Blueprint {
 
   const over = buildStack(ctx, {
     id: 'over', kind: 'overworld', name: 'Overworld', stack: 0, part, seed: childSeed(seed, 'overw'), payloads: plan.over,
-    entryRegion, entryCaps: [], entryPayloads: 1, theme: (i) => themes[i], onPortal,
+    entryRegion, entryCaps: [], entryPayloads: plan.gifts, theme: (i) => themes[i], onPortal,
   });
   game.children = ctx.stacks.map((s) => s.hnode);
   const start = over.regions[entryRegion];
@@ -98,11 +105,11 @@ export function buildBlueprint(seed: number): Blueprint {
   const shop = singleRoom(ctx, `${start.id}.shop`, 'Village Shop', 'shop', childSeed(seed, 'shop'));
   const se = ctx.edge(start.id, shop.entryLoc, NONE, 'portal');
   shop.interior.entranceEdge = se.id;
-  for (const [ammo, price] of [['bombs', 20], ['arrows', 10]] as const) {
+  for (const [ammo, price] of [['bombs', S.priceBombs], ['arrows', S.priceArrows]] as const) {
     const s = ctx.source(shop.entryLoc, ammo, `Shop shelf: ${ctx.items[ammo].name} (${price} rupees)`, use('rupees', price));
     shop.room.objs.push({ id: 'o.' + s.id, kind: 'source', label: s.label, sourceId: s.id, style: 'pot', icon: ctx.items[ammo].icon });
   }
-  const pricey = ctx.check(shop.entryLoc, 'heart', 'shop', 'Shop: heart piece (200 rupees, needs the big wallet)', use('rupees', 200));
+  const pricey = ctx.check(shop.entryLoc, 'heart', 'shop', `Shop: heart piece (${S.priceHeart} rupees)`, use('rupees', S.priceHeart));
   shop.room.objs.push({ id: 'o.' + pricey.id, kind: 'chest', label: pricey.label, checkId: pricey.id });
   shop.node.provides = ['heart'];
   start.feats.push({ f: 'entrance', edgeId: se.id, style: 'shop', label: 'Village Shop', req: NONE, interior: shop.interior });
@@ -111,18 +118,20 @@ export function buildBlueprint(seed: number): Blueprint {
   // 4. optional secrets: heart pieces behind ANY tool, so later tools reward backtracking
   for (const r of regions) {
     const frng = new Rng(childSeed(r.hnode.seed, 'filler'));
-    if (frng.chance(0.75)) placeItem(ctx, frng, r, 'heart', frng.shuffle(plan.tools).slice(0, 3), false);
+    if (frng.chance(S.secrets)) placeItem(ctx, frng, r, 'heart', frng.shuffle(plan.tools).slice(0, 3), false);
     if (r !== start && frng.chance(0.4)) localSource(ctx, r, 'rupees');
   }
   // every tool should open something somewhere: a tool no edge asks for gets its own secret alcove
   const asked = new Set<ItemId>();
   for (const e of ctx.edges) reqItems(e.req, asked);
   const drng = new Rng(childSeed(seed, 'dead'));
-  for (const t of plan.tools) {
+  for (const t of S.everyToolUsed ? plan.tools : []) {
     const spent = GATES[t].spends;
     if (asked.has(t) || (spent && asked.has(spent))) continue;
     placeItem(ctx, drng, drng.pick(regions), 'heart', [t], false, true);
   }
+  // without the trade chain the wallet would not exist; hide it in a chest instead
+  if (!S.tradeQuest) placeItem(ctx, drng, drng.pick(regions), 'wallet', drng.shuffle(plan.tools).slice(0, 2), false);
   addNpcs(ctx, new Rng(childSeed(seed, 'npc')), plan, regions, start);
 
   const graph: LogicGraph = {
@@ -138,6 +147,7 @@ export function buildBlueprint(seed: number): Blueprint {
 
 /** Cycles: shortcuts, one-way ledges, extra stairs between stacked worlds. Each is kept only if still valid. */
 function addLoops(ctx: Ctx, rng: Rng, graph: LogicGraph, over: StackBP): void {
+  const S = ctx.settings;
   const tools = (r: RegionBP, s: RegionBP): ItemId[] => {
     const late = (r.hnode.meta.tier ?? 0) >= (s.hnode.meta.tier ?? 0) ? r : s;
     return late.hnode.entryCaps.filter((c) => GATES[c]);
@@ -145,9 +155,9 @@ function addLoops(ctx: Ctx, rng: Rng, graph: LogicGraph, over: StackBP): void {
   for (const stack of ctx.stacks) {
     const byId = new Map(stack.regions.map((r) => [r.id, r]));
     for (const [ia, ib] of stack.unused ?? []) {
-      if (!rng.chance(0.75)) continue;
+      if (!rng.chance(S.shortcuts)) continue;
       let a = byId.get(ia)!, b = byId.get(ib)!;
-      if (a.elev !== b.elev) {
+      if (a.elev !== b.elev && S.ledges) {
         if (a.elev < b.elev) [a, b] = [b, a];
         const e = ctx.edge(a.id, b.id, NONE, 'ledge', { oneWay: true });
         if (oneWaySafe(graph, ctx.items, e)) {
@@ -167,7 +177,7 @@ function addLoops(ctx: Ctx, rng: Rng, graph: LogicGraph, over: StackBP): void {
     // extra stairs: every other region of a stacked world also connects to whatever is above/below it
     if (stack === over) continue;
     for (const r of stack.regions.slice(1)) {
-      if (!rng.chance(0.85)) continue;
+      if (!rng.chance(S.extraStairs)) continue;
       const screen = rng.pick(stack.part.regions[r.idx]);
       const top = over.regions[over.part.cell[screen]];
       const e = ctx.edge(top.id, r.id, NONE, 'portal');
@@ -178,7 +188,7 @@ function addLoops(ctx: Ctx, rng: Rng, graph: LogicGraph, over: StackBP): void {
   // dungeon shortcuts can disturb worst-case key logic, so each one is re-solved
   for (const d of ctx.interiors) {
     for (const [a, b] of d.loops ?? []) {
-      if (!rng.chance(0.3)) continue;
+      if (!rng.chance(S.dungeonLoops)) continue;
       const e = ctx.edge(d.rooms[a].loc, d.rooms[b].loc, NONE, 'open');
       const s = solve(graph, ctx.items);
       if (s.ok && !s.unreachedChecks.length) d.doors.push({ edgeId: e.id, a, b, gate: 'open', req: NONE, label: 'Open doorway (loop)' });

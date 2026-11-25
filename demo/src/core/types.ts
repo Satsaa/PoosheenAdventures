@@ -1,4 +1,5 @@
 // Shared contract between generator, solver, renderer and UI.
+import type { GenSettings } from './settings';
 // Everything here is plain data so it ports 1:1 to Rust structs/enums later.
 
 export type ItemId = string; // 'sword', 'bombs', 'key:d1', 'flag:favor', 'medallion'
@@ -246,6 +247,8 @@ export interface Lint {
 
 export interface World {
   seed: string;
+  /** the (normalised) settings this world was generated with */
+  settings: GenSettings;
   items: Record<ItemId, ItemDef>;
   dims: Dimension[];
   tree: HNode;

@@ -27,7 +27,7 @@ export function addNpcs(ctx: Ctx, rng: Rng, plan: Plan, regions: RegionBP[], sta
   ctx.quests.unshift({
     id: 'q.main', name: 'The Sealed Sanctum', main: true, reward: 'flag:victory',
     steps: [
-      { text: `Receive the ${ctx.items[plan.tools[0]].name} from the Elder`, req: NONE, check: elder.stages[0].offers[0] },
+      { text: "Receive the Elder's gift", req: NONE, check: elder.stages[0].offers[0] },
       ...ctx.checks.filter((c) => c.item === 'medallion').map((c) => ({ text: `Win a medallion: ${c.label}`, req: NONE, check: c.id })),
       { text: `Break the seal (${plan.medallions} medallions)`, req: has('medallion', plan.medallions) },
       { text: 'Defeat Baddie', req: NONE, check: ctx.checks.find((c) => c.item === 'flag:victory')!.id },
@@ -35,9 +35,11 @@ export function addNpcs(ctx: Ctx, rng: Rng, plan: Plan, regions: RegionBP[], sta
   });
 
   // --- Travelling merchant: follows the player's progress and is a moving ammo source.
-  const stops = [plan.tools[1], plan.tools[3], plan.tools[5]].filter(Boolean) as ItemId[];
+  const S = ctx.settings;
+  const stops = (S.merchant ? [plan.tools[1], plan.tools[3], plan.tools[5]] : []).filter(Boolean) as ItemId[];
+  if (stops.length) {
   const merchant = { id: 'merchant', name: 'Pinjata the Peddler', role: 'Travelling shop', icon: '$', color: '#ff9f6b', stages: [] as ReturnType<typeof stageAt>[] };
-  const heart = ctx.check(regionOf(ctx.itemHome.get(stops[0])!).id, 'heart', 'shop', "Peddler's heart piece", all(has(stops[0]), use('rupees', 80)));
+  const heart = ctx.check(regionOf(ctx.itemHome.get(stops[0])!).id, 'heart', 'shop', "Peddler's heart piece", all(has(stops[0]), use('rupees', S.pricePeddlerHeart)));
   stops.forEach((tool, i) => {
     const r = regionOf(ctx.itemHome.get(tool)!);
     const when = has(tool);
@@ -46,8 +48,10 @@ export function addNpcs(ctx: Ctx, rng: Rng, plan: Plan, regions: RegionBP[], sta
     merchant.stages.push(stageAt(r, when, `Fresh stock! I heard you found the ${ctx.items[tool].name}, so I followed you here.`, i === 0 ? [heart.id] : []));
   });
   ctx.npcs.push(merchant);
+  }
 
   // --- Trade chain: three static NPCs, an optional quest whose reward unlocks the pricey shop shelf.
+  if (S.tradeQuest) {
   const names = rng.shuffle(NPC_NAMES.filter((n) => !ctx.npcs.some((p) => p.name === n))).slice(0, 3);
   const spots = rng.shuffle(regions).slice(0, 3);
   const t1 = ctx.item({ id: 'quest:trade1', name: 'Yarn Ball', kind: 'quest', icon: '◍', color: '#ff9fd0' });
@@ -67,6 +71,7 @@ export function addNpcs(ctx: Ctx, rng: Rng, plan: Plan, regions: RegionBP[], sta
     return { text: `${names[i]} in ${r.name} gives the ${ctx.items[item].name}`, req, check: c.id };
   });
   ctx.quests.push({ id: 'q.trade', name: 'Yarn for a Wallet', main: false, reward: 'wallet', steps });
+  }
 
   // one map object per stage; the UI shows whichever stage is active
   for (const n of ctx.npcs) {

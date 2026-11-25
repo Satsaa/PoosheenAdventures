@@ -2,6 +2,7 @@
 import type { DimId, LocId, MapObject, World } from './core/types';
 import { fmtReq } from './core/req';
 import { stateAt, type WorldState } from './core/view';
+import { normalizeSettings, type GenSettings } from './core/settings';
 import { generateWorld } from './gen/index';
 import { createMapView } from './render/mapView';
 import { createPanels } from './ui/panels';
@@ -14,6 +15,13 @@ let state: WorldState;
 let dimId: DimId = 'over';
 let fog = true;
 let timer = 0;
+
+// settings are a per-viewer convenience: remembered in this browser only
+const STORE = 'poosheen-worldgen-settings';
+function loadSettings(): GenSettings {
+  try { return normalizeSettings(JSON.parse(localStorage.getItem(STORE) ?? 'null')); } catch { return normalizeSettings(null); }
+}
+let settings = loadSettings();
 
 const canvas = $<HTMLCanvasElement>('map');
 const info = $('info');
@@ -28,7 +36,7 @@ const panels = createPanels($('panels'), {
   runBatch: async (n, onProgress) => {
     let bad = 0, first = 0;
     for (let i = 0; i < n; i++) {
-      const w = generateWorld(`batch-${world.seed}-${i}`);
+      const w = generateWorld(`batch-${world.seed}-${i}`, settings);
       if (!w.ok) bad++;
       else if (w.stats.attempts === 1) first++;
       if (i % 4 === 3 || i === n - 1) {
@@ -37,13 +45,21 @@ const panels = createPanels($('panels'), {
       }
     }
   },
+  changeSettings: (next) => {
+    settings = normalizeSettings(next);
+    try { localStorage.setItem(STORE, JSON.stringify(settings)); } catch { /* not remembered, still applied */ }
+    generate(world.seed, true);
+  },
 });
 
 // ------------------------------------------------------------------ world & dimension
-function generate(seed: string): void {
+/** keepView: a settings tweak, so stay on the same layer, sphere and camera where possible */
+function generate(seed: string, keepView = false): void {
   stop();
-  world = generateWorld(seed);
-  dimId = 'over';
+  const prevSphere = keepView && state ? state.sphere : -1;
+  world = generateWorld(seed, settings);
+  settings = world.settings;
+  if (!keepView || !world.dims.some((d) => d.id === dimId)) dimId = 'over';
   map.setWorld(world);
   panels.setWorld(world);
   sphere.max = String(world.solution.spheres.length - 1);
@@ -52,8 +68,8 @@ function generate(seed: string): void {
   status.textContent = bad ? `${bad} check${bad > 1 ? 's' : ''} failed` : `valid · ${world.stats.ms} ms · attempt ${world.stats.attempts}`;
   status.className = 'pill ' + (bad ? 'bad' : 'ok');
   buildDimTabs();
-  showDim('over');
-  setSphere(Math.min(2, world.solution.spheres.length - 1));
+  showDim(dimId);
+  setSphere(Math.min(prevSphere >= 0 ? prevSphere : 2, world.solution.spheres.length - 1));
   hideInfo();
   try { history.replaceState(null, '', '#' + seed); } catch { /* hash is a convenience only */ }
 }
@@ -179,6 +195,12 @@ $('btnGhost').addEventListener('click', (e) => {
   b.setAttribute('aria-pressed', String(on));
   map.setGhost(on);
 });
+$('btnLook').addEventListener('click', (e) => {
+  const b = e.currentTarget as HTMLElement;
+  const lit = b.getAttribute('aria-pressed') !== 'true';
+  map.setRenderer(lit ? 'lit' : 'flat');
+  b.setAttribute('aria-pressed', String(map.renderer === 'lit'));
+});
 $('btnFog').addEventListener('click', (e) => {
   const b = e.currentTarget as HTMLElement;
   fog = b.getAttribute('aria-pressed') !== 'true';
@@ -205,6 +227,7 @@ window.addEventListener('resize', () => map.resize());
 if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => map.resize()).observe(canvas);
 
 map.setGhost(true);
+$('btnLook').setAttribute('aria-pressed', String(map.renderer === 'lit'));
 const fromHash = cleanSeed(decodeURIComponent(location.hash.slice(1)));
 if (location.hash.length > 1) $<HTMLInputElement>('seed').value = fromHash;
 generate($<HTMLInputElement>('seed').value);

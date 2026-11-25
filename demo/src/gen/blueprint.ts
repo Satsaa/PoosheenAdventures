@@ -5,6 +5,7 @@ import type {
 } from '../core/types';
 import type { Partition } from './spatial';
 import { NONE } from '../core/req';
+import type { GenSettings } from '../core/settings';
 
 export type ObjTpl = Omit<MapObject, 'x' | 'y'>;
 
@@ -83,6 +84,7 @@ export interface InteriorBP {
 }
 
 export class Ctx {
+  constructor(public settings: GenSettings) {}
   items: Record<ItemId, ItemDef> = {};
   locs = new Map<LocId, { name: string; hnode: string; dim: DimId }>();
   edges: Edge[] = [];

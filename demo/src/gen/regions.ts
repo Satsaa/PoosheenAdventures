@@ -50,8 +50,8 @@ export function buildStack(ctx: Ctx, spec: StackSpec): StackBP {
     entryCaps: spec.entryCaps,
     payloads: spec.payloads,
     entryPayloads: spec.entryPayloads,
-    freeChance: 0.25,
-    depthBias: 0.7,
+    freeChance: 1 - ctx.settings.lockDensity,
+    depthBias: ctx.settings.linearity,
     likes: (a, b) => [...likesOf(byId.get(a)!.biome), ...likesOf(byId.get(b)!.biome)],
   });
   for (const le of lg.edges) {
@@ -157,11 +157,16 @@ function realise(ctx: Ctx, rng: Rng, region: RegionBP, p: Payload, onPortal: Sta
 
 function elderGift(ctx: Ctx, region: RegionBP, p: Payload): void {
   const c = ctx.check(region.id, p.provides[0], 'npc', "Elder's gift");
-  place(ctx, region, 'npc', "Elder's porch", p.provides);
-  ctx.npcs.push({
-    id: 'elder', name: 'Elder Toud', role: 'Main quest', icon: '♔', color: '#c8a2ff',
-    stages: [{ when: NONE, loc: region.id, dim: region.stack.id, x: 0, y: 0, line: `It is dangerous to nap alone. Take this ${ctx.items[p.provides[0]].name}.`, offers: [c.id] }],
-  });
+  let elder = ctx.npcs.find((n) => n.id === 'elder');
+  if (!elder) {
+    place(ctx, region, 'npc', "Elder's porch", []);
+    elder = { id: 'elder', name: 'Elder Toud', role: 'Main quest', icon: '♔', color: '#c8a2ff', stages: [{ when: NONE, loc: region.id, dim: region.stack.id, x: 0, y: 0, line: '', offers: [] }] };
+    ctx.npcs.push(elder);
+  }
+  region.hnode.children.find((n) => n.name === "Elder's porch")!.provides.push(p.provides[0]);
+  elder.stages[0].offers.push(c.id);
+  const names = elder.stages[0].offers.map((o) => ctx.items[ctx.checks.find((k) => k.id === o)!.item].name);
+  elder.stages[0].line = `It is dangerous to nap alone. Take ${names.length > 1 ? 'these: ' : 'this '}${names.join(', ')}.`;
 }
 
 /** A loose item: cave, gated alcove, or chest in the open. `main` items never hide behind later tools. */

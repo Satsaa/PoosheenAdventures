@@ -3,7 +3,6 @@
 import type { Dimension, DimId, LocId, LogicGraph, MapObject } from '../core/types';
 import { D } from '../core/types';
 import type { Blueprint } from './logic';
-import { GH, GW } from './logic';
 import { realiseInterior } from './interiorTiles';
 import { carveOpenings, initStack, type ST } from './stackBase';
 import { placeFeatures } from './stackFeatures';
@@ -23,7 +22,8 @@ export function realiseTiles(bp: Blueprint, seed: number): TileResult {
   const problems: string[] = [];
   const sts = new Map<DimId, ST>();
   for (const s of bp.ctx.stacks) {
-    const st = initStack(s, GW, GH, seed);
+    const S = bp.ctx.settings;
+    const st = initStack(s, S.worldW, S.worldH, seed, S.borderWobble, S.scenery);
     carveOpenings(st);
     sts.set(s.id, st);
   }
