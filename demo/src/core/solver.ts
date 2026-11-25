@@ -7,7 +7,7 @@
 //    the consumable can never bootstrap it, because the fixpoint starts from "nothing renewable".
 //  * Small keys use worst-case logic: a locked door only opens in logic when the player owns
 //    enough keys to open EVERY locked door currently in front of them, in any order.
-import type { Edge, ItemDef, ItemId, LocId, LogicGraph, Solution, Sphere } from './types';
+import type { Check, Edge, ItemDef, ItemId, LocId, LogicGraph, Solution, Sphere } from './types';
 import { evalReq, type Caps } from './req';
 
 export interface SolveOpts {
@@ -25,7 +25,7 @@ export function solve(g: LogicGraph, items: Record<ItemId, ItemDef>, opts: Solve
   const inv = new Map<ItemId, number>(opts.inv ?? []);
   const without = opts.without ?? new Set<ItemId>();
   const caps: Caps = { inv, renewable: new Set() };
-  const reach = new Set<LocId>([opts.start ?? g.start]);
+  const reach = new Set<LocId>();
   const opened = new Set<string>();
   const openedByScope = new Map<string, number>();
   const done = new Set<string>();
@@ -56,6 +56,31 @@ export function solve(g: LogicGraph, items: Record<ItemId, ItemDef>, opts: Solve
     }
   };
 
+  // Incremental bookkeeping, so a solve costs about (edges + checks) x spheres instead of
+  // rescanning the whole graph on every step. Large worlds run thousands of solves.
+  const checksAt = new Map<LocId, Check[]>();
+  for (const c of g.checks) (checksAt.get(c.loc) ?? checksAt.set(c.loc, []).get(c.loc)!).push(c);
+  /** edges leaving the reached set that were not passable yet */
+  const pend: { e: Edge; to: LocId }[] = [];
+  /** unopened locked doors touching the reached set */
+  const locks = new Map<string, Edge>();
+  /** checks in reached zones that could not be collected yet */
+  let pendChecks: Check[] = [];
+  const blocked = opts.blocked;
+  const enter = (u: LocId, fresh: LocId[] | null) => {
+    reach.add(u);
+    fresh?.push(u);
+    for (const e of out.get(u) ?? []) {
+      const v = other(e, u);
+      if (blocked?.has(v)) continue;
+      if (e.lock && !opened.has(e.id)) locks.set(e.id, e);
+      if (!reach.has(v)) pend.push({ e, to: v });
+    }
+    const cs = checksAt.get(u);
+    if (cs) for (const c of cs) pendChecks.push(c);
+  };
+  enter(opts.start ?? g.start, null);
+
   /** grow `reach` through every edge that is passable right now; returns newly reached locs */
   const expand = (): { locs: LocId[]; doors: string[] } => {
     const fresh: LocId[] = [];
@@ -64,34 +89,29 @@ export function solve(g: LogicGraph, items: Record<ItemId, ItemDef>, opts: Solve
     while (progress) {
       progress = false;
       updateRenewable();
-      const stack = [...reach];
-      while (stack.length) {
-        const u = stack.pop()!;
-        for (const e of out.get(u) ?? []) {
-          const v = other(e, u);
-          if (reach.has(v) || opts.blocked?.has(v)) continue;
-          if (e.lock && !opened.has(e.id)) continue;
-          if (!evalReq(e.req, caps, items)) continue;
-          reach.add(v);
-          fresh.push(v);
-          stack.push(v);
-          progress = true;
-        }
+      // one sweep over the waiting edges; zones reached during the sweep append theirs to the end
+      let keep = 0;
+      for (let i = 0; i < pend.length; i++) {
+        const p = pend[i];
+        if (reach.has(p.to)) continue;
+        if ((p.e.lock && !opened.has(p.e.id)) || !evalReq(p.e.req, caps, items)) { pend[keep++] = p; continue; }
+        enter(p.to, fresh);
+        progress = true;
       }
-      // worst-case small keys, per dungeon scope
+      pend.length = keep;
+      // worst-case small keys, per dungeon scope: a door between two reached rooms still counts,
+      // because the player could spend a key on it
       const frontier = new Map<string, Edge[]>();
-      for (const e of g.edges) {
-        if (!e.lock || opened.has(e.id)) continue;
-        if (opts.blocked?.has(e.a) || opts.blocked?.has(e.b)) continue;
-        if (!(reach.has(e.a) || reach.has(e.b))) continue;
+      for (const e of locks.values()) {
         if (!evalReq(e.req, caps, items)) continue;
-        (frontier.get(e.lock) ?? frontier.set(e.lock, []).get(e.lock)!).push(e);
+        (frontier.get(e.lock!) ?? frontier.set(e.lock!, []).get(e.lock!)!).push(e);
       }
       for (const [scope, fs] of frontier) {
         const left = (inv.get('key:' + scope) ?? 0) - (openedByScope.get(scope) ?? 0);
         if (left >= fs.length) {
           for (const e of fs) {
             opened.add(e.id);
+            locks.delete(e.id);
             doors.push(e.id);
           }
           openedByScope.set(scope, (openedByScope.get(scope) ?? 0) + fs.length);
@@ -102,18 +122,20 @@ export function solve(g: LogicGraph, items: Record<ItemId, ItemDef>, opts: Solve
     return { locs: fresh, doors };
   };
 
-  for (let k = 0; k < 200; k++) {
+  for (let k = 0; k < 100000; k++) {
     const { locs, doors } = expand();
     if (k === 0) locs.unshift(opts.start ?? g.start);
     for (const l of locs) locSphere[l] = k;
     const collected: Sphere['collected'] = [];
-    for (const c of g.checks) {
-      if (done.has(c.id) || opts.skipChecks?.has(c.id) || without.has(c.item)) continue;
-      if (!reach.has(c.loc) || !evalReq(c.req, caps, items)) continue;
+    const waiting: Check[] = [];
+    for (const c of pendChecks) {
+      if (opts.skipChecks?.has(c.id) || without.has(c.item)) continue;
+      if (!evalReq(c.req, caps, items)) { waiting.push(c); continue; }
       done.add(c.id);
       checkSphere[c.id] = k;
       collected.push({ check: c.id, item: c.item });
     }
+    pendChecks = waiting;
     for (const c of collected) inv.set(c.item, (inv.get(c.item) ?? 0) + 1);
     updateRenewable();
     if (!locs.length && !collected.length && !doors.length) break;

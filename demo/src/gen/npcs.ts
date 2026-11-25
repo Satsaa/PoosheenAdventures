@@ -19,17 +19,18 @@ export function addNpcs(ctx: Ctx, rng: Rng, plan: Plan, regions: RegionBP[], sta
   // --- Elder: main quest guide. Stays home, then walks to the sanctum once it can be opened.
   const elder = ctx.npcs.find((n) => n.id === 'elder')!;
   const sanctum = regionOf(ctx.itemHome.get('flag:victory')!);
-  elder.stages.push(
-    stageAt(start, has('medallion'), `One medallion already! ${plan.medallions - 1} more and the seal will break.`),
+  const M = plan.medallions;
+  if (M > 0) {
+    if (M > 1) elder.stages.push(stageAt(start, has('medallion'), `One medallion already! ${M - 1} more and the seal will break.`));
     // he only leaves once the player can follow: everything that could gate the way there is owned
-    stageAt(sanctum, all(has('medallion', plan.medallions), ...ctx.sanctumCaps.filter((c) => gateFor(c)).map((c) => has(c))), 'The seal is broken. Baddie is inside, eating everything. Go!'),
-  );
+    elder.stages.push(stageAt(sanctum, all(has('medallion', M), ...ctx.sanctumCaps.filter((c) => gateFor(c)).map((c) => has(c))), 'The seal is broken. Baddie is inside, eating everything. Go!'));
+  }
   ctx.quests.unshift({
     id: 'q.main', name: 'The Sealed Sanctum', main: true, reward: 'flag:victory',
     steps: [
       { text: "Receive the Elder's gift", req: NONE, check: elder.stages[0].offers[0] },
       ...ctx.checks.filter((c) => c.item === 'medallion').map((c) => ({ text: `Win a medallion: ${c.label}`, req: NONE, check: c.id })),
-      { text: `Break the seal (${plan.medallions} medallions)`, req: has('medallion', plan.medallions) },
+      ...(M > 0 ? [{ text: `Break the seal (${M} medallion${M > 1 ? 's' : ''})`, req: has('medallion', M) }] : []),
       { text: 'Defeat Baddie', req: NONE, check: ctx.checks.find((c) => c.item === 'flag:victory')!.id },
     ],
   });

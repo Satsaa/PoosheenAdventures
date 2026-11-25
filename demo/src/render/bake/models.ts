@@ -31,8 +31,8 @@ function model(mats: Mat[], parts: Part[], o: Partial<Model> & { zMax: number })
 const R = {
   leaf: ['#10301e', '#19482a', '#276333', '#3b823e', '#5ea448'],
   leafDark: ['#0b2621', '#123a2f', '#1b5240', '#286a4c'],
-  autumn: ['#4a160b', '#7a2a0f', '#ad4614', '#d66f27', '#efa03c'],
-  golden: ['#45320c', '#755812', '#a8861a', '#d4b22e'],
+  autumn: ['#3e130a', '#66240e', '#8f3a12', '#b45a1e', '#cc7e2e'],
+  golden: ['#3a2a0b', '#614910', '#8a6e16', '#ad9224'],
   pine: ['#0a2220', '#103630', '#184e3f', '#25684f'],
   trunk: ['#20130b', '#352113', '#4d321c'],
   bark: ['#2c2622', '#433a33', '#5d5249', '#7a6d62'],
@@ -51,7 +51,7 @@ const R = {
   stalag: ['#1b1626', '#2b233c', '#433856', '#5c4e75'],
   wall: ['#5c4c3c', '#8c765a', '#b8a17d', '#d8c39d'],
   timber: ['#241509', '#3a2412'],
-  roof: ['#330c0d', '#5e1714', '#8f261c', '#bd3f28'],
+  roof: ['#2a0c0c', '#461512', '#661f18', '#86301f'],
   glass: ['#ffb040', '#ffd27a'],
   wood: ['#2c190c', '#462a14', '#64401f', '#83582c'],
   woodLight: ['#4a2c14', '#6e4320', '#93602e', '#b47c3e'],
@@ -253,14 +253,16 @@ export function objectModels(): ObjSpec[] {
   const L: ObjSpec[] = [];
   const add = (key: string, m: Model) => L.push({ key, model: m });
   const wood = { ramp: R.wood }, woodL = { ramp: R.woodLight }, gold = { ramp: R.gold, id: MAT.GLOSS }, dark = { ramp: R.dark };
+  const chestWood = { ramp: ['#5a2e12', '#844a1c', '#ac6a2a', '#cc8a3c'], bias: 0.3 }, chestLid = { ramp: ['#6e3a16', '#9a5622', '#c27632', '#e09a4a'], bias: 0.6 };
+  const chestGold = { ramp: R.gold, id: MAT.GLOSS, emit: [90, 60, 8] as [number, number, number], bias: 0.5 };
   // chests
   const chestBody: F = (x, y, z) => box(x, y, z, 0.5, 0.56, 0.15, 0.3, 0.2, 0.15, 0.025);
-  add('o:chest', model([wood, woodL, gold], [
+  add('o:chest', model([chestWood, chestLid, chestGold], [
     [chestBody, 0],
     [(x, y, z) => box(x, y, z, 0.5, 0.56, 0.35, 0.31, 0.21, 0.07, 0.06), 1],
     [(x, y, z) => Math.min(box(x, y, z, 0.5, 0.56, 0.28, 0.315, 0.215, 0.02), box(x, y, z, 0.5, 0.77, 0.24, 0.05, 0.02, 0.06)), 2],
   ], { zMax: 0.5, padX: 0.1 }));
-  add('o:chest:done', model([wood, woodL, gold, dark], [
+  add('o:chest:done', model([chestWood, chestLid, { ramp: R.gold, id: MAT.GLOSS }, dark], [
     [(x, y, z) => Math.max(chestBody(x, y, z), -box(x, y, z, 0.5, 0.56, 0.3, 0.26, 0.16, 0.1)), 0],
     [(x, y, z) => box(x, y, z, 0.5, 0.33, 0.45, 0.31, 0.04, 0.17, 0.03), 1],
     [(x, y, z) => box(x, y, z, 0.5, 0.56, 0.22, 0.26, 0.16, 0.01), 3],

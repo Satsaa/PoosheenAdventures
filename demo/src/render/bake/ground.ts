@@ -53,13 +53,13 @@ export const GROUND_RAMP: Record<number, string[]> = {
 };
 
 const FACE_RAMP = {
-  earth: ['#1b100b', '#2b1a11', '#402818', '#573823', '#6e4a2e'],
-  sandstone: ['#432b1c', '#62442b', '#82603d', '#a07a4c'],
-  rock: ['#17171f', '#24252f', '#333543', '#474a5b'],
-  ice: ['#26304c', '#384667', '#516388', '#7489ad'],
-  brick: ['#14111a', '#201b29', '#2d2739', '#3c344b'],
-  cave: ['#0c0a11', '#15111c', '#201929', '#2c233b'],
-  cloud: ['#56669c', '#7686bc', '#9cacdd', '#c4d0f4'],
+  earth: ['#3a2316', '#55331f', '#74482b', '#91603a', '#ad7a4c'],
+  sandstone: ['#6a4a30', '#8a6440', '#aa8052', '#c89c66'],
+  rock: ['#34343f', '#474856', '#5d5f70', '#76798c'],
+  ice: ['#3c4a6c', '#52648a', '#6e84ac', '#94a8cc'],
+  brick: ['#2a2433', '#3a3346', '#4b425a', '#5e546e'],
+  cave: ['#221c2c', '#2e263b', '#3b304b', '#4a3d5d'],
+  cloud: ['#7b8ac0', '#97a6d6', '#b8c5ec', '#dce4fb'],
   wood: ['#1e1209', '#2e1c0e', '#432a15'],
 };
 
@@ -86,14 +86,15 @@ export function groundTile(g: number, v: number): Sprite {
       switch (g) {
         case T.GRASS: {
           h = n1 * 0.03;
-          if (r < 0.16) { h += 0.05; st += 1.2; }
-          else if (r > 0.9) { st -= 1.2; }
+          st = top * 0.5 + (n1 - 0.5) * 1.1 + (n2 - 0.5) * 0.5;
+          if (r < 0.12) { h += 0.05; st += 1; }
+          else if (r > 0.95) { st -= 1; }
           break;
         }
         case T.SAND: {
           const rip = Math.sin((x * 0.9 + y * 0.35 + n1 * 5) * 1.3);
-          h = rip * 0.012 + n2 * 0.01;
-          st += rip * 0.5 + (r < 0.06 ? -1.4 : r > 0.95 ? 1 : 0);
+          h = rip * 0.006 + n2 * 0.01;
+          st = top * 0.55 + (n1 - 0.5) * 1.0 + rip * 0.22 + (r < 0.04 ? -1 : r > 0.97 ? 1 : 0);
           break;
         }
         case T.DIRT:
@@ -107,16 +108,16 @@ export function groundTile(g: number, v: number): Sprite {
         }
         case T.STONE:
         case T.CAVEWALL: {
-          const [d1, d2] = voro(x, y, g === T.STONE ? 3 : 2, seed + 5);
+          const [d1, d2] = voro(x, y, 2, seed + 5);
           const e = d2 - d1;
-          h = Math.min(e, 2.5) * 0.02;
-          st = top * 0.55 + Math.min(e, 3) * 0.35 - 0.6 + (n2 - 0.5);
-          if (e < 0.8) st -= 1.5;
+          h = Math.min(e, 2.5) * 0.015;
+          st = top * 0.55 + Math.min(e, 3) * 0.2 - 0.3 + (n2 - 0.5) * 0.6;
+          if (e < 0.7) st -= 0.8;
           break;
         }
         case T.SNOW:
-          h = n1 * 0.04 + n2 * 0.015;
-          st = top * 0.62 + (n1 - 0.5) * 2 + (r > 0.97 ? 2 : 0);
+          h = n1 * 0.03 + n2 * 0.01;
+          st = top * 0.62 + (n1 - 0.5) * 1.0 + (n2 - 0.5) * 0.6 + (r > 0.97 ? 1 : 0);
           break;
         case T.WATER:
         case T.DEEP:

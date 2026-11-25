@@ -49,29 +49,35 @@ const num = (key: SettingKey, group: string, label: string, type: 'int' | 'float
 const flag = (key: SettingKey, group: string, label: string, def: boolean, help: string, keywords = ''): SettingDef =>
   ({ key, group, label, type: 'bool', default: def, help, keywords });
 
+/** Largest world the demo's renderer draws reliably today; the generator itself goes far beyond. */
+export const RENDER_MAX_W = 16;
+export const RENDER_MAX_H = 10;
+
 export const SETTING_DEFS: SettingDef[] = [
-  num('worldW', 'World', 'World width', 'int', 5, 10, 1, 8, 'Overworld width in screens. One screen is 12×10 tiles.', 'size map columns'),
-  num('worldH', 'World', 'World height', 'int', 4, 7, 1, 6, 'Overworld height in screens.', 'size map rows'),
-  num('regions', 'World', 'Regions', 'int', 3, 10, 1, 7, 'How many biomes the overworld is split into. Capped so each region keeps room for its places.', 'biomes areas count'),
-  num('borderWobble', 'World', 'Border wobble', 'float', 0, 7, 0.5, 4.5, 'How far region borders stray from the screen grid, in tiles. 0 gives straight, blocky borders.', 'warp noise organic shape'),
+  // The generator is tested up to 64×48 screens (768×480 tiles, about 2 s). The demo's map view
+  // cannot draw maps that large yet, so the sliders stop at RENDER_MAX_* until it can.
+  num('worldW', 'World', 'World width', 'int', 3, RENDER_MAX_W, 1, 8, 'Overworld width in screens. One screen is 12×10 tiles.', 'size map columns'),
+  num('worldH', 'World', 'World height', 'int', 3, RENDER_MAX_H, 1, 6, 'Overworld height in screens.', 'size map rows'),
+  num('regions', 'World', 'Regions', 'int', 1, 96, 1, 7, 'How many biomes the overworld is split into. Limited by the map size and the border wobble, so each region keeps room for its places.', 'biomes areas count'),
+  num('borderWobble', 'World', 'Border wobble', 'float', 0, 8, 0.5, 4.5, 'How far region borders stray from the screen grid, in tiles. 0 gives straight, blocky borders. A screen is 12×10 tiles, so more than 8 would tear small regions apart.', 'warp noise organic shape'),
   flag('cliffs', 'World', 'Height differences', true, 'Regions sit at different heights, which makes cliffs, stairs and one-way ledges. Off puts everything on one level.', 'elevation layers cliffs flat'),
-  num('scenery', 'World', 'Scenery density', 'float', 0, 2.5, 0.25, 1, 'Multiplier for trees, rocks and ponds inside regions. Scenery can never block a path.', 'trees rocks decoration props'),
+  num('scenery', 'World', 'Scenery density', 'float', 0, 5, 0.25, 1, 'Multiplier for trees, rocks and ponds inside regions. Scenery can never block a path.', 'trees rocks decoration props'),
 
   flag('underworld', 'Layers', 'Underworld', true, 'A cave layer under the overworld, reached by stairs. Its caves take their theme from the land above.', 'caves subworld below'),
-  num('underworldSize', 'Layers', 'Underworld size', 'int', 5, 20, 1, 12, 'How many screens of cave exist.', 'caves'),
-  num('underworldRegions', 'Layers', 'Underworld regions', 'int', 1, 3, 1, 3, 'Upper limit for separate cave systems.', 'caves'),
+  num('underworldSize', 'Layers', 'Underworld size', 'int', 1, 512, 1, 12, 'How many screens of cave exist.', 'caves'),
+  num('underworldRegions', 'Layers', 'Underworld regions', 'int', 1, 16, 1, 3, 'Upper limit for separate cave systems.', 'caves'),
   flag('sky', 'Layers', 'Sky', true, 'Cloud islands above the overworld, reached by a beanstalk.', 'clouds islands subworld above'),
-  num('skySize', 'Layers', 'Sky size', 'int', 3, 12, 1, 7, 'How many screens of cloud exist.', 'clouds islands'),
+  num('skySize', 'Layers', 'Sky size', 'int', 1, 512, 1, 7, 'How many screens of cloud exist.', 'clouds islands'),
 
-  num('dungeons', 'Progression', 'Dungeons', 'int', 1, 5, 1, 3, 'Each dungeon holds a medallion and, if a tool is left, a tool.', 'temples castles count'),
-  num('sealMedallions', 'Progression', 'Medallions for the seal', 'int', 1, 5, 1, 3, 'How many medallions open the final sanctum. Never more than there are dungeons.', 'goal ending requirement'),
+  num('dungeons', 'Progression', 'Dungeons', 'int', 0, 24, 1, 3, 'Each dungeon holds a medallion and, if a tool is left, a tool. With none, the sanctum has no seal.', 'temples castles count'),
+  num('sealMedallions', 'Progression', 'Medallions for the seal', 'int', 0, 24, 1, 3, 'How many medallions open the final sanctum. Never more than there are dungeons.', 'goal ending requirement'),
   num('lockDensity', 'Progression', 'Lock density', 'float', 0, 1, 0.05, 0.75, 'Chance that a filler border between regions is gated. Borders on the critical path are always gated.', 'gates free open'),
-  num('linearity', 'Progression', 'Linearity', 'float', 0, 2.5, 0.1, 0.7, 'Higher values attach new regions to the newest ones (one long chain). Lower values branch out from the start.', 'depth bias chain bushy tree'),
+  num('linearity', 'Progression', 'Linearity', 'float', 0, 5, 0.1, 0.7, 'Higher values attach new regions to the newest ones (one long chain). Lower values branch out from the start.', 'depth bias chain bushy tree'),
   num('secrets', 'Progression', 'Secrets', 'float', 0, 1, 0.05, 0.75, 'Chance per region of an optional heart piece hidden behind a tool from anywhere in the progression.', 'optional hidden hearts backtracking'),
   flag('everyToolUsed', 'Progression', 'Every tool opens something', true, 'A tool that no gate asks for gets its own secret alcove.', 'dead items unused'),
 
-  num('dungeonRooms', 'Dungeons', 'Dungeon rooms', 'int', 5, 11, 1, 8, 'Typical room count; each dungeon varies by one.', 'size chambers'),
-  num('smallKeys', 'Dungeons', 'Small keys', 'int', 0, 3, 1, 2, 'Upper limit of locked doors per dungeon. Doors always chain, so no order of opening can waste a key.', 'locked doors'),
+  num('dungeonRooms', 'Dungeons', 'Dungeon rooms', 'int', 2, 64, 1, 8, 'Typical room count; each dungeon varies by one. The room grid grows to fit.', 'size chambers'),
+  num('smallKeys', 'Dungeons', 'Small keys', 'int', 0, 12, 1, 2, 'Upper limit of locked doors per dungeon. Doors always chain, so no order of opening can waste a key.', 'locked doors'),
   num('dungeonLoops', 'Dungeons', 'Dungeon loops', 'float', 0, 1, 0.05, 0.3, 'Chance that two neighbouring rooms on the same side of every locked door get an extra doorway.', 'cycles shortcuts'),
 
   num('shortcuts', 'Loops', 'Shortcuts and ledges', 'float', 0, 1, 0.05, 0.75, 'Chance that two touching regions the tree did not connect get a gated shortcut, or a one-way ledge if heights differ.', 'cycles loops'),
@@ -82,12 +88,12 @@ export const SETTING_DEFS: SettingDef[] = [
   flag('tradeQuest', 'Quests & NPCs', 'Trade chain', true, 'Three NPCs trade up to the Big Wallet. When off, the wallet becomes a hidden chest.', 'npc optional side quest wallet'),
   flag('merchant', 'Quests & NPCs', 'Travelling peddler', true, 'An NPC that follows the player\'s progress and is a moving ammo source. Needs at least one tool in the world to follow.', 'npc dynamic shop moving'),
 
-  num('priceBombs', 'Economy', 'Bomb price', 'int', 1, 300, 1, 20, 'Rupees per refill at shops. A price above the wallet capacity makes the shelf unusable, and the checks will say so.', 'shop cost rupees'),
-  num('priceArrows', 'Economy', 'Arrow price', 'int', 1, 300, 1, 10, 'Rupees per refill at shops.', 'shop cost rupees'),
-  num('priceHeart', 'Economy', 'Shop heart price', 'int', 1, 300, 1, 200, 'Above the base wallet (99) this needs the Big Wallet.', 'shop cost rupees wallet'),
-  num('pricePeddlerHeart', 'Economy', 'Peddler heart price', 'int', 1, 300, 1, 80, 'The travelling peddler sells one heart piece.', 'shop cost rupees merchant'),
+  num('priceBombs', 'Economy', 'Bomb price', 'int', 0, 999, 1, 20, 'Rupees per refill at shops. A price above the wallet capacity makes the shelf unusable, and the checks will say so.', 'shop cost rupees'),
+  num('priceArrows', 'Economy', 'Arrow price', 'int', 0, 999, 1, 10, 'Rupees per refill at shops.', 'shop cost rupees'),
+  num('priceHeart', 'Economy', 'Shop heart price', 'int', 0, 999, 1, 200, 'Above the base wallet (99) this needs the Big Wallet.', 'shop cost rupees wallet'),
+  num('pricePeddlerHeart', 'Economy', 'Peddler heart price', 'int', 0, 999, 1, 80, 'The travelling peddler sells one heart piece.', 'shop cost rupees merchant'),
 
-  num('maxAttempts', 'Advanced', 'Generation attempts', 'int', 1, 20, 1, 12, 'If the tile pass cannot fit a feature, the world is regenerated from a derived seed, up to this many times.', 'retry'),
+  num('maxAttempts', 'Advanced', 'Generation attempts', 'int', 1, 50, 1, 12, 'If the tile pass cannot fit a feature, the world is regenerated from a derived seed, up to this many times.', 'retry'),
 ];
 
 export interface ItemSettingDef {
@@ -109,10 +115,10 @@ export const ITEM_SETTING_DEFS: ItemSettingDef[] = [
   tool('flippers', 'Crosses deep water.'),
   tool('hookshot', 'Crosses chasms.'),
   tool('lantern', 'Lights pitch-dark passages and caves.'),
-  { id: 'bombs', fields: ['cap'], default: { cap: 10 }, capRange: [1, 99], help: 'Carried in the Bomb Bag. Never counted by the logic: renewable or unusable.' },
-  { id: 'arrows', fields: ['cap'], default: { cap: 30 }, capRange: [1, 99], help: 'Carried with the Bow.' },
-  { id: 'rupees', fields: ['cap'], default: { cap: 99 }, capRange: [10, 999], help: 'Base wallet capacity. Prices above it need the Big Wallet.' },
-  { id: 'wallet', fields: ['cap'], default: { cap: 300 }, capRange: [10, 999], help: 'Rupee capacity once the Big Wallet is owned.' },
+  { id: 'bombs', fields: ['cap'], default: { cap: 10 }, capRange: [1, 999], help: 'Carried in the Bomb Bag. Never counted by the logic: renewable or unusable.' },
+  { id: 'arrows', fields: ['cap'], default: { cap: 30 }, capRange: [1, 999], help: 'Carried with the Bow.' },
+  { id: 'rupees', fields: ['cap'], default: { cap: 99 }, capRange: [1, 9999], help: 'Base wallet capacity. Prices above it need the Big Wallet.' },
+  { id: 'wallet', fields: ['cap'], default: { cap: 300 }, capRange: [1, 9999], help: 'Rupee capacity once the Big Wallet is owned.' },
 ];
 
 export const ORDER_OPTIONS: { value: ItemOrder; label: string; help: string }[] = [
@@ -135,7 +141,8 @@ export function defaultSettings(): GenSettings {
 }
 
 /** Fill in missing fields and clamp everything into range, so any partial or stale object is safe to use. */
-export function normalizeSettings(partial?: Partial<GenSettings> | null): GenSettings {
+/** `anySize` lifts the world-size slider limits (the generator handles up to 64×48 screens). */
+export function normalizeSettings(partial?: Partial<GenSettings> | null, anySize = false): GenSettings {
   const s = defaultSettings();
   const out = s as unknown as Record<string, number | boolean>;
   const src = (partial ?? {}) as Record<string, unknown>;
@@ -143,7 +150,8 @@ export function normalizeSettings(partial?: Partial<GenSettings> | null): GenSet
     const v = src[d.key];
     if (d.type === 'bool') { if (typeof v === 'boolean') out[d.key] = v; continue; }
     if (typeof v !== 'number' || !Number.isFinite(v)) continue;
-    const c = Math.max(d.min!, Math.min(d.max!, v));
+    const max = anySize && d.key === 'worldW' ? 64 : anySize && d.key === 'worldH' ? 48 : d.max!;
+    const c = Math.max(d.min!, Math.min(max, v));
     out[d.key] = d.type === 'int' ? Math.round(c) : c;
   }
   for (const d of ITEM_SETTING_DEFS) {
@@ -156,12 +164,14 @@ export function normalizeSettings(partial?: Partial<GenSettings> | null): GenSet
     if (d.fields.includes('cap') && typeof it.cap === 'number' && Number.isFinite(it.cap)) t.cap = Math.round(Math.max(d.capRange![0], Math.min(d.capRange![1], it.cap)));
   }
   // structural limits that depend on each other
-  s.regions = Math.max(3, Math.min(s.regions, Math.floor((s.worldW * s.worldH) / 5)));
+  // a region needs room for its places. Measured: three screens each is enough with straight
+  // borders, and wobblier borders eat into small regions, so they need more
+  s.regions = Math.max(1, Math.min(s.regions, Math.floor((s.worldW * s.worldH) / (3 + s.borderWobble / 2))));
   // the Big Wallet is an upgrade: it can never hold less than the base wallet
   s.items.wallet.cap = Math.max(s.items.wallet.cap ?? 0, s.items.rupees.cap ?? 0);
   s.sealMedallions = Math.min(s.sealMedallions, s.dungeons);
-  s.underworldSize = Math.min(s.underworldSize, s.worldW * s.worldH - 2);
-  s.skySize = Math.min(s.skySize, s.worldW * s.worldH - 2);
+  s.underworldSize = Math.min(s.underworldSize, s.worldW * s.worldH);
+  s.skySize = Math.min(s.skySize, s.worldW * s.worldH);
   return s;
 }
 

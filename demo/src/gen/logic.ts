@@ -10,7 +10,7 @@ import { buildStack, localSource, placeItem } from './regions';
 import { singleRoom } from './dungeon';
 import { addNpcs } from './npcs';
 import { growRegions, type Partition } from './spatial';
-import { oneWaySafe } from './validate';
+import { oneWaySafe, requiredTable } from './validate';
 import type { GenSettings } from '../core/settings';
 
 export interface Blueprint {
@@ -162,11 +162,10 @@ function addLoops(ctx: Ctx, rng: Rng, graph: LogicGraph, over: StackBP): void {
       let a = byId.get(ia)!, b = byId.get(ib)!;
       if (a.elev !== b.elev && S.ledges) {
         if (a.elev < b.elev) [a, b] = [b, a];
+        // proposed now, judged below once every other loop exists
         const e = ctx.edge(a.id, b.id, NONE, 'ledge', { oneWay: true });
-        if (oneWaySafe(graph, ctx.items, e)) {
-          stack.openings.push({ edgeId: e.id, a: a.idx, b: b.idx, gate: 'ledge', req: NONE, label: 'Ledge (one-way drop)', oneWay: true });
-          stack.hnode.edges.push({ a: a.id, b: b.id, req: NONE, gate: 'ledge', oneWay: true });
-        } else ctx.edges.pop();
+        stack.openings.push({ edgeId: e.id, a: a.idx, b: b.idx, gate: 'ledge', req: NONE, label: 'Ledge (one-way drop)', oneWay: true });
+        stack.hnode.edges.push({ a: a.id, b: b.id, req: NONE, gate: 'ledge', oneWay: true });
       } else {
         const pool = tools(a, b);
         if (!pool.length) continue;
@@ -188,21 +187,32 @@ function addLoops(ctx: Ctx, rng: Rng, graph: LogicGraph, over: StackBP): void {
       top.feats.push({ f: 'vertical', edgeId: e.id, style: down ? 'stairs-down' : 'beanstalk', label: down ? 'Stairs to the Underworld (shortcut)' : 'Beanstalk (shortcut)', req: NONE, other: r });
     }
   }
-  // dungeon shortcuts can disturb worst-case key logic, so each one is re-solved
+  // dungeon shortcuts only join rooms on the same side of every locked door, so key logic should
+  // be untouched; one solve confirms it, and if it ever disagrees they are all taken back
+  const added: { d: (typeof ctx.interiors)[number]; id: string }[] = [];
   for (const d of ctx.interiors) {
     for (const [a, b] of d.loops ?? []) {
       if (!rng.chance(S.dungeonLoops)) continue;
       const e = ctx.edge(d.rooms[a].loc, d.rooms[b].loc, NONE, 'open');
-      const s = solve(graph, ctx.items);
-      if (s.ok && !s.unreachedChecks.length) d.doors.push({ edgeId: e.id, a, b, gate: 'open', req: NONE, label: 'Open doorway (loop)' });
-      else ctx.edges.pop();
+      d.doors.push({ edgeId: e.id, a, b, gate: 'open', req: NONE, label: 'Open doorway (loop)' });
+      added.push({ d, id: e.id });
+    }
+  }
+  if (added.length) {
+    const s = solve(graph, ctx.items);
+    if (!s.ok || s.unreachedChecks.length) {
+      const ids = new Set(added.map((x) => x.id));
+      for (let i = ctx.edges.length - 1; i >= 0; i--) if (ids.has(ctx.edges[i].id)) ctx.edges.splice(i, 1);
+      for (const { d } of added) d.doors = d.doors.filter((x) => !ids.has(x.edgeId));
     }
   }
   // More routes mean fewer items are unavoidable at the top of a ledge, so re-check every drop now.
   for (let again = true; again; ) {
     again = false;
-    for (const e of ctx.edges.filter((x) => x.oneWay)) {
-      if (oneWaySafe(graph, ctx.items, e)) continue;
+    const drops = ctx.edges.filter((x) => x.oneWay);
+    const table = drops.length ? requiredTable(graph, ctx.items) : new Map();
+    for (const e of drops) {
+      if (oneWaySafe(graph, ctx.items, e, table)) continue;
       ctx.edges.splice(ctx.edges.indexOf(e), 1);
       for (const st of ctx.stacks) {
         st.openings = st.openings.filter((o) => o.edgeId !== e.id);

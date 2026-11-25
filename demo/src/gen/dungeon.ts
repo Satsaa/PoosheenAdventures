@@ -33,12 +33,15 @@ export function buildDungeon(ctx: Ctx, id: string, name: string, seed: number, p
   const tool = payload.data!.tool as ItemId | null;
   const S = ctx.settings;
   const caps = payload.caps ?? [];
-  const GW = 4, GH = 3;
   const key = ctx.item({ id: 'key:' + scope, name: `Small Key (${name})`, kind: 'key', icon: '⚷', color: '#d8d8e8' });
   const big = ctx.item({ id: 'bigkey:' + scope, name: `Boss Key (${name})`, kind: 'key', icon: '♛', color: '#ffd24a' });
 
-  const entryCell = (GH - 1) * GW + rng.range(1, 2);
-  const cells = growBlob(rng, GW, GH, entryCell, Math.max(4, Math.min(GW * GH, rng.range(S.dungeonRooms - 1, S.dungeonRooms + 1))));
+  // the room grid grows with the room count, leaving about a third of it empty for interesting shapes
+  const count = Math.max(2, rng.range(S.dungeonRooms - 1, S.dungeonRooms + 1));
+  const GH = Math.max(2, Math.ceil(Math.sqrt(count * 1.2)));
+  const GW = Math.max(2, Math.ceil((count * 1.5) / GH));
+  const entryCell = (GH - 1) * GW + rng.range(GW >> 2, GW - 1 - (GW >> 2));
+  const cells = growBlob(rng, GW, GH, entryCell, count);
   const rid = (c: number) => `${id}.r${c}`;
   const candidates: [string, string][] = [];
   for (const c of cells) for (const n of neighbours(GW, GH, c)) if (n > c && cells.includes(n)) candidates.push([rid(c), rid(n)]);

@@ -103,7 +103,9 @@ function realise(ctx: Ctx, rng: Rng, region: RegionBP, p: Payload, onPortal: Sta
     case 'item':
       return p.data?.gift ? elderGift(ctx, region, p) : placeItem(ctx, rng, region, p.provides[0], caps, true);
     case 'dungeon': {
-      const name = DUNGEON_NAMES[(Number((p.data!.scope as string).slice(1)) - 1) % DUNGEON_NAMES.length];
+      const nth = Number((p.data!.scope as string).slice(1)) - 1;
+      const round = Math.floor(nth / DUNGEON_NAMES.length);
+      const name = DUNGEON_NAMES[nth % DUNGEON_NAMES.length] + (round ? ' ' + ['II', 'III', 'IV', 'V', 'VI'][round - 1] : '');
       const d = buildDungeon(ctx, `${region.id}.${p.data!.scope}`, name, childSeed(region.hnode.seed, p.id), p);
       d.node.entryCaps = caps;
       const e = ctx.edge(region.id, d.entryLoc, NONE, 'portal');

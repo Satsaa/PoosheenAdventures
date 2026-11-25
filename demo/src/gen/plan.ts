@@ -89,7 +89,7 @@ export function makePlan(rng: Rng, ctx: Ctx): Plan {
   const over: Payload[] = [
     ...gifts.map((g) => item(g, { gift: true, fixed: true })),
     ...seq,
-    { id: 'p' + pid++, kind: 'sanctum', provides: ['flag:victory'], needs: has('medallion', medallions), terminal: true },
+    { id: 'p' + pid++, kind: 'sanctum', provides: ['flag:victory'], needs: medallions > 0 ? has('medallion', medallions) : undefined, terminal: true },
   ];
   return { tools: [...gifts.filter((g) => g !== 'heart'), ...rest], medallions, dungeons: S.dungeons, gifts: gifts.length, over };
 }

@@ -26,6 +26,9 @@ export interface DimRender {
   /** bake px above row 0 */
   top: number;
   canvas: HTMLCanvasElement;
+  /** flat bake painted yet (paintDimRender) */
+  painted: boolean;
+  seed: number;
   /** desaturated/darkened copy, created lazily */
   fog: HTMLCanvasElement | null;
   /** fog clipped to the fogged footprints of the current state */
@@ -523,16 +526,41 @@ function drawFace(
 
 // ------------------------------------------------------------------ bake
 
+/** Metadata (elevation, faces, owner zones, bounds) without painting; paint lazily with paintDimRender. */
 export function buildDimRender(dim: Dimension, seed: number): DimRender {
   const S = bakeSize(dim);
   const H = Math.round(S * 0.4);
-  const { w, h, ground, deco } = dim;
+  const { w, h } = dim;
   const { ve, voidElev, maxVe } = computeVe(dim);
   const top = Math.ceil(Math.max(0, maxVe) * H + S * 1.1);
   const bottom = Math.ceil((maxVe - voidElev) * H + S * 0.5);
-  const canvas = makeCanvas(w * S, top + h * S + bottom);
-  const c = ctx2d(canvas);
   const faceH = new Float32Array(w * h);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (dim.ground[i] === T.VOID) continue;
+      const eS = y + 1 < h ? ve[i + w] : voidElev;
+      if (eS < ve[i]) faceH[i] = ve[i] - eS;
+    }
+  const ch = top + h * S + bottom;
+  return {
+    dim, S, H, hT: H / S, ve, voidElev, maxVe, top, canvas: makeCanvas(1, 1), painted: false, seed, fog: null, fogMasked: null, fogKey: '',
+    owner: computeOwner(dim), faceH,
+    y0: -top / S, y1: (ch - top) / S,
+  };
+}
+
+/** Paint the flat (Canvas 2D) terrain bake of a dimension, once. */
+export function paintDimRender(dr: DimRender): void {
+  if (dr.painted) return;
+  dr.painted = true;
+  const { dim, S, H, ve, voidElev, maxVe, top, seed } = dr;
+  const { w, h, ground, deco } = dim;
+  const bottom = Math.ceil((maxVe - voidElev) * H + S * 0.5);
+  const canvas = makeCanvas(w * S, top + h * S + bottom);
+  dr.canvas = canvas;
+  const c = ctx2d(canvas);
+  const faceH = dr.faceH;
   const veAt = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? voidElev : ve[y * w + x]);
   const gAt = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? T.VOID : ground[y * w + x]);
   const dAt = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? 0 : deco[y * w + x]);
@@ -660,7 +688,6 @@ export function buildDimRender(dim: Dimension, seed: number): DimRender {
       const eS = veAt(x, y + 1);
       if (eS < e) {
         const fh = (e - eS) * H;
-        faceH[i] = e - eS;
         const litLeft = veAt(x - 1, y) < e - 0.01 || veAt(x - 1, y + 1) >= e;
         const darkRight = veAt(x + 1, y) < e - 0.01 || veAt(x + 1, y + 1) >= e;
         drawFace(c, g, x, y, px, py + S, fh, S, H, litLeft, darkRight, gAt(x, y + 1) === T.VOID, dim.kind, seed);
@@ -685,16 +712,11 @@ export function buildDimRender(dim: Dimension, seed: number): DimRender {
       });
     }
   }
-
-  return {
-    dim, S, H, hT: H / S, ve, voidElev, maxVe, top, canvas, fog: null, fogMasked: null, fogKey: '',
-    owner: computeOwner(dim), faceH,
-    y0: -top / S, y1: (canvas.height - top) / S,
-  };
 }
 
 /** Desaturated, darkened, cool-tinted copy of the bake. */
 export function ensureFog(dr: DimRender): HTMLCanvasElement {
+  paintDimRender(dr);
   if (dr.fog) return dr.fog;
   const src = dr.canvas;
   const f = makeCanvas(src.width, src.height);

@@ -1,17 +1,35 @@
 // Lints: every promise the generator makes is re-checked on the finished graph.
 import type { Edge, ItemDef, ItemId, Lint, LocId, LogicGraph, Npc, Req, Solution, HNode } from '../core/types';
 import { evalReq, reqItems } from '../core/req';
-import { requiredFor, solve } from '../core/solver';
+import { solve } from '../core/solver';
 
 type Items = Record<ItemId, ItemDef>;
+
+/**
+ * For every item a requirement mentions: the zones still reachable in a world without it.
+ * One solve per item answers "what must a player own to stand in zone Z" for every zone at once.
+ */
+export function requiredTable(g: LogicGraph, items: Items): Map<ItemId, Record<LocId, number>> {
+  const mentioned = new Set<ItemId>();
+  for (const e of g.edges) { reqItems(e.req, mentioned); if (e.lock) mentioned.add('key:' + e.lock); }
+  for (const c of g.checks) reqItems(c.req, mentioned);
+  for (const s of g.sources) reqItems(s.req, mentioned);
+  for (const it of [...mentioned]) {
+    if (items[it]?.container) mentioned.add(items[it].container!);
+    for (const u of items[it]?.upgrades ?? []) mentioned.add(u.item);
+  }
+  const table = new Map<ItemId, Record<LocId, number>>();
+  for (const it of mentioned) table.set(it, solve(g, items, { without: new Set([it]) }).locSphere);
+  return table;
+}
 
 /**
  * A one-way edge is safe if a player holding only what is unavoidable at its top can still get
  * back to the start (or finish the game) from its bottom. More inventory never hurts.
  */
-export function oneWaySafe(g: LogicGraph, items: Items, e: Edge): boolean {
-  const all = [...new Set(g.checks.map((c) => c.item))];
-  const must = new Set(requiredFor(g, items, e.a, all));
+export function oneWaySafe(g: LogicGraph, items: Items, e: Edge, table = requiredTable(g, items)): boolean {
+  const must = new Set<ItemId>();
+  for (const [it, reach] of table) if (reach[e.a] === undefined) must.add(it);
   for (const it of reqItems(e.req)) must.add(it);
   const inv: [ItemId, number][] = [...must].map((it) => [it, g.checks.filter((c) => c.item === it).length]);
   const skip = new Set(g.checks.filter((c) => must.has(c.item)).map((c) => c.id));
@@ -38,8 +56,9 @@ export function runLints(g: LogicGraph, items: Items, sol: Solution, npcs: Npc[]
   add('zones', 'Every zone is reachable', g.locs.filter((l) => sol.locSphere[l.id] === undefined).map((l) => l.name), `${g.locs.length} zones`);
 
   const oneWay = g.edges.filter((e) => e.oneWay);
+  const table = oneWay.length ? requiredTable(g, items) : new Map();
   add('softlock', 'One-way drops never trap the player',
-    oneWay.filter((e) => !oneWaySafe(g, items, e)).map((e) => `${locName.get(e.a)} → ${locName.get(e.b)}`), `${oneWay.length} one-way edges`);
+    oneWay.filter((e) => !oneWaySafe(g, items, e, table)).map((e) => `${locName.get(e.a)} → ${locName.get(e.b)}`), `${oneWay.length} one-way edges`);
 
   // consumables: a free-standing source nearby for everything a gate spends
   const bad: string[] = [];
@@ -99,6 +118,26 @@ export function runLints(g: LogicGraph, items: Items, sol: Solution, npcs: Npc[]
         const miss = n.entryCaps.filter((c) => !got.has(c));
         if (miss.length) capBad.push(`${n.name} was promised ${miss.map((m) => items[m]?.name ?? m).join(', ')}`);
       }
+    }
+    const rooms = n.children.filter((c) => c.kind === 'room');
+    if (n.kind === 'place' && rooms.length > 1) {
+      // rooms are checked inside their own dungeon: given what the dungeon was promised, is each
+      // room's promise obtainable without entering that room? (a small local solve per room)
+      const locs = new Set(rooms.flatMap((r) => r.locs));
+      const sub: LogicGraph = {
+        start: rooms[0].locs[0], goal: '', locs: g.locs.filter((l) => locs.has(l.id)),
+        edges: g.edges.filter((e) => locs.has(e.a) && locs.has(e.b)), checks: g.checks.filter((c) => locs.has(c.loc)), sources: g.sources.filter((x) => locs.has(x.loc)),
+      };
+      const inv: [ItemId, number][] = n.entryCaps.map((c) => [c, 99]);
+      for (const r of rooms.slice(1)) {
+        if (!r.entryCaps.length) continue;
+        nodes++;
+        const s = solve(sub, items, { blocked: new Set(r.locs), inv });
+        const got = new Set([...n.entryCaps, ...s.spheres.flatMap((sp) => sp.collected.map((c) => c.item))]);
+        const miss = r.entryCaps.filter((c) => !got.has(c));
+        if (miss.length) capBad.push(`${n.name}, ${r.name} was promised ${miss.map((m) => items[m]?.name ?? m).join(', ')}`);
+      }
+      return;
     }
     n.children.forEach(walk);
   };

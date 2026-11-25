@@ -4,10 +4,13 @@ import type { World, Dimension, DimId, MapObject, LocId } from '../core/types';
 import { D, T } from '../core/types';
 import { hashStr } from '../core/rng';
 import {
-  buildDimRender, buildFogMask, buildGhostFill, buildOutline, footprint, rockPattern, type DimRender,
+  buildDimRender, buildFogMask, buildGhostFill, buildOutline, footprint, paintDimRender, rockPattern, type DimRender,
 } from './terrain';
 import { drawObject, drawPin, pinRank, pinColor } from './objects';
 import { Particles } from './particles';
+import { LitRenderer, type ObjDraw } from './lit/renderer';
+import { type Layout, layout } from './lit/compose';
+import { objectLights } from './lit/lights';
 import { FONT, clamp, ctx2d, hash2, makeCanvas, shade, smoothstep } from './util';
 
 export interface MapState {
@@ -33,6 +36,9 @@ export interface MapView {
   fitAll(): void;
   resize(): void;
   destroy(): void;
+  /** 'lit' = WebGL2 normal-mapped pipeline, 'flat' = the existing Canvas 2D renderer */
+  setRenderer(mode: 'lit' | 'flat'): void;
+  readonly renderer: 'lit' | 'flat';
 }
 
 const MAX_ZOOM = 48;
@@ -69,6 +75,15 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   let freshPath: Path2D | null = null;
   let sortedObjs: MapObject[] = [];
 
+  // lit (WebGL2) pipeline: draws into its own canvas inserted beneath `canvas`, which becomes the 2D overlay
+  let wantMode: 'lit' | 'flat' = 'lit';
+  let mode: 'lit' | 'flat' = 'flat';
+  let lit: LitRenderer | null = null;
+  let litFailed = false;
+  let glCanvas: HTMLCanvasElement | null = null;
+  let litLay: Layout | null = null;
+  let maskDirty = true;
+
   let W = 1, Hh = 1, dpr = 1;
   const cam = { x: 0, y: 0, s: 16 };
   let target: { x: number; y: number; s: number } | null = null;
@@ -95,9 +110,22 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   let destroyed = false;
 
   // ------------------------------------------------------------ geometry
+  // Tile lift (how far a tile is drawn shifted up, in tiles) depends on the active renderer:
+  // flat uses its bake's elevation step, lit rounds each level to whole 16 px-per-tile pixels.
+  const litOn = () => mode === 'lit' && !!lit && !lit.lost && !!litLay;
+  const liftT = (i: number) => (litOn() ? litLay!.liftPx[i] / 16 : dr!.ve[i] * dr!.hT);
+  const voidLiftT = () => (litOn() ? litLay!.voidLiftPx / 16 : dr!.voidElev * dr!.hT);
+  const maxLiftT = () => (litOn() ? litLay!.maxLiftPx / 16 : dr!.maxVe * dr!.hT);
+  function faceT(i: number): number {
+    if (!litOn()) return dr!.faceH[i] * dr!.hT;
+    const w = dim!.w;
+    const below = i + w < dim!.w * dim!.h ? litLay!.liftPx[i + w] : litLay!.voidLiftPx;
+    return Math.max(0, (litLay!.liftPx[i] - below) / 16);
+  }
   const worldBounds = () => {
     if (!dim || !dr) return { x0: 0, x1: 1, y0: 0, y1: 1 };
-    return { x0: 0, x1: dim.w, y0: dr.y0 + 0.4, y1: Math.min(dr.y1, dim.h + (dr.maxVe - dr.voidElev) * dr.hT * 0.6 + 0.2) };
+    const y0 = litOn() ? -litLay!.top / 16 + 0.4 : dr.y0 + 0.4;
+    return { x0: 0, x1: dim.w, y0, y1: dim.h + (maxLiftT() - voidLiftT()) * 0.6 + 0.2 };
   };
   const fitScale = () => {
     const b = worldBounds();
@@ -122,7 +150,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   function tileElevY(x: number, y: number): number {
     if (!dim || !dr || x < 0 || y < 0 || x >= dim.w || y >= dim.h) return 0;
     const g = dim.ground[y * dim.w + x];
-    return g === T.VOID ? 0 : dr.ve[y * dim.w + x] * dr.hT;
+    return g === T.VOID ? 0 : liftT(y * dim.w + x);
   }
 
   /** screen -> tile, accounting for elevation (southernmost covering tile wins). */
@@ -131,13 +159,13 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     const wpt = toWorld(px, py);
     const tx = Math.floor(wpt.x);
     if (tx < 0 || tx >= dim.w) return null;
-    const yHi = Math.min(dim.h - 1, Math.floor(wpt.y - dr.voidElev * dr.hT) + 1);
-    const yLo = Math.max(0, Math.floor(wpt.y - dr.maxVe * dr.hT) - 1);
+    const yHi = Math.min(dim.h - 1, Math.floor(wpt.y - voidLiftT()) + 1);
+    const yLo = Math.max(0, Math.floor(wpt.y - maxLiftT()) - 1);
     for (let y = yHi; y >= yLo; y--) {
       const i = y * dim.w + tx;
       if (dim.ground[i] === T.VOID) continue;
-      const top = y - dr.ve[i] * dr.hT;
-      const bot = top + 1 + dr.faceH[i] * dr.hT;
+      const top = y - liftT(i);
+      const bot = top + 1 + faceT(i);
       if (wpt.y >= top && wpt.y < bot) return { x: tx, y };
     }
     return null;
@@ -206,42 +234,109 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
 
   // ------------------------------------------------------------ public API
   function setWorld(w: World) {
+    const prev = dim ? { id: dim.id, w: dim.w, h: dim.h } : null;
     world = w;
     renders.clear();
     ghosts.clear();
     particles.clear();
+    lit?.setWorld(w, hashStr(w.seed));
     dim = null;
     dr = null;
     hover = null;
     hits = [];
-    const first = w.dims.find((d) => d.kind === 'overworld') || w.dims[0];
-    if (first) setDimension(first.id);
+    const same = prev && w.dims.find((d) => d.id === prev.id && d.w === prev.w && d.h === prev.h);
+    const first = same || w.dims.find((d) => d.kind === 'overworld') || w.dims[0];
+    if (first) showDim(first, !!same);
+  }
+
+  function getDr(d: Dimension): DimRender {
+    let r = renders.get(d.id);
+    if (!r) {
+      r = buildDimRender(d, hashStr(world!.seed + ':' + d.id));
+      renders.set(d.id, r);
+    }
+    return r;
   }
 
   function setDimension(id: DimId) {
     if (!world) return;
     const d = world.dims.find((x) => x.id === id);
     if (!d) return;
+    if (d === dim) { start(); return; }
+    showDim(d, false);
+  }
+
+  function showDim(d: Dimension, keepCam: boolean) {
     dim = d;
-    let r = renders.get(id);
-    if (!r) {
-      r = buildDimRender(d, hashStr(world.seed + ':' + id));
-      renders.set(id, r);
-    }
-    dr = r;
+    dr = getDr(d);
+    litLay = layout(d, dr.ve, dr.voidElev);
     sortedObjs = d.objects.slice().sort((a, b) => a.y - b.y || a.x - b.x);
     particles.clear();
     hover = null;
     hits = [];
     fogDirty = true;
+    maskDirty = true;
     freshPath = null;
     minS = fitScale();
-    const b = worldBounds();
-    cam.x = (b.x0 + b.x1) / 2;
-    cam.y = (b.y0 + b.y1) / 2;
-    cam.s = minS;
-    target = null;
+    if (keepCam) clampCam(cam);
+    else {
+      const b = worldBounds();
+      cam.x = (b.x0 + b.x1) / 2;
+      cam.y = (b.y0 + b.y1) / 2;
+      cam.s = minS;
+      target = null;
+    }
     start();
+  }
+
+  // ------------------------------------------------------------ renderer selection
+  function initLit(): boolean {
+    if (lit) return !lit.lost;
+    if (litFailed || !canvas.parentNode || typeof document === 'undefined') return false;
+    const gc = document.createElement('canvas');
+    gc.setAttribute('aria-hidden', 'true');
+    gc.style.position = 'absolute';
+    gc.style.pointerEvents = 'none';
+    canvas.parentNode.insertBefore(gc, canvas);
+    const r = LitRenderer.create(gc);
+    if (!r) { gc.remove(); litFailed = true; return false; }
+    lit = r;
+    glCanvas = gc;
+    r.onLost = () => { applyMode(); start(); };
+    r.onRestored = () => { maskDirty = true; applyMode(); start(); };
+    if (world) r.setWorld(world, hashStr(world.seed));
+    syncGlCanvas();
+    return true;
+  }
+
+  function syncGlCanvas() {
+    if (!glCanvas) return;
+    glCanvas.style.left = canvas.offsetLeft + 'px';
+    glCanvas.style.top = canvas.offsetTop + 'px';
+    glCanvas.style.width = canvas.offsetWidth + 'px';
+    glCanvas.style.height = canvas.offsetHeight + 'px';
+  }
+
+  function applyMode() {
+    const ok = wantMode === 'lit' && initLit() && !!lit && !lit.lost;
+    mode = ok ? 'lit' : 'flat';
+    if (glCanvas) glCanvas.style.display = mode === 'lit' ? '' : 'none';
+    maskDirty = true;
+    fogDirty = true;
+    if (dim && dr) {
+      litLay = layout(dim, dr.ve, dr.voidElev);
+      const wasFit = Math.abs(cam.s - minS) < 1e-3;
+      minS = fitScale();
+      if (wasFit) cam.s = minS;
+      clampCam(cam);
+      if (mode === 'flat' && state.fresh.size) buildFresh();
+    }
+    start();
+  }
+
+  function setRenderer(m: 'lit' | 'flat') {
+    wantMode = m;
+    applyMode();
   }
 
   function setState(s: MapState) {
@@ -252,7 +347,9 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       done: s.done || new Set(),
     };
     fogDirty = true;
-    buildFresh();
+    maskDirty = true;
+    if (state.fresh.size) freshT0 = t;
+    if (!litOn()) buildFresh();
     start();
   }
 
@@ -286,6 +383,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     canvas.width = Math.round(W * dpr);
     canvas.height = Math.round(Hh * dpr);
     vignette = null;
+    syncGlCanvas();
     if (dim) {
       minS = fitScale();
       if (wasFit) { const b = worldBounds(); cam.x = (b.x0 + b.x1) / 2; cam.y = (b.y0 + b.y1) / 2; cam.s = minS; }
@@ -517,8 +615,8 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     return {
       x0: Math.max(0, Math.floor(a.x) - 1),
       x1: Math.min(d.w - 1, Math.ceil(b.x) + 1),
-      y0: Math.max(0, Math.floor(a.y + dr!.voidElev * dr!.hT) - 1),
-      y1: Math.min(d.h - 1, Math.ceil(b.y + dr!.maxVe * dr!.hT) + 2),
+      y0: Math.max(0, Math.floor(a.y + voidLiftT()) - 1),
+      y1: Math.min(d.h - 1, Math.ceil(b.y + maxLiftT()) + 2),
       wx0: a.x, wy0: a.y, wx1: b.x, wy1: b.y,
     };
   }
@@ -592,14 +690,14 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   function attachUp(o: MapObject): boolean {
     if (!dim || !dr || o.y <= 0) return false;
     const i = o.y * dim.w + o.x, j = i - dim.w;
-    return dim.deco[j] === D.HOUSE || (dim.ground[j] !== T.VOID && dr.ve[j] > dr.ve[i] + 0.3);
+    return dim.deco[j] === D.HOUSE || (dim.ground[j] !== T.VOID && liftT(j) > liftT(i) + 0.12);
   }
 
   function objScreen(o: MapObject): [number, number] {
     return [sx(o.x + 0.5), sy(o.y + 0.5 - tileElevY(o.x, o.y))];
   }
 
-  function drawObjects(v: ReturnType<typeof visibleTiles>, dt: number) {
+  function drawObjects(v: ReturnType<typeof visibleTiles>, dt: number, litMode = false) {
     const s = cam.s;
     const sprites = s >= SPRITE_MIN;
     hits = [];
@@ -612,10 +710,10 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       if (x < -m || y < -m || x > W + m || y > Hh + m) continue;
       vis.push({ o, x, y, fog: objFogged(o), done: state.done.has(o.id) });
     }
-    // lights / halos (additive)
-    ctx.save();
+    // lights / halos (additive; the lit pipeline has real lights instead)
+    if (!litMode) ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    for (const v2 of vis) {
+    for (const v2 of litMode ? [] : vis) {
       const { o, x, y, done, fog } = v2;
       const k = fog ? 0.4 : 1;
       if (o.kind === 'start') glowAt(x, y, Math.max(40, s * 3), '255,240,190', (0.35 + (reduced ? 0 : 0.06 * Math.sin(t * 2))) * k);
@@ -623,7 +721,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
         glowAt(x, y, Math.max(22, s * 1.6), o.gate === 'seal' ? '255,80,230' : '170,90,255', (0.45 + (reduced ? 0 : 0.15 * Math.sin(t * 3))) * k);
       else if (o.kind === 'chest' && !done) glowAt(x, y, Math.max(14, s * 0.9), '255,200,80', 0.22 * k);
     }
-    ctx.restore();
+    if (!litMode) ctx.restore();
     // emit object particles
     if (!reduced) {
       for (const { o, done, fog } of vis) {
@@ -641,7 +739,8 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     for (const { o, x, y, fog, done } of vis) {
       ctx.globalAlpha = fog ? 0.55 : 1;
       if (sprites) {
-        drawObject(ctx, o, x, y, s, { done, t: reduced ? 0 : t, attach: attachUp(o) });
+        if (!litMode) drawObject(ctx, o, x, y, s, { done, t: reduced ? 0 : t, attach: attachUp(o) });
+        else if (o.kind === 'npc' && o.icon && s >= 22) drawBubble(o.icon, x, y - s * 1.15, s);
         hits.push({ o, x, y: y - s * 0.1, r: s * 0.55 });
       } else {
         const rank = pinRank(o);
@@ -667,6 +766,22 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
         drawTooltip(hover, h.x, h.y - h.r - 8);
       }
     }
+  }
+
+  function drawBubble(icon: string, x: number, y: number, s: number) {
+    const r = clamp(s * 0.2, 7, 12);
+    ctx.fillStyle = 'rgba(255,250,235,0.95)';
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.moveTo(x - r * 0.35, y + r * 0.8);
+    ctx.lineTo(x, y + r * 1.45);
+    ctx.lineTo(x + r * 0.35, y + r * 0.8);
+    ctx.fill();
+    ctx.fillStyle = '#1c1626';
+    ctx.font = `700 ${Math.round(r * 1.2)}px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(icon, x, y + 0.5);
   }
 
   function drawTooltip(o: MapObject, x: number, y: number) {
@@ -746,7 +861,83 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     ctx.restore();
   }
 
+  function ghostDimFor(d: Dimension): Dimension | null {
+    if (!world || d.stack === undefined) return null;
+    const stacked = world.dims.filter((x) => x.stack !== undefined && x.id !== d.id);
+    return stacked.find((x) => x.stack === d.stack! - 1) || (d.stack! > 0 ? stacked.find((x) => x.stack === 0) || null : null);
+  }
+
+  function renderLit(dt: number): boolean {
+    if (!lit || !dim || !dr) return false;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    const d = dim, r = dr;
+    const v = visibleTiles();
+    if (!reduced) {
+      particles.emit(r, v.wx0, v.wy0, v.wx1, v.wy1, dt);
+      particles.update(dt, t);
+    }
+    if (maskDirty) {
+      maskDirty = false;
+      const fresh = state.fresh;
+      lit.setMask(d, r,
+        (i) => !!state.reachable && isFoggedZone(r.owner[i]),
+        (i) => fresh.size > 0 && r.owner[i] >= 0 && fresh.has(d.zoneLoc[r.owner[i]]));
+    }
+    const objs: ObjDraw[] = [];
+    const lz: { o: MapObject; done: boolean; z: number }[] = [];
+    for (const o of sortedObjs) {
+      if (state.hidden.has(o.id)) continue;
+      if (o.kind === 'gate' && o.gate === 'open') continue;
+      const done = state.done.has(o.id);
+      objs.push({ o, done, attach: attachUp(o) });
+      lz.push({ o, done, z: o.x >= 0 && o.y >= 0 && o.x < d.w && o.y < d.h ? liftT(o.y * d.w + o.x) : 0 });
+    }
+    let fresh = 0;
+    if (!reduced && freshT0 >= 0) {
+      const u = (t - freshT0) / FRESH_SECS;
+      if (u < 1) fresh = Math.sin(Math.PI * Math.min(1, u * 1.4)) * (1 - u * 0.5);
+    }
+    const gd = ghostOn ? ghostDimFor(d) : null;
+    lit.render({
+      dim: d, meta: r, cam, cssW: W, cssH: Hh, dpr, t, motion: !reduced,
+      ghost: gd ? { dim: gd, meta: getDr(gd) } : null,
+      objs, lights: objectLights(lz), particles: reduced ? null : particles, fresh,
+    });
+    const ghost = ghostOn ? ghostFor(d) : null;
+    if (ghost?.outline) {
+      ctx.save();
+      ctx.setTransform(dpr * cam.s, 0, 0, dpr * cam.s, dpr * (W / 2 - cam.x * cam.s), dpr * (Hh / 2 - cam.y * cam.s));
+      ctx.lineWidth = 1.6 / cam.s;
+      ctx.setLineDash([5 / cam.s, 4 / cam.s]);
+      ctx.strokeStyle = 'rgba(150,215,255,0.5)';
+      ctx.stroke(ghost.outline);
+      ctx.restore();
+    }
+    drawObjects(v, dt, true);
+    drawLabels();
+    if (mouse && !drag?.moved && !target) updateHover();
+    return true;
+  }
+
   function render(dt: number) {
+    if (litOn()) {
+      try {
+        if (renderLit(dt)) return;
+      } catch (err) {
+        console.error('lit renderer failed, falling back to flat:', err);
+        litFailed = true;
+        lit?.destroy();
+        glCanvas?.remove();
+        lit = null;
+        glCanvas = null;
+        applyMode();
+      }
+    }
+    if (dr) paintDimRender(dr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
@@ -824,11 +1015,19 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     document.removeEventListener('visibilitychange', onVis);
     rm?.removeEventListener?.('change', onRm);
     ro?.disconnect();
+    lit?.destroy();
+    glCanvas?.remove();
+    lit = null;
+    glCanvas = null;
     renders.clear();
     ghosts.clear();
     particles.clear();
   }
 
   resize();
-  return { setWorld, setDimension, setState, setGhost, focus, fitAll, resize, destroy };
+  applyMode();
+  return {
+    setWorld, setDimension, setState, setGhost, focus, fitAll, resize, destroy, setRenderer,
+    get renderer() { return mode; },
+  };
 }

@@ -30,8 +30,8 @@ function attempt(seedStr: string, S: GenSettings, n: number, t0: number): World 
  * fit something (a region came out too cramped), the next attempt reshuffles from a derived seed.
  * Still fully deterministic per seed string and settings.
  */
-export function generateWorld(seedStr: string, settings?: Partial<GenSettings> | null): World {
-  const S = normalizeSettings(settings);
+export function generateWorld(seedStr: string, settings?: Partial<GenSettings> | null, opts: { anySize?: boolean } = {}): World {
+  const S = normalizeSettings(settings, opts.anySize);
   const maxAttempts = S.maxAttempts;
   const t0 = Date.now();
   let best: World | null = null;

@@ -64,13 +64,14 @@ void main() {
   else if ((flags & 32) != 0) alb *= vTint.rgb;
   float h = face ? vInst.x - float(lp.y) / 16.0 : vInst.x + n.a * 255.0 / 40.0 - 1.0;
   vec3 nn = n.rgb * 2.0 - 1.0;
-  if ((flags & 2) != 0 && lp.y == 0) nn = normalize(nn + vec3(0.0, -1.3, 0.5));
-  if ((flags & 4) != 0 && lp.x == 0) nn = normalize(nn + vec3(-1.3, 0.0, 0.5));
-  if ((flags & 8) != 0 && lp.x == int(vSize.x) - 1) nn = normalize(nn + vec3(1.3, 0.0, 0.5));
+  // rims on raised edges: lit lip on north / west, dark seam on east
+  if ((flags & 2) != 0 && lp.y == 0) alb = min(alb * 1.35 + 0.04, 1.0);
+  if ((flags & 4) != 0 && lp.x == 0) { alb = min(alb * 1.2 + 0.02, 1.0); nn = normalize(nn + vec3(-0.8, 0.0, 0.4)); }
+  if ((flags & 8) != 0 && lp.x == int(vSize.x) - 1) alb *= 0.55;
   oA = vec4(alb, 1.0);
   oN = vec4(nn * 0.5 + 0.5, clamp((h + 1.0) * 40.0 / 255.0, 0.0, 1.0));
   oE = vec4(e.rgb * vTint.a, float(mat) / 255.0);
-  oT = vec4(vInst.yz / 255.0, 0.0, 1.0);
+  oT = vec4(vInst.yz / 255.0, (flags & 64) != 0 ? 1.0 : 0.0, 1.0);
 }`;
 
 // ---------------------------------------------------------------- static dimension G-buffer -> screen G-buffer
@@ -131,8 +132,9 @@ void main() {
     if (uGhost0.x > 0.0) {
       vec2 guv = vec2(dp.x, dp.y - uTop + uGhost0.y) / uGhost0.zw;
       if (guv.x > 0.0 && guv.y > 0.0 && guv.x < 1.0 && guv.y < 1.0) {
-        vec4 g = textureLod(uGhost, guv, 2.0);
-        bg = mix(bg, g.rgb * uGhostTint, clamp(g.a * 1.3, 0.0, 1.0) * 0.55);
+        vec4 g = textureLod(uGhost, guv, 4.0) * 0.5 + textureLod(uGhost, guv, 5.0) * 0.5;
+        float gl2 = dot(g.rgb, vec3(0.3, 0.59, 0.11));
+        bg = mix(bg, mix(vec3(gl2), g.rgb, 0.5) * uGhostTint, clamp(g.a * 1.2, 0.0, 1.0) * 0.4);
       }
     }
     o = vec4(bg * uHdr, 1.0);
@@ -180,8 +182,12 @@ void main() {
   occ += clamp(dh(texelFetch(gN, clamp(fc + ivec2(int(r1), 0), ivec2(0), ivec2(uIS) - 1), 0)) - h, 0.0, 0.6);
   occ += clamp(dh(texelFetch(gN, clamp(fc + ivec2(0, -int(r1)), ivec2(0), ivec2(uIS) - 1), 0)) - h, 0.0, 0.6);
   occ += clamp(dh(texelFetch(gN, clamp(fc + ivec2(0, -int(r1 * 2.0)), ivec2(0), ivec2(uIS) - 1), 0)) - h, 0.0, 0.6);
+  if (N.z < 0.5) occ *= 0.25; // walls facing the camera: only contact shadow from what is in front
   float ao = 1.0 - min(occ * 0.55, 0.6);
   vec3 amb = mix(uAmbBot, uAmbTop, N.z * 0.5 + 0.5) * ao;
+  // dynamic objects (chests, doors, NPCs, gates) get a lift + rim so they stay easy to spot
+  float isObj = Tt.b;
+  amb += vec3(0.2, 0.19, 0.24) * isObj;
   vec3 key = uKeyCol * toon(max(nl, 0.0)) * sh;
   vec3 V = vec3(0.0, 0.7071, 0.7071);
   bool shiny = mat == 1 || mat == 4;
@@ -211,9 +217,11 @@ void main() {
   }
   if (fog > 0.5) { pl *= 0.25; spec *= 0.2; emi *= 0.35; }
   vec3 c = A.rgb * (amb + key + pl) + spec + emi;
+  c += isObj * vec3(1.0, 0.85, 0.6) * pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 3.0) * 0.35;
   if (fog > 0.5) {
-    float l = dot(c, vec3(0.3, 0.59, 0.11));
-    c = mix(c, vec3(l) * uFogTint, 0.82) * 0.62;
+    // unreachable: read the map from a flat, desaturated, cool version (independent of the mood's darkness)
+    float l = dot(A.rgb * (0.55 + 0.45 * max(N.z, 0.0)) + E.rgb * 0.25, vec3(0.3, 0.59, 0.11));
+    c = mix(c * 0.45, vec3(l) * uFogTint, 0.8);
   }
   c += fresh * uFresh * (A.rgb * vec3(1.3, 0.8, 0.35) + vec3(0.35, 0.17, 0.04));
   o = vec4(c * uHdr, 1.0);
