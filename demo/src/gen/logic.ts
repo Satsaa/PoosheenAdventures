@@ -100,7 +100,7 @@ export function buildBlueprint(seed: number): Blueprint {
   shop.interior.entranceEdge = se.id;
   for (const [ammo, price] of [['bombs', 20], ['arrows', 10]] as const) {
     const s = ctx.source(shop.entryLoc, ammo, `Shop shelf: ${ctx.items[ammo].name} (${price} rupees)`, use('rupees', price));
-    shop.room.objs.push({ id: 'o.' + s.id, kind: 'source', label: s.label, sourceId: s.id, style: 'shelf', icon: ctx.items[ammo].icon });
+    shop.room.objs.push({ id: 'o.' + s.id, kind: 'source', label: s.label, sourceId: s.id, style: 'pot', icon: ctx.items[ammo].icon });
   }
   const pricey = ctx.check(shop.entryLoc, 'heart', 'shop', 'Shop: heart piece (200 rupees, needs the big wallet)', use('rupees', 200));
   shop.room.objs.push({ id: 'o.' + pricey.id, kind: 'chest', label: pricey.label, checkId: pricey.id });

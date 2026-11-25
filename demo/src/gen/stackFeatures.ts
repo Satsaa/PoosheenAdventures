@@ -85,10 +85,11 @@ export function placeFeatures(sts: Map<DimId, ST>): DoorMap {
           const at = findBlock(st, r.idx, P, -2, -3, 2, 1);
           if (!at) { fail(f.label); continue; }
           reserve(st, at.x - 2, at.y - 3, at.x + 2, at.y + 1);
-          const deco = f.style === 'cave' ? D.ROCK : D.HOUSE;
+          // a red-roofed house would look odd in a cave or on a cloud: use the local building material there
+          const deco = st.bp.kind === 'underworld' ? D.STALAG : st.bp.kind === 'sky' ? D.PILLAR : f.style === 'cave' ? D.ROCK : D.HOUSE;
           for (let y = at.y - 2; y <= at.y - 1; y++) for (let x = at.x - 1; x <= at.x + 1; x++) {
             dim.solid[y * w + x] = 1;
-            dim.deco[y * w + x] = st.bp.kind === 'underworld' && f.style === 'cave' ? D.STALAG : deco;
+            dim.deco[y * w + x] = deco;
           }
           const obj: MapObject = { id: 'd.' + f.edgeId, kind: 'entrance', x: at.x, y: at.y, label: f.label, style: f.style, req: f.req, edgeId: f.edgeId };
           dim.objects.push(obj);
