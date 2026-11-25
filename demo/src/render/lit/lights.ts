@@ -63,7 +63,7 @@ export function staticLights(dim: Dimension, lay: Layout, st: { torches: [number
           if (ground[y * w + x] === T.LAVA) { n++; sx += x; sy += y; sz += lay.liftPx[y * w + x]; }
       if (n >= 2) out.push(L(sx / n + 0.5, sy / n + 0.5, sz / n / TILE_PX + 0.5, 3 + n * 0.12, [1.6, 0.55, 0.15], 1.3));
     }
-  for (const [x, y, z] of st.windows) out.push(L(x, y, z, 2.4, [0.95, 0.58, 0.26], 0));
+  for (const [x, y, z] of st.windows) out.push(L(x, y, z, 1.9, [0.95, 0.58, 0.26], 0));
   for (const [x, y, z] of st.torches) out.push(L(x, y, z, 5, [1.7, 0.9, 0.38], 9));
   return out;
 }
@@ -172,7 +172,7 @@ export function moodFor(world: World | null, dim: Dimension): Mood {
     exposure: 1, outdoor: true,
     keyDir: norm([-0.72, 0.38, 0.46]), keyCol: [1.2, 0.8, 0.5], ambTop: [0.24, 0.28, 0.46], ambBot: [0.1, 0.08, 0.15],
     bg0: [0.02, 0.04, 0.08], bg1: [0.04, 0.08, 0.14], fogTint: [0.55, 0.62, 0.85], rock: 0, shadowLen: 3,
-    bloom: 0.9, bloomThr: 0.95, sat: 1.15, contrast: 1.08, vig: 1.1, shadowTint: [0.1, 0.45, 0.55], highTint: [1.05, 1.0, 0.9],
+    bloom: 0.9, bloomThr: 1.12, sat: 1.15, contrast: 1.08, vig: 1.1, shadowTint: [0.1, 0.45, 0.55], highTint: [1.05, 1.0, 0.9],
     haze: 0.05, hazeCol: [1.0, 0.6, 0.3], ghostTint: [0.5, 0.65, 1.0],
   };
   switch (dim.kind) {
@@ -180,7 +180,7 @@ export function moodFor(world: World | null, dim: Dimension): Mood {
       return { ...base, exposure: 1.2, outdoor: false, keyDir: norm([-0.3, -0.2, 0.9]), keyCol: [0.3, 0.24, 0.5], ambTop: [0.27, 0.22, 0.42], ambBot: [0.1, 0.07, 0.15],
         bg0: [0.015, 0.01, 0.025], bg1: [0.03, 0.02, 0.045], rock: 1, shadowLen: 0, bloom: 1.25, bloomThr: 0.55, sat: 1.25, shadowTint: [0.35, 0.1, 0.55], haze: 0, highTint: [1.05, 0.98, 1.0] };
     case 'sky':
-      return { ...base, exposure: 0.72, keyDir: norm([-0.55, -0.15, 0.82]), keyCol: [1.25, 1.02, 0.78], ambTop: [0.5, 0.6, 0.85], ambBot: [0.22, 0.26, 0.42],
+      return { ...base, exposure: 0.72, keyDir: norm([-0.55, -0.15, 0.82]), keyCol: [0.85, 0.72, 0.56], ambTop: [0.3, 0.36, 0.52], ambBot: [0.14, 0.16, 0.26],
         bg0: [0.03, 0.07, 0.22], bg1: [0.2, 0.36, 0.7], shadowLen: 2, bloom: 0.55, bloomThr: 1.15, shadowTint: [0.1, 0.25, 0.6], haze: 0.06, hazeCol: [0.7, 0.8, 1.0], ghostTint: [0.45, 0.6, 1.1] };
     case 'interior': {
       const st = world ? interiorStyle(world, dim) : 'dungeon';
@@ -226,7 +226,7 @@ export function sunAt(hours: number): Sun {
   const dir = [Math.cos(az) * Math.cos(el), -Math.sin(az) * Math.cos(el) * 0.8 - 0.15, Math.sin(el)];
   const l = Math.hypot(dir[0], dir[1], dir[2]);
   // day amount with soft dawn / dusk transitions
-  const day = Math.min(1, Math.max(0, Math.min((h - 5.2) / 1.6, (19.2 - h) / 1.6)));
+  const day = Math.min(1, Math.max(0, Math.min((h - 5) / 1.5, (20 - h) / 1.5)));
   const low = 1 - Math.min(1, Math.sin(Math.PI * Math.min(1, Math.max(0, dayT))) * 1.6); // 1 near horizon
   const sunCol = lerp3([1.2, 1.05, 0.88], [1.45, 0.72, 0.38], low);
   const moonCol: [number, number, number] = [0.22, 0.3, 0.52];

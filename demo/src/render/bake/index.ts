@@ -15,13 +15,29 @@ import { D, T } from '../../core/types';
 import { edgeMask, faceStrip, groundTile } from './ground';
 import { DECO_VARIANTS, WALL_KINDS, decoModel, housePiece, objectModels } from './models';
 import { renderModel } from './sdf';
-import { type AssetSheet, Sprite, packSheet } from './sheet';
+import { type AssetSheet, Sprite, addToSheet, packSheet } from './sheet';
 
 export { type AssetSheet, type Frame, MAT, TILE_PX, ELEV_PX, HEIGHT_OFF, HEIGHT_SCALE } from './sheet';
 export { CRYSTAL_LIGHT } from './models';
 
 let cached: AssetSheet | null = null;
 export let lastBakeMs = 0;
+/** total time spent in progressive bake steps */
+export let deferredBakeMs = 0;
+const deferred: [string, () => Sprite][] = [];
+
+/** Bake queued sprites for up to `budgetMs` into the sheet's free space; true while work remains. */
+export function bakeStep(budgetMs: number): boolean {
+  if (!cached || !deferred.length) return false;
+  const t0 = performance.now();
+  while (deferred.length && performance.now() - t0 < budgetMs) {
+    const [key, make] = deferred.shift()!;
+    if (!addToSheet(cached, key, make())) { deferred.length = 0; console.warn('asset sheet full'); }
+  }
+  deferredBakeMs += performance.now() - t0;
+  return deferred.length > 0;
+}
+export const bakePending = () => deferred.length;
 
 export function bakeAtlas(): AssetSheet {
   if (cached) return cached;
@@ -51,9 +67,15 @@ export function bakeAtlas(): AssetSheet {
   }
   for (let v = 0; v < 2; v++) put('d:' + D.PINE + ':snow', renderModel(decoModel(D.PINE, v, { snow: true })!, v + 3));
   for (let v = 0; v < 3; v++) put('d:' + D.MUSHROOM + ':glow', renderModel(decoModel(D.MUSHROOM, v, { glow: true })!, v + 5));
-  for (const wall of WALL_KINDS) for (let floors = 1; floors <= 2; floors++) for (let mask = 0; mask < 16; mask++) put(`hp:${wall}:${floors}:${mask}`, renderModel(housePiece(mask, floors, wall), mask + floors * 16));
-  for (const o of objectModels()) put(o.key, renderModel(o.model, o.key.length));
-  cached = packSheet(sprites);
+  // 1 px checkerboard test sprite (d:255): verifies that every source pixel is drawn the same size
+  const chk = new Sprite(16, 16, 0, 0);
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) chk.set(x, y, (x + y) & 1 ? [250, 250, 250] : [10, 10, 10], 0, 0, 1, 0, null, 0);
+  put('d:255', chk);
+  cached = packSheet(sprites, 1024, 512);
+  // objects and building pieces are baked progressively after the first frame (bakeStep)
+  for (const o of objectModels()) deferred.push([o.key, () => renderModel(o.model, o.key.length)]);
+  for (const wall of WALL_KINDS) for (let floors = 1; floors <= 2; floors++) for (let mask = 0; mask < 16; mask++)
+    deferred.push([`hp:${wall}:${floors}:${mask}`, () => renderModel(housePiece(mask, floors, wall), mask + floors * 16)]);
   lastBakeMs = performance.now() - t0;
   return cached;
 }

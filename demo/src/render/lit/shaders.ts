@@ -42,6 +42,7 @@ uniform sampler2D uOcc, uLift;   // terrain tile ids of the screen (copied), per
 uniform int uOccOn;
 uniform float uFade;             // detail fade (dithered)
 uniform float uDepthOn;
+uniform float uOutline;
 in vec2 vLocal;
 flat in vec4 vSrc;
 flat in vec4 vInst;
@@ -79,6 +80,16 @@ void main() {
   vec4 e = texelFetch(uE, st, 0);
   int mat = int(e.a * 255.0 + 0.5);
   vec3 alb = a.rgb;
+  if (uOutline > 0.0 && !face && uOccOn == 1) {
+    // 1 px silhouette rim: a darker shade of the sprite's own edge colour
+    bool rim = false;
+    for (int k = 0; k < 4; k++) {
+      ivec2 o = k == 0 ? ivec2(1, 0) : k == 1 ? ivec2(-1, 0) : k == 2 ? ivec2(0, 1) : ivec2(0, -1);
+      ivec2 q = lq + o;
+      if (q.x < 0 || q.y < 0 || q.x >= int(vSize.x) || q.y >= int(vSize.y) || texelFetch(uA, ivec2(vSrc.xy) + q, 0).a < 0.5) { rim = true; break; }
+    }
+    if (rim) alb *= vec3(1.0 - uOutline, 1.0 - uOutline, 1.0 - uOutline * 0.85);
+  }
   if (mat == 6) { alb *= vTint.rgb; mat = 0; }
   else if ((flags & 32) != 0) alb *= vTint.rgb;
   float h = face ? vInst.x - float(lp.y) / 16.0 : vInst.x + n.a * 255.0 / 40.0 - 1.0;
@@ -292,7 +303,7 @@ void main() {
       float along = dot(q, fd), across = dot(q, vec2(-fd.y, fd.x));
       float lane = floor(across * 5.0);
       float st = fract(along * 0.9 - t * 0.7 * uMotion + hash(vec2(lane, 1.0)) * 7.0);
-      emi += vec3(0.22, 0.32, 0.38) * smoothstep(0.82, 0.97, st) * step(0.35, hash(vec2(lane, 2.0)));
+      emi += vec3(0.22, 0.32, 0.38) * smoothstep(0.82, 0.97, st) * step(0.35, hash(vec2(lane, 2.0))) * smoothstep(0.35, 0.9, uK);
       N = normalize(N + vec3(fd * 0.3 * sin(along * 7.0 - t * 3.0), 0.0));
     } else {
       // calm: gentle swell
@@ -308,7 +319,7 @@ void main() {
     float col = floor(dp.x);
     float r = hash(vec2(col, 3.0));
     float v = fract(dp.y / 16.0 * 1.4 - t * (1.1 + r) + r * 7.0);
-    emi += vec3(0.45, 0.6, 0.7) * smoothstep(0.7, 0.95, v) * (uMotion > 0.0 ? 1.0 : 0.4) + vec3(0.04, 0.08, 0.12);
+    emi += (vec3(0.45, 0.6, 0.7) * smoothstep(0.7, 0.95, v) * (uMotion > 0.0 ? 1.0 : 0.4) + vec3(0.04, 0.08, 0.12)) * smoothstep(0.35, 0.9, uK);
     N = normalize(vec3(0.0, 0.7, 0.7));
   } else if (mat == 2) {
     vec2 q = floor(P.xy * 8.0) / 8.0;

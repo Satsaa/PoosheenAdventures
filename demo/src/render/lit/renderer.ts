@@ -12,7 +12,7 @@
 // bloom -> grade/vignette composite.
 import type { DimId, Dimension, MapObject, World } from '../../core/types';
 import { D, T } from '../../core/types';
-import { bakeAtlas, lastBakeMs } from '../bake/index';
+import { bakeAtlas, bakeStep, lastBakeMs } from '../bake/index';
 import { groundMat } from '../bake/ground';
 import { CRYSTAL_LIGHT } from '../bake/models';
 import type { AssetSheet } from '../bake/sheet';
@@ -65,6 +65,8 @@ export interface LitFrame {
   gfx: Gfx;
   /** time-of-day sun; applied to outdoor moods only */
   sun: Sun | null;
+  /** fixed internal resolution scale (integer zoom: device pixels / an integer) */
+  rsFix?: number;
 }
 
 export interface Actor {
@@ -124,7 +126,7 @@ interface DimGL {
 
 export const litStats = {
   atlasMs: 0, overviewMs: [] as number[], prepareMs: [] as number[], chunkMs: [] as number[], maskMs: 0, lastFrameMs: 0,
-  worstFrameMs: 0, chunksLive: 0, chunksComposedLastFrame: 0, pendingChunks: 0,
+  worstFrameMs: 0, counts: { props: 0, casters: 0, actors: 0, objects: 0 }, chunksLive: 0, chunksComposedLastFrame: 0, pendingChunks: 0,
 };
 
 const push = (a: number[], v: number) => { a.push(v); if (a.length > 200) a.shift(); };
@@ -183,6 +185,7 @@ export class LitRenderer {
   private depthRb: WebGLRenderbuffer | null = null;
   /** instance counts of the last frame (for tests) */
   lastCounts = { props: 0, casters: 0, actors: 0, objects: 0 };
+  private outlineK = 0.35;
   private lp = new Float32Array(MAX_LIGHTS * 4);
   private lc = new Float32Array(MAX_LIGHTS * 4);
   private colCache = new Map<string, [number, number, number]>();
@@ -222,6 +225,7 @@ export class LitRenderer {
     this.atlas = [s.albedo, s.normal, s.emissive].map((d) => texture(gl, s.w, s.h, { data: new Uint8Array(d.buffer, d.byteOffset, d.byteLength) }));
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     this.topTex = texture(gl, s.w, s.h, { internal: gl.R8, format: gl.RED, data: s.top });
+    if (s.dirty) s.dirty.length = 0;
     this.charTex = [0, 1, 2].map(() => texture(gl, CHAR_W, CHAR_H));
     this.charTex.push(texture(gl, CHAR_W, CHAR_H, { internal: gl.R8, format: gl.RED }));
     this.charVersion = -1;
@@ -430,6 +434,7 @@ export class LitRenderer {
     gl.uniform1i(p.u.uOccOn, occ ? 1 : 0);
     gl.uniform1f(p.u.uDepthOn, occ ? 1 : 0);
     gl.uniform1f(p.u.uFade, fade);
+    gl.uniform1f(p.u.uOutline, this.outlineK);
     if (occ) {
       gl.activeTexture(gl.TEXTURE3);
       gl.bindTexture(gl.TEXTURE_2D, this.occTex);
@@ -560,7 +565,8 @@ export class LitRenderer {
     const gl = this.gl;
     const t0 = performance.now();
     const G = f.gfx;
-    const rs = Math.max(0.2, Math.min(f.dpr * G.renderScale, Math.sqrt((G.maxPixels * 1e6) / Math.max(1, f.cssW * f.cssH)), 2 * G.renderScale));
+    this.outlineK = G.outline === 'off' ? 0 : G.outline === 'strong' ? 0.6 : 0.35;
+    const rs = f.rsFix ?? Math.max(0.2, Math.min(f.dpr * G.renderScale, Math.sqrt((G.maxPixels * 1e6) / Math.max(1, f.cssW * f.cssH)), 2 * G.renderScale));
     const iw = Math.max(1, Math.min(this.maxTex, Math.round(f.cssW * rs))), ih = Math.max(1, Math.min(this.maxTex, Math.round(f.cssH * rs)));
     if (this.canvas.width !== iw || this.canvas.height !== ih) { this.canvas.width = iw; this.canvas.height = ih; }
     this.ensureTargets(iw, ih);
@@ -641,6 +647,7 @@ export class LitRenderer {
     gl.blitFramebuffer(0, 0, iw, ih, 0, 0, iw, ih, gl.COLOR_BUFFER_BIT, gl.NEAREST);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.gFbo);
     gl.readBuffer(gl.COLOR_ATTACHMENT0);
+    this.syncAtlas();
     this.syncChars();
 
     // standing sprites: props from the grid, objects, characters (depth = row order, occluded by terrain)
@@ -711,6 +718,7 @@ export class LitRenderer {
       }
     }
     this.lastCounts = { props: pi.n - nObj, casters: ci.n + aci.n, actors: ai.n, objects: nObj };
+    litStats.counts = this.lastCounts;
     if (pi.n || ai.n) {
       gl.enable(gl.DEPTH_TEST);
       gl.depthFunc(gl.LESS);
@@ -805,7 +813,7 @@ export class LitRenderer {
     gl.uniform1f(pl.u.uContact, G.contactShadows);
     gl.uniform1f(pl.u.uAmbK, G.ambient);
     gl.uniform1f(pl.u.uSunK, G.sunStrength);
-    gl.uniform1f(pl.u.uPointK, G.pointLights * (0.45 + 1.25 * night));
+    gl.uniform1f(pl.u.uPointK, G.pointLights * (0.5 + 0.7 * night));
     gl.uniform1f(pl.u.uSea, f.dim.kind === 'overworld' ? 1 : 0);
     gl.uniform1f(pl.u.uFogDark, G.fogDarkness);
     gl.uniform1f(pl.u.uFogDesat, G.fogDesaturation);
@@ -957,6 +965,31 @@ export class LitRenderer {
     }
     litStats.lastFrameMs = performance.now() - t0;
     litStats.worstFrameMs = Math.max(litStats.worstFrameMs, litStats.lastFrameMs);
+  }
+
+  /** bake a few deferred sprites and upload what changed in the main atlas */
+  private syncAtlas() {
+    bakeStep(5);
+    const sh = this.sheet;
+    if (!sh.dirty || !sh.dirty.length) return;
+    const gl = this.gl;
+    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, sh.w);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    for (const r of sh.dirty) {
+      gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, r.x);
+      gl.pixelStorei(gl.UNPACK_SKIP_ROWS, r.y);
+      const layers = [sh.albedo, sh.normal, sh.emissive];
+      for (let i = 0; i < 3; i++) {
+        gl.bindTexture(gl.TEXTURE_2D, this.atlas[i]);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, r.x, r.y, r.w, r.h, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(layers[i].buffer));
+      }
+      gl.bindTexture(gl.TEXTURE_2D, this.topTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, r.x, r.y, r.w, r.h, gl.RED, gl.UNSIGNED_BYTE, sh.top);
+    }
+    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+    gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
+    gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
+    sh.dirty.length = 0;
   }
 
   /** upload character frames baked since the last frame */

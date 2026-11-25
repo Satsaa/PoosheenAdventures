@@ -154,39 +154,89 @@ export function renderModel(m: Model, seed = 1): Sprite {
       }
   }
   const grain = m.grain ?? 0.6;
-  for (let j = 0; j < h; j++) {
-    for (let i = 0; i < w; i++) {
-      const sx = (i + 0.5 - ox) / TILE_PX;
-      const sy = (j + 0.5 - oy) / TILE_PX;
-      // ray: points (sx, sy + Z, Z), starting above the model and moving toward -z, -y
-      let z = m.zMax + 0.05;
-      let y = sy + z;
-      let hit = false;
-      for (let k = 0; k < 90; k++) {
-        const d = m.sdf(sx, y, z);
-        if (d < 0.003) { hit = true; break; }
-        const st = Math.max(d, 0.004) * SQ;
-        z -= st;
-        y -= st;
-        if (z < zMin - 0.02) break;
-      }
-      if (!hit) continue;
-      const e = 0.006;
-      let nx = m.sdf(sx + e, y, z) - m.sdf(sx - e, y, z);
-      let ny = m.sdf(sx, y + e, z) - m.sdf(sx, y - e, z);
-      let nz = m.sdf(sx, y, z + e) - m.sdf(sx, y, z - e);
-      const nl = Math.hypot(nx, ny, nz) || 1;
-      nx /= nl; ny /= nl; nz /= nl;
-      const mi = m.mat(sx, y, z);
-      const mat = m.mats[mi] || m.mats[0];
-      const ramp = mat.ramp;
-      // flat ramp step: up-facing a bit lighter, plus pixel grain; lighting does the shading
-      const g = (hashN(i, j, seed + mi * 31) - 0.5) * grain + (noise3(sx * 6, y * 6, z * 6, seed) - 0.5) * 0.8;
-      let step = (ramp.length - 1) * 0.55 + nz * 0.9 + g + (mat.bias ?? 0);
-      step = Math.max(0, Math.min(ramp.length - 1, Math.round(step)));
-      s.set(i, j, rgb(ramp[step]), nx, ny, nz, z, mat.emit ?? null, mat.id ?? 0);
+  // one ray through screen point (px, py) in sprite pixels
+  const ray = (px: number, py: number): { y: number; z: number } | null => {
+    const sx = (px - ox) / TILE_PX, sy = (py - oy) / TILE_PX;
+    let z = m.zMax + 0.05, y = sy + z;
+    for (let k = 0; k < 90; k++) {
+      const d = m.sdf(sx, y, z);
+      if (d < 0.003) return { y, z };
+      const st = Math.max(d, 0.004) * SQ;
+      z -= st;
+      y -= st;
+      if (z < zMin - 0.02) break;
     }
-  }
-  if (m.outline !== 0) s.outline(m.outline ?? 0.6);
+    return null;
+  };
+  const shadeAt = (i: number, j: number, sx: number, y: number, z: number, mi: number, nx: number, ny: number, nz: number) => {
+    const mat = m.mats[mi] || m.mats[0];
+    const ramp = mat.ramp;
+    // flat ramp step: up-facing a bit lighter, plus pixel grain; lighting does the shading
+    const g = (hashN(i, j, seed + mi * 31) - 0.5) * grain + (noise3(sx * 6, y * 6, z * 6, seed) - 0.5) * 0.8;
+    let step = (ramp.length - 1) * 0.55 + nz * 0.9 + g + (mat.bias ?? 0);
+    step = Math.max(0, Math.min(ramp.length - 1, Math.round(step)));
+    s.set(i, j, rgb(ramp[step]), nx, ny, nz, z, mat.emit ?? null, mat.id ?? 0);
+  };
+  const normal = (sx: number, y: number, z: number): [number, number, number] => {
+    const e = 0.006;
+    const nx = m.sdf(sx + e, y, z) - m.sdf(sx - e, y, z);
+    const ny = m.sdf(sx, y + e, z) - m.sdf(sx, y - e, z);
+    const nz = m.sdf(sx, y, z + e) - m.sdf(sx, y, z - e);
+    const nl = Math.hypot(nx, ny, nz) || 1;
+    return [nx / nl, ny / nl, nz / nl];
+  };
+  // pass 1: one sample per pixel centre (coverage + material)
+  const cov = new Uint8Array(w * h), matI = new Int16Array(w * h).fill(-1);
+  const hitY = new Float32Array(w * h), hitZ = new Float32Array(w * h);
+  for (let j = 0; j < h; j++)
+    for (let i = 0; i < w; i++) {
+      const r = ray(i + 0.5, j + 0.5);
+      if (!r) continue;
+      const k = j * w + i;
+      cov[k] = 1;
+      hitY[k] = r.y; hitZ[k] = r.z;
+      matI[k] = m.mat((i + 0.5 - ox) / TILE_PX, r.y, r.z);
+    }
+  // pass 2: pixels on a silhouette or material edge are re-sampled 3x3 and kept only when a majority
+  // of the 9 samples is covered; they take the dominant material and the normal at the samples' centroid
+  const SS = 3;
+  for (let j = 0; j < h; j++)
+    for (let i = 0; i < w; i++) {
+      const k = j * w + i;
+      let edge = false;
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const ii = i + di, jj = j + dj;
+        const kk = jj * w + ii;
+        const c2 = ii < 0 || jj < 0 || ii >= w || jj >= h ? 0 : cov[kk];
+        if (c2 !== cov[k] || (c2 && matI[kk] !== matI[k])) { edge = true; break; }
+      }
+      const sx = (i + 0.5 - ox) / TILE_PX;
+      if (!edge) {
+        if (!cov[k]) continue;
+        const [nx, ny, nz] = normal(sx, hitY[k], hitZ[k]);
+        shadeAt(i, j, sx, hitY[k], hitZ[k], matI[k], nx, ny, nz);
+        continue;
+      }
+      let n = 0, ax = 0, zs = 0, ys = 0;
+      const votes = new Map<number, number>();
+      for (let b = 0; b < SS; b++)
+        for (let a = 0; a < SS; a++) {
+          const px = i + (a + 0.5) / SS, py = j + (b + 0.5) / SS;
+          const r = ray(px, py);
+          if (!r) continue;
+          const ssx = (px - ox) / TILE_PX;
+          const mi = m.mat(ssx, r.y, r.z);
+          votes.set(mi, (votes.get(mi) || 0) + 1);
+          ax += ssx; zs += r.z; ys += r.y;
+          n++;
+        }
+      if (n * 2 < SS * SS) continue;
+      let best = 0, bv = -1;
+      for (const [mi, v] of votes) if (v > bv) { bv = v; best = mi; }
+      // normal at the centroid of the covered samples
+      const [nx, ny, nz] = normal(ax / n, ys / n, zs / n);
+      shadeAt(i, j, sx, ys / n, zs / n, best, nx, ny, nz);
+    }
+  if (m.outline !== undefined && m.outline !== 0 && m.outline < 0.5) s.outline(m.outline);
   return s;
 }

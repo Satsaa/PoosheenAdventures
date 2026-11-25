@@ -214,40 +214,44 @@ export function decoModel(d: number, v: number, opt: { snow?: boolean; glow?: bo
  */
 export const WALL_KINDS = ['plaster', 'stone'] as const;
 export function housePiece(mask: number, floors: number, wall: 'plaster' | 'stone'): Model {
+  // Every dimension is a whole number of source pixels (1/16 tile) so edges land on pixel boundaries;
+  // roof pitch 1:1 in ground units gives clean 1:2 / 2:1 steps in this projection.
+  const px = 1 / 16;
   const exN = !(mask & 1), exE = !(mask & 2), exS = !(mask & 4), exW = !(mask & 8);
-  const inset = 0.07, over = 0.06;
-  const wallH = floors >= 2 ? 1.0 : 0.62;
-  const rise = 0.75, maxRise = 0.42;
-  const x0 = exW ? inset : -0.01, x1 = exE ? 1 - inset : 1.01, y0 = exN ? inset : -0.01, y1 = exS ? 1 - inset : 1.01;
-  const rx0 = exW ? inset - over : -0.01, rx1 = exE ? 1 - inset + over : 1.01, ry0 = exN ? inset - over : -0.01, ry1 = exS ? 1 - inset + over : 1.01;
+  const inset = px, over = px;
+  const wallH = (floors >= 2 ? 16 : 10) * px;
+  const maxRise = 7 * px;
+  const x0 = exW ? inset : -px, x1 = exE ? 1 - inset : 1 + px, y0 = exN ? inset : -px, y1 = exS ? 1 - inset : 1 + px;
+  const rx0 = exW ? 0 : -px, rx1 = exE ? 1 : 1 + px, ry0 = exN ? 0 : -px, ry1 = exS ? 1 : 1 + px;
+  void over;
   const dEdge = (x: number, y: number) => Math.min(exW ? x - rx0 : 9, exE ? rx1 - x : 9, exN ? y - ry0 : 9, exS ? ry1 - y : 9);
-  const roofH = (x: number, y: number) => {
-    const d = dEdge(x, y);
-    const h = Math.min(maxRise, d * rise);
-    // shingle rows: tiny steps along the slope
-    return wallH + h + (d < 9 ? (Math.floor(d * 14) % 2) * 0.012 : 0);
-  };
+  const roofH = (x: number, y: number) => wallH + Math.min(maxRise, dEdge(x, y));
   const rectD = (x: number, y: number, ax: number, bx: number, ay: number, by: number) => Math.max(ax - x, x - bx, ay - y, y - by);
-  const wallM: Mat = wall === 'stone' ? { ramp: ['#3c3844', '#57525f', '#76707e', '#958e9c'] } : { ramp: ['#6a5a44', '#9a8466', '#c8b08a', '#e2cfa6'] };
+  /** box given by pixel edges (ground x0..x1, y0..y1, height z0..z1, all in px) */
+  const pbox = (x: number, y: number, z: number, ax: number, bx: number, ay: number, by: number, az: number, bz: number) =>
+    Math.max(ax * px - x, x - bx * px, ay * px - y, y - by * px, az * px - z, z - bz * px);
+  const wallM: Mat = wall === 'stone' ? { ramp: ['#3c3844', '#57525f', '#76707e', '#958e9c'], bias: 0.3 } : { ramp: ['#6a5a44', '#9a8466', '#c8b08a', '#e2cfa6'], bias: 0.3 };
   const parts: Part[] = [
     [(x, y, z) => Math.max(rectD(x, y, x0, x1, y0, y1), z - wallH, -z), 0],
-    [(x, y, z) => Math.max(rectD(x, y, rx0, rx1, ry0, ry1), (z - roofH(x, y)) * 0.75, wallH - 0.04 - z), 1],
+    // hip roof as a height field; 0.7 keeps the SDF conservative on the 1:1 slopes
+    [(x, y, z) => Math.max(rectD(x, y, rx0, rx1, ry0, ry1), (z - roofH(x, y)) * 0.7, wallH - px - z), 1],
   ];
-  if (wall === 'plaster') {
-    // timber frame: corner posts and a beam under the eaves on exposed faces
+  const W = Math.round(wallH * 16);
+  if (wall === 'plaster' && exS) {
+    // timber frame: eave beam and corner posts, each exactly 1 px
     parts.push([(x, y, z) => {
-      let d = 1e9;
-      if (exS) d = Math.min(d, Math.max(rectD(x, y, x0 - 0.01, x1 + 0.01, y1 - 0.01, y1 + 0.012), Math.abs(z - (wallH - 0.05)) - 0.035));
-      for (const [px, ok] of [[x0, exW], [x1, exE]] as [number, boolean][]) if (ok && exS) d = Math.min(d, Math.max(Math.abs(x - px) - 0.035, Math.abs(y - y1) - 0.035, z - wallH, -z));
+      let d = pbox(x, y, z, exW ? 1 : -1, exE ? 15 : 17, 14.5, 16, W - 2, W - 1);
+      if (exW) d = Math.min(d, pbox(x, y, z, 1, 2, 14.5, 16, 0, W));
+      if (exE) d = Math.min(d, pbox(x, y, z, 14, 15, 14.5, 16, 0, W));
       return d;
     }, 2]);
   }
   if (exS) {
     // windows on the south face (lit at night through the instance emissive scale)
     parts.push([(x, y, z) => {
-      let d = 1e9;
-      for (const wx of [0.3, 0.7]) d = Math.min(d, Math.max(Math.abs(x - wx) - 0.08, Math.abs(y - y1) - 0.02, Math.abs(z - (floors >= 2 ? 0.7 : 0.34)) - 0.09));
-      if (floors >= 2) d = Math.min(d, Math.max(Math.abs(x - 0.5) - 0.08, Math.abs(y - y1) - 0.02, Math.abs(z - 0.3) - 0.09));
+      const zb = floors >= 2 ? 9 : 3;
+      let d = Math.min(pbox(x, y, z, 3, 6, 14.5, 15.6, zb, zb + 3), pbox(x, y, z, 10, 13, 14.5, 15.6, zb, zb + 3));
+      if (floors >= 2) d = Math.min(d, pbox(x, y, z, 3, 6, 14.5, 15.6, 3, 6), pbox(x, y, z, 10, 13, 14.5, 15.6, 3, 6));
       return d;
     }, 3]);
   }
@@ -256,7 +260,7 @@ export function housePiece(mask: number, floors: number, wall: 'plaster' | 'ston
     { ramp: ['#5a5a5a', '#828282', '#ababab', '#d2d2d2'], id: MAT.TINT, bias: 0.2 },
     { ramp: ['#24160a', '#3a2412'] },
     { ramp: ['#ffb040', '#ffd27a'], emit: [255, 165, 60] },
-  ], parts, { zMax: wallH + maxRise + 0.05, padX: 0.05, outline: 0.75 });
+  ], parts, { zMax: wallH + maxRise + px, padX: 1 / 16, outline: 0, grain: 0.25 });
 }
 
 /** roof colour per structure style (unknown styles hash into ROOF_COLORS) */

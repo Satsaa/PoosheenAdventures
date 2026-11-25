@@ -17,7 +17,7 @@ import { charAtlas } from './bake/charAtlas';
 import { FLYERS, creatureFor } from './bake/creatures';
 import { bakeAtlas } from './bake/index';
 import { type PropGrid, buildPropGrid, forProps, propLook } from './props';
-import { atlasCanvases, charCanvases } from './flatSprites';
+import { atlasCanvases, atlasTinted, charCanvases, setFlatOutline } from './flatSprites';
 import { type Layout, layout } from './lit/compose';
 import { objectLights } from './lit/lights';
 import { FONT, clamp, ctx2d, hash2, hexRgb, makeCanvas, shade, smoothstep } from './util';
@@ -54,7 +54,7 @@ export interface MapView {
   setTime(hours: number): void;
 }
 
-const MAX_ZOOM = 48;
+const MAX_ZOOM = 64;
 const SPRITE_MIN = 20; // below this px/tile objects become pins
 const FRESH_SECS = 1.2;
 
@@ -329,6 +329,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     gc.setAttribute('aria-hidden', 'true');
     gc.style.position = 'absolute';
     gc.style.pointerEvents = 'none';
+    gc.style.imageRendering = 'pixelated';
     canvas.parentNode.insertBefore(gc, canvas);
     const r = LitRenderer.create(gc);
     if (!r) { gc.remove(); litFailed = true; return false; }
@@ -366,8 +367,25 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     start();
   }
 
+  /** internal-resolution divisor of the lit renderer under integer zoom (device px per internal px) */
+  function intDiv(): number {
+    if (mode !== 'lit') return 1;
+    const byPx = Math.ceil(Math.sqrt((W * dpr * Hh * dpr) / (G.maxPixels * 1e6)) - 1e-6);
+    return Math.max(1, byPx, Math.round(1 / G.renderScale));
+  }
+  /** integer zoom: whole device pixels (and whole internal pixels) per source pixel once >= 1 */
+  function snapScale(sc: number): number {
+    if (!G.integerZoom) return sc;
+    const n = (sc * dpr) / 16;
+    if (n < 1) return sc;
+    const m = intDiv();
+    const n2 = Math.max(m, Math.round(n / m) * m);
+    return clamp((n2 * 16) / dpr, minS, Math.max(maxS(), (m * 16) / dpr));
+  }
+
   function setGraphics(g: GraphicsSettings) {
     G = toGfx(g);
+    setFlatOutline(G.outline === 'off' ? 0 : G.outline === 'strong' ? 0.6 : 0.35);
     particles.density = G.particles;
     particles.cap = Math.round(300 * Math.min(1.5, G.particles));
     start();
@@ -599,6 +617,13 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       if (Math.abs(target.x - cam.x) * cam.s < 0.3 && Math.abs(target.y - cam.y) * cam.s < 0.3 && Math.abs(target.s - cam.s) < 0.02) {
         Object.assign(cam, target);
         target = null;
+      }
+    }
+    if (G.integerZoom && !pinch && !target && dim) {
+      const sn = snapScale(cam.s);
+      if (Math.abs(sn - cam.s) > 1e-4) {
+        // keep the screen centre fixed while snapping
+        if (reduced) cam.s = sn; else target = { x: cam.x, y: cam.y, s: sn };
       }
     }
     try {
@@ -1026,7 +1051,8 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
         const j = i + r * d.w;
         if (d.ground[j] !== T.VOID && liftT(j) > L + 0.01) { hSrc = Math.max(0, Math.min(f.h, Math.floor((sy(y + r - liftT(j)) - dy) / k))); break; }
       }
-      if (hSrc > 0) ctx.drawImage(img, f.x, f.y, f.w, hSrc, dx, dy, f.w * k, hSrc * k);
+      const src = lk.r !== 1 || lk.g !== 1 || lk.b !== 1 ? atlasTinted(lk.r, lk.g, lk.b) : img;
+      if (hSrc > 0) ctx.drawImage(src, f.x, f.y, f.w, hSrc, dx, dy, f.w * k, hSrc * k);
     });
     ctx.restore();
   }
@@ -1229,6 +1255,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       dim: d, meta: r, cam, cssW: W, cssH: Hh, dpr, t, motion: !reduced,
       ghost: gd ? { dim: gd, meta: getDr(gd) } : null,
       objs, lights: objectLights(lz), particles: reduced ? null : particles, fresh, actors, gfx: G, sun,
+      rsFix: G.integerZoom && (cam.s * dpr) / 16 >= 1 ? dpr / intDiv() : undefined,
     });
     const ghost = ghostOn ? ghostFor(d) : null;
     if (ghost?.outline) {

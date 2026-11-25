@@ -74,6 +74,33 @@ export interface AssetSheet {
   /** character animations: anim key ('c:<kind>') -> clip name ('idle', 'walk') -> clip; each clip's
    *  direction key (e.g. 'c:bat:walk:s') maps in `frames` to its frame list */
   anims: Map<string, Record<string, Clip>>;
+  /** progressive baking: shelf cursor for sprites added later, rects changed since the last upload, change counter */
+  cursor?: { x: number; y: number; rowH: number };
+  dirty?: { x: number; y: number; w: number; h: number }[];
+  version?: number;
+}
+
+/** Place one more sprite into a sheet's free space (progressive baking). Returns false when full. */
+export function addToSheet(sheet: AssetSheet, key: string, s: Sprite): boolean {
+  const c = sheet.cursor!;
+  if (c.x + s.w + 1 > sheet.w) { c.x = 0; c.y += c.rowH + 1; c.rowH = 0; }
+  if (c.y + s.h > sheet.h) return false;
+  const px = c.x, py = c.y, W = sheet.w;
+  for (let r = 0; r < s.h; r++) {
+    const so = r * s.w * 4, d = ((py + r) * W + px) * 4;
+    sheet.albedo.set(s.alb.subarray(so, so + s.w * 4), d);
+    sheet.normal.set(s.nrm.subarray(so, so + s.w * 4), d);
+    sheet.emissive.set(s.emi.subarray(so, so + s.w * 4), d);
+    sheet.top.set(s.top.subarray(r * s.w, r * s.w + s.w), (py + r) * W + px);
+  }
+  c.x += s.w + 1;
+  c.rowH = Math.max(c.rowH, s.h);
+  let list = sheet.frames.get(key);
+  if (!list) sheet.frames.set(key, (list = []));
+  list.push({ x: px, y: py, w: s.w, h: s.h, ox: s.ox, oy: s.oy, ty: s.ty });
+  sheet.dirty!.push({ x: px, y: py, w: s.w, h: s.h });
+  sheet.version = (sheet.version || 0) + 1;
+  return true;
 }
 
 /** One sprite with its four layers, before packing. */
@@ -122,7 +149,7 @@ export class Sprite {
 }
 
 /** Shelf-pack sprites into one sheet. */
-export function packSheet(sprites: Map<string, Sprite[]>, width = 1024): AssetSheet {
+export function packSheet(sprites: Map<string, Sprite[]>, width = 1024, minH = 1): AssetSheet {
   const items: { key: string; idx: number; s: Sprite }[] = [];
   for (const [key, list] of sprites) list.forEach((s, idx) => items.push({ key, idx, s }));
   items.sort((a, b) => b.s.h - a.s.h || b.s.w - a.s.w);
@@ -135,7 +162,7 @@ export function packSheet(sprites: Map<string, Sprite[]>, width = 1024): AssetSh
     rowH = Math.max(rowH, it.s.h);
   }
   let h = 1;
-  while (h < y + rowH + 1) h *= 2;
+  while (h < Math.max(minH, y + rowH + 1)) h *= 2;
   const albedo = new Uint8ClampedArray(width * h * 4), normal = new Uint8ClampedArray(width * h * 4), emissive = new Uint8ClampedArray(width * h * 4);
   const top = new Uint8Array(width * h);
   const frames = new Map<string, Frame[]>();
@@ -153,7 +180,7 @@ export function packSheet(sprites: Map<string, Sprite[]>, width = 1024): AssetSh
     if (!list) frames.set(it.key, (list = []));
     list[it.idx] = { x: px, y: py, w: s.w, h: s.h, ox: s.ox, oy: s.oy, ty: s.ty };
   });
-  return { w: width, h, albedo, normal, emissive, top, frames, anims: new Map() };
+  return { w: width, h, albedo, normal, emissive, top, frames, anims: new Map(), cursor: { x: 0, y: y + rowH + 1, rowH: 0 }, dirty: [], version: 0 };
 }
 
 export function hexToRgb(hex: string): [number, number, number] {

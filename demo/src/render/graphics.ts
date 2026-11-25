@@ -36,12 +36,13 @@ export const GRAPHICS_DEFS: GraphicsDef[] = [
   { key: 'shadows', label: 'Shadows', group: S, type: 'enum', options: [{ value: 'baked', label: 'From models', help: 'Projected from each sprite\'s baked 3D height map, for the current sun' }, { value: 'flat', label: 'Flat', help: 'A flattened, sheared copy of each sprite\'s silhouette' }, { value: 'off', label: 'Off' }], default: 'baked', help: 'How things standing on the ground cast shadows. Shadows are computed in world space, so they never depend on what is on screen.', keywords: 'shade sun' },
   { key: 'shadowStrength', label: 'Shadow strength', group: S, type: 'float', min: 0, max: 1, step: 0.05, default: 0.7, help: 'How much of the sun a shadow blocks.', keywords: 'shade darkness' },
   { key: 'shadowSoftness', label: 'Shadow softness', group: S, type: 'float', min: 0, max: 1, step: 0.05, default: 0.25, help: 'Blurs shadow edges by up to a few pixels (0 keeps hard pixel edges).', keywords: 'shade blur penumbra' },
-  { key: 'terrainShadows', label: 'Cliff shadows', group: S, type: 'bool', default: true, help: 'Raised ground and cliffs cast shadows from the tile heights.', keywords: 'shade cliff terrain' },
-  { key: 'contactShadows', label: 'Contact shadows', group: S, type: 'float', min: 0, max: 1, step: 0.05, default: 0.6, help: 'Darkening where props and walls meet the ground.', keywords: 'ao ambient occlusion grounding' },
+  { key: 'terrainShadows', label: 'Cliff shadows', group: S, type: 'bool', default: true, help: 'Raised ground and cliffs cast shadows from the tile heights. Independent of "Shadows" on purpose: stays on when prop shadows are off.', keywords: 'shade cliff terrain' },
+  { key: 'contactShadows', label: 'Contact shadows', group: S, type: 'float', min: 0, max: 1, step: 0.05, default: 0.6, help: 'Darkening where props and walls meet the ground. Independent of "Shadows" on purpose (it is ambient occlusion, not sun shadow).', keywords: 'ao ambient occlusion grounding' },
   // detail
   { key: 'detailDistance', label: 'Detail distance', group: DT, type: 'float', min: 2, max: 24, step: 0.5, default: 9, help: 'Zoom level (pixels per tile) below which the low-resolution overview replaces full-detail tiles and sprites.', keywords: 'dither lod overview distance' },
   { key: 'detailFade', label: 'Detail fade', group: DT, type: 'float', min: 0, max: 12, step: 0.5, default: 4, help: 'How many pixels per tile the cross-fade between overview and full detail lasts.', keywords: 'dither lod' },
   { key: 'dither', label: 'Dithered fade', group: DT, type: 'bool', default: true, help: 'Cross-fade with an ordered pixel dither (on) or switch hard at the detail distance (off).', keywords: 'dither lod transition' },
+  { key: 'outline', label: 'Sprite outline', group: DT, type: 'enum', options: [{ value: 'off', label: 'Off' }, { value: 'subtle', label: 'Subtle' }, { value: 'strong', label: 'Strong' }], default: 'subtle', help: 'A 1 px darker rim (a darker shade of the sprite\'s own edge colour) around standing sprites, so small figures and props read clearly.', keywords: 'outline edge readability pixel art' },
   { key: 'renderScale', label: 'Render scale', group: DT, type: 'float', min: 0.35, max: 2, step: 0.05, default: 1, help: 'Internal resolution relative to the screen (capped by the device pixel ratio). Lower is faster and chunkier.', keywords: 'resolution performance pixels dpr' },
   { key: 'maxPixels', label: 'Max internal megapixels', group: DT, type: 'float', min: 0.3, max: 6, step: 0.1, default: 1.6, help: 'Upper bound on the lit renderer\'s internal resolution, in millions of pixels.', keywords: 'resolution performance cap' },
   { key: 'particles', label: 'Particle density', group: DT, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Fireflies, embers, snow, mist and sparkles.', keywords: 'effects ambient' },
@@ -54,6 +55,7 @@ export const GRAPHICS_DEFS: GraphicsDef[] = [
   { key: 'fogDarkness', label: 'Unreachable darkness', group: P, type: 'float', min: 0, max: 1, step: 0.05, default: 0.45, help: 'How much zones you cannot reach yet are darkened.', keywords: 'fog of war unreachable' },
   { key: 'fogDesaturation', label: 'Unreachable desaturation', group: P, type: 'float', min: 0, max: 1, step: 0.05, default: 0.8, help: 'How much colour zones you cannot reach yet lose.', keywords: 'fog of war grey' },
   // camera
+  { key: 'integerZoom', label: 'Integer zoom', group: C, type: 'bool', default: true, help: 'When zoomed in past one screen pixel per source pixel, snap the zoom to whole multiples (2x, 3x, ...) so every source pixel is drawn the same size.', keywords: 'pixel perfect uneven pixels scale' },
   { key: 'pixelSnap', label: 'Pixel-snapped camera', group: C, type: 'bool', default: true, help: 'Move the camera in whole source pixels so sprites never shimmer while panning.', keywords: 'shimmer crawl jitter' },
   // overlay
   { key: 'labels', label: 'Region labels', group: O, type: 'bool', default: true, help: 'Show region and river names when zoomed out.', keywords: 'names text' },
@@ -88,7 +90,7 @@ export interface Gfx {
   detailDistance: number; detailFade: number; dither: boolean; renderScale: number; maxPixels: number;
   particles: number; water: number; animation: boolean;
   saturation: number; contrast: number; vignette: number; fogDarkness: number; fogDesaturation: number;
-  pixelSnap: boolean; labels: boolean; labelSize: number; pinSize: number; pinDensity: number;
+  pixelSnap: boolean; integerZoom: boolean; outline: 'off' | 'subtle' | 'strong'; labels: boolean; labelSize: number; pinSize: number; pinDensity: number;
 }
 
 export function gfx(g: GraphicsSettings): Gfx {
