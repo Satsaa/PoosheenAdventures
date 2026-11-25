@@ -141,10 +141,14 @@ export function groundTile(g: number, v: number): Sprite {
           st = grout ? 0.2 : 1.5 + hashN(Math.floor((x + off) / 8), row, seed) * 1.5 + (n2 - 0.5) * 0.6;
           break;
         }
-        case T.CAVE:
-          h = n1 * 0.03 + n2 * 0.02;
-          st += r < 0.07 ? 1.2 : 0;
+        case T.CAVE: {
+          const [d1, d2] = voro(x, y, 3, seed + 8);
+          const e = d2 - d1;
+          h = n1 * 0.02 + Math.min(e, 2) * 0.015;
+          st = top * 0.5 + (n1 - 0.5) * 0.9 + Math.min(e, 2) * 0.35 - 0.35 + (r < 0.06 ? 1 : 0);
+          if (e < 0.6) st -= 1;
           break;
+        }
         case T.CLOUD: {
           const p = Math.max(0, 1 - Math.hypot((x % 8) - 4, (y % 8) - 4) / 5.2);
           h = p * 0.06 + n1 * 0.03;

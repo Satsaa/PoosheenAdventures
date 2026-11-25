@@ -4,10 +4,11 @@ import type { World, Dimension, DimId, MapObject, LocId } from '../core/types';
 import { D, T } from '../core/types';
 import { hashStr } from '../core/rng';
 import {
-  buildDimRender, buildFogMask, buildGhostFill, buildOutline, footprint, paintDimRender, rockPattern, type DimRender,
+  buildDimRender, buildGhostFill, buildOutline, footprint, rockPattern, type DimRender,
 } from './terrain';
 import { drawObject, drawPin, pinRank, pinColor } from './objects';
 import { Particles } from './particles';
+import { FlatChunks, type FChunk, type FlatOverview, buildFlatOverview, flatOverviewFog } from './flatChunks';
 import { LitRenderer, type ObjDraw } from './lit/renderer';
 import { type Layout, layout } from './lit/compose';
 import { objectLights } from './lit/lights';
@@ -71,6 +72,12 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   let ghostOn = false;
   let state: MapState = { reachable: null, fresh: new Set(), hidden: new Set(), done: new Set() };
   let fogDirty = true;
+  /** per zone: 1 = fogged under the current state */
+  let zoneFog: Uint8Array | null = null;
+  let fogKey = 0;
+  const flat = new FlatChunks();
+  const flatOv = new Map<DimId, FlatOverview>();
+  let regionSize: Int32Array | null = null;
   let freshT0 = -1;
   let freshPath: Path2D | null = null;
   let sortedObjs: MapObject[] = [];
@@ -183,19 +190,22 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   // ------------------------------------------------------------ fog
   function isFoggedZone(z: number): boolean {
     if (!state.reachable || !dim || z < 0) return false;
-    const loc = dim.zoneLoc[z];
-    return loc !== undefined && !state.reachable.has(loc);
+    if (fogDirty) refreshFog();
+    return !!zoneFog && zoneFog[z] === 1;
   }
   function objFogged(o: MapObject): boolean {
     if (!state.reachable || !dim || !dr) return false;
     if (o.x < 0 || o.y < 0 || o.x >= dim.w || o.y >= dim.h) return false;
     return isFoggedZone(dr.owner[o.y * dim.w + o.x]);
   }
+  /** per-zone fog flags; tiles look up their owner zone (O(zones) per state change) */
   function refreshFog() {
     fogDirty = false;
-    if (!dr || !dim || !state.reachable) return;
-    const owner = dr.owner;
-    buildFogMask(dr, (i) => isFoggedZone(owner[i]));
+    fogKey++;
+    if (!dim || !state.reachable) { zoneFog = null; return; }
+    const zl = dim.zoneLoc;
+    zoneFog = new Uint8Array(zl.length);
+    for (let z = 0; z < zl.length; z++) zoneFog[z] = state.reachable.has(zl[z]) ? 0 : 1;
   }
   function buildFresh() {
     freshPath = null;
@@ -240,6 +250,8 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     ghosts.clear();
     particles.clear();
     lit?.setWorld(w, hashStr(w.seed));
+    flat.clear();
+    flatOv.clear();
     dim = null;
     dr = null;
     hover = null;
@@ -271,6 +283,8 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     dr = getDr(d);
     litLay = layout(d, dr.ve, dr.voidElev);
     sortedObjs = d.objects.slice().sort((a, b) => a.y - b.y || a.x - b.x);
+    regionSize = new Int32Array(d.regions.length);
+    for (let i = 0; i < d.w * d.h; i++) { const r = d.region[i]; if (r >= 0 && r < regionSize.length) regionSize[r]++; }
     particles.clear();
     hover = null;
     hits = [];
@@ -600,6 +614,60 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     c.fillRect(0, 0, W, Hh);
   }
 
+  /** flat terrain: low-res overview below, lazily painted 32x32-tile chunks over it */
+  function drawFlatTerrain() {
+    const r = dr!, d = dim!;
+    const [k, ox, oy] = bakeTransform();
+    const CP = flat.cpx(r);
+    const s = cam.s;
+    let fade = s <= 12 ? 0 : s >= 16 ? 1 : (s - 12) / 4;
+    const bx0 = -ox / k, bx1 = (W - ox) / k, by0 = -oy / k, by1 = (Hh - oy) / k;
+    const cx0 = Math.max(0, Math.floor(bx0 / CP)), cx1 = Math.min(flat.cols(r) - 1, Math.floor(bx1 / CP));
+    const cy0 = Math.max(0, Math.floor(by0 / CP)), cy1 = Math.min(flat.rows(r) - 1, Math.floor(by1 / CP));
+    const nVis = Math.max(0, cx1 - cx0 + 1) * Math.max(0, cy1 - cy0 + 1);
+    if (nVis > 30) fade = 0;
+    const vis: FChunk[] = [];
+    let missing: [number, number, number][] = [];
+    if (fade > 0) {
+      const now = performance.now();
+      for (let cy = cy0; cy <= cy1; cy++)
+        for (let cx = cx0; cx <= cx1; cx++) {
+          const ch = flat.get(r, cx, cy);
+          if (ch) { ch.lastUse = now; vis.push(ch); }
+          else missing.push([cx, cy, Math.hypot((cx + 0.5) * CP - (bx0 + bx1) / 2, (cy + 0.5) * CP - (by0 + by1) / 2)]);
+        }
+      missing.sort((a, b) => a[2] - b[2]);
+      const budget = vis.length === 0 && missing.length <= 6 ? missing.length : 1;
+      flat.evict(new Set(vis), Math.max(flat.budget - budget, vis.length));
+      for (const [cx, cy] of missing.slice(0, budget)) vis.push(flat.compose(r, cx, cy));
+      missing = missing.slice(budget);
+    }
+    const fogOn = !!state.reachable;
+    const fogged = (i: number) => isFoggedZone(r.owner[i]);
+    if (fade < 1 || missing.length) {
+      let fo = flatOv.get(d.id);
+      if (!fo) flatOv.set(d.id, (fo = buildFlatOverview(r)));
+      const img = fogOn ? flatOverviewFog(fo, fogKey, fogged) : fo.canvas;
+      const sc = (k * r.S) / fo.ov.opx;
+      ctx.drawImage(img, ox, oy, fo.ov.w * sc, fo.ov.h * sc);
+    }
+    if (!vis.length) return;
+    ctx.globalAlpha = fade;
+    let viewBudget = 1;
+    const snap = (v: number) => Math.round(v * dpr) / dpr;
+    for (const ch of vis) {
+      let img = ch.base;
+      if (fogOn) {
+        if (ch.viewKey === fogKey || viewBudget-- > 0) img = flat.fogView(r, ch, fogKey, fogged);
+        else if (ch.view) img = ch.view;
+      }
+      const x0 = snap(ox + ch.cx * CP * k), y0 = snap(oy + ch.cy * CP * k);
+      const x1 = snap(ox + (ch.cx + 1) * CP * k), y1 = snap(oy + (ch.cy + 1) * CP * k);
+      ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0);
+    }
+    ctx.globalAlpha = 1;
+  }
+
   function blit(src: HTMLCanvasElement) {
     const [k, ox, oy] = bakeTransform();
     // visible part of the bake
@@ -736,6 +804,20 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
           particles.add('mote', wx + (Math.random() - 0.5) * 0.8, wy, { vy: -0.5, max: 1.6, size: 4, col: 'rgb(160,255,200)' });
       }
     }
+    // zoomed out: thin pins by importance and declutter in screen space (huge worlds have thousands)
+    const pinSel = new Set<MapObject>();
+    if (!sprites) {
+      const minPri = s < 3 ? 4 : s < 6 ? 3 : s < 10 ? 2 : s < 16 ? 1 : 0;
+      const cand = vis.filter((q) => pinPriority(q.o) >= minPri).sort((a, b) => pinPriority(b.o) - pinPriority(a.o));
+      const occ = new Set<number>();
+      const cell = 15;
+      for (const q of cand) {
+        const key = Math.floor(q.x / cell) * 100003 + Math.floor(q.y / cell);
+        if (occ.has(key)) continue;
+        occ.add(key);
+        pinSel.add(q.o);
+      }
+    }
     for (const { o, x, y, fog, done } of vis) {
       ctx.globalAlpha = fog ? 0.55 : 1;
       if (sprites) {
@@ -743,8 +825,8 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
         else if (o.kind === 'npc' && o.icon && s >= 22) drawBubble(o.icon, x, y - s * 1.15, s);
         hits.push({ o, x, y: y - s * 0.1, r: s * 0.55 });
       } else {
+        if (!pinSel.has(o)) continue;
         const rank = pinRank(o);
-        if (rank === 0 && s < 9) continue;
         const r = rank === 2 ? 8 : rank === 1 ? 6.5 : 3.5;
         drawPin(ctx, o, x, y, r, done);
         hits.push({ o, x, y: rank === 0 ? y : y - r * 1.55, r: Math.max(r + 3, 8) });
@@ -782,6 +864,19 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(icon, x, y + 0.5);
+  }
+
+  function pinPriority(o: MapObject): number {
+    switch (o.kind) {
+      case 'start': return 5;
+      case 'boss': return 4;
+      case 'entrance':
+      case 'stairs': return /dungeon|sanctum|shrine|beanstalk|stairs/.test(o.style || 'stairs') ? 4 : 3;
+      case 'npc': return 2;
+      case 'gate': return o.gate === 'ledge' || o.gate === 'open' ? 0 : 2;
+      case 'chest': return 1;
+      default: return 0;
+    }
   }
 
   function drawTooltip(o: MapObject, x: number, y: number) {
@@ -822,11 +917,20 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     ctx.font = `700 ${fs}px ${FONT}`;
     (ctx as unknown as { letterSpacing: string }).letterSpacing = '1.5px';
     ctx.lineJoin = 'round';
-    for (const r of dim.regions) {
+    // biggest regions first; small regions fade out first; no overlapping labels
+    const order = dim.regions.map((r, i) => [r, regionSize?.[i] ?? 0] as const).sort((p, q) => q[1] - p[1]);
+    const placed: [number, number, number, number][] = [];
+    for (const [r, size] of order) {
       const x = sx(r.x + 0.5), y = sy(r.y + 0.5 - tileElevY(r.x, r.y));
       if (x < -200 || x > W + 200 || y < -50 || y > Hh + 50) continue;
+      const sa = size ? smoothstep(6000, 16000, size * cam.s * cam.s) : 1;
+      if (sa <= 0.02) continue;
       const txt = r.name.toUpperCase();
-      ctx.globalAlpha = a;
+      const tw0 = ctx.measureText(txt).width;
+      const rc: [number, number, number, number] = [x - tw0 / 2 - 4, y - fs, x + tw0 / 2 + 4, y + fs];
+      if (placed.some((p) => p[0] < rc[2] && rc[0] < p[2] && p[1] < rc[3] && rc[1] < p[3])) continue;
+      placed.push(rc);
+      ctx.globalAlpha = a * sa;
       ctx.strokeStyle = 'rgba(8,6,18,0.75)';
       ctx.lineWidth = 4;
       ctx.strokeText(txt, x, y);
@@ -889,8 +993,11 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     }
     const objs: ObjDraw[] = [];
     const lz: { o: MapObject; done: boolean; z: number }[] = [];
+    const mx = 4 * cam.s + 60;
     for (const o of sortedObjs) {
       if (state.hidden.has(o.id)) continue;
+      const [ox2, oy2] = objScreen(o);
+      if (ox2 < -mx || oy2 < -mx || ox2 > W + mx || oy2 > Hh + mx * 1.5) continue;
       if (o.kind === 'gate' && o.gate === 'open') continue;
       const done = state.done.has(o.id);
       objs.push({ o, done, attach: attachUp(o) });
@@ -937,7 +1044,6 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
         applyMode();
       }
     }
-    if (dr) paintDimRender(dr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
@@ -960,8 +1066,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       }
     }
 
-    blit(dr.canvas);
-    if (state.reachable && dr.fogMasked) blit(dr.fogMasked);
+    drawFlatTerrain();
 
     const v = visibleTiles();
     drawShimmer(v);

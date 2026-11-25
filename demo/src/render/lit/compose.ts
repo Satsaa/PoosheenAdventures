@@ -72,10 +72,16 @@ export interface StaticOut {
   windows: [number, number, number][];
 }
 
-export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed: number): StaticOut {
+export interface TileRect { x0: number; y0: number; x1: number; y1: number }
+
+/** Sprite instances for the tiles in `rect` (inclusive-exclusive), in global painter order. */
+export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed: number, rect?: TileRect, out?: InstBuf): StaticOut {
   const { w, h, ground, deco } = dim;
+  const rx0 = Math.max(0, rect?.x0 ?? 0), ry0 = Math.max(0, rect?.y0 ?? 0);
+  const rx1 = Math.min(w, rect?.x1 ?? w), ry1 = Math.min(h, rect?.y1 ?? h);
   const { liftPx, top, voidLiftPx } = lay;
-  const inst = new InstBuf();
+  const inst = out ?? new InstBuf();
+  inst.n = 0;
   const torches: [number, number, number][] = [];
   const windows: [number, number, number][] = [];
   const fr = sheet.frames;
@@ -85,8 +91,8 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
   const under = dim.kind === 'underworld' || dim.kind === 'interior';
   const get = (k: string) => fr.get(k);
   const lavaTint = [1.0, 0.55, 0.2];
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
+  for (let y = ry0; y < ry1; y++) {
+    for (let x = rx0; x < rx1; x++) {
       const i = y * w + x;
       const g = ground[i];
       if (g === T.VOID) continue;
@@ -102,7 +108,8 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
         if (lAt(x + 1, y) < L) flags |= FLAG.BEV_E;
       }
       const f0 = gl[variant(x, y, seed + g, gl.length)];
-      inst.push(px, py, P, P, f0.x, f0.y, -1, -1, L / P, x, y, flags);
+      const flip = g !== T.FLOOR && g !== T.WALL && g !== T.PLANK && hash2(x, y, seed + 13) < 0.5 ? 128 : 0;
+      inst.push(px, py, P, P, f0.x, f0.y, -1, -1, L / P, x, y, flags | flip);
       // edge blends with higher-priority neighbours on the same level
       if (p.prio >= 0) {
         const nbs: [number, number, number][] = [[x, y - 1, 0], [x + 1, y, 1], [x, y + 1, 2], [x - 1, y, 3]];
@@ -138,7 +145,7 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
       }
     }
     // props of this row
-    for (let x = 0; x < w; x++) {
+    for (let x = rx0; x < rx1; x++) {
       const i = y * w + x;
       const d = deco[i];
       if (ground[i] === T.VOID) continue;
@@ -177,6 +184,27 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
     }
   }
   return { inst, torches, windows };
+}
+
+/** Wall torches and lit house windows of a whole dimension (world tiles), without building sprites. */
+export function staticFeatures(dim: Dimension, lay: Layout): { torches: [number, number, number][]; windows: [number, number, number][] } {
+  const { w, h, ground, deco } = dim;
+  const torches: [number, number, number][] = [];
+  const windows: [number, number, number][] = [];
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (ground[i] === T.VOID) continue;
+      if (deco[i] === D.HOUSE) {
+        if (y + 1 < h && deco[i + w] === D.HOUSE) continue;
+        const wl = x === 0 || deco[i - 1] !== D.HOUSE, wr = x === w - 1 || deco[i + 1] !== D.HOUSE;
+        const col = wl && wr ? 3 : wl ? 0 : wr ? 2 : 1;
+        if (col !== 1 || x % 2 === 0) windows.push([x + 0.5, y + 1.1, lay.liftPx[i] / P + 0.45]);
+      } else if (dim.kind === 'interior' && isWallG(ground[i]) && y + 1 < h && !isWallG(ground[i + w]) && ground[i + w] !== T.VOID && (x * 7 + y * 3) % 5 === 0) {
+        torches.push([x + 0.5, y + 1.05, lay.liftPx[i + w] / P + 0.6]);
+      }
+    }
+  return { torches, windows };
 }
 
 // ---------------------------------------------------------------- objects

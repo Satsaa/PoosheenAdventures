@@ -25,16 +25,9 @@ export interface DimRender {
   maxVe: number;
   /** bake px above row 0 */
   top: number;
-  canvas: HTMLCanvasElement;
-  /** flat bake painted yet (paintDimRender) */
-  painted: boolean;
   seed: number;
-  /** desaturated/darkened copy, created lazily */
-  fog: HTMLCanvasElement | null;
-  /** fog clipped to the fogged footprints of the current state */
-  fogMasked: HTMLCanvasElement | null;
-  /** fog key of what fogMasked currently shows */
-  fogKey: string;
+  /** total bake height in px (the bake itself is painted in chunks, see flatChunks.ts) */
+  H_px: number;
   /** zone index owning each tile (solid tiles: majority of walkable neighbours), -1 none */
   owner: Int32Array;
   /** face height (elev units) below each tile */
@@ -51,10 +44,9 @@ export function isWallG(g: number) {
   return g === T.WALL || g === T.CAVEWALL;
 }
 
-/** Choose a bake resolution that keeps the canvas within ~7M px. */
-function bakeSize(dim: Dimension): number {
-  const s = Math.floor(Math.sqrt(7e6 / Math.max(1, dim.w * (dim.h + 3))));
-  return Math.max(14, Math.min(32, s));
+/** Flat bake resolution: fixed, the bake is chunked so dimension size does not matter. */
+function bakeSize(_dim: Dimension): number {
+  return 20;
 }
 
 export function computeVe(dim: Dimension): { ve: Float32Array; voidElev: number; maxVe: number } {
@@ -544,30 +536,28 @@ export function buildDimRender(dim: Dimension, seed: number): DimRender {
     }
   const ch = top + h * S + bottom;
   return {
-    dim, S, H, hT: H / S, ve, voidElev, maxVe, top, canvas: makeCanvas(1, 1), painted: false, seed, fog: null, fogMasked: null, fogKey: '',
+    dim, S, H, hT: H / S, ve, voidElev, maxVe, top, seed, H_px: ch,
     owner: computeOwner(dim), faceH,
     y0: -top / S, y1: (ch - top) / S,
   };
 }
 
-/** Paint the flat (Canvas 2D) terrain bake of a dimension, once. */
-export function paintDimRender(dr: DimRender): void {
-  if (dr.painted) return;
-  dr.painted = true;
-  const { dim, S, H, ve, voidElev, maxVe, top, seed } = dr;
+/**
+ * Paint the tiles in [rx0,rx1) x [ry0,ry1) of the flat (Canvas 2D) terrain bake into `c`, whose transform
+ * maps bake px (S per tile, `top` px of margin above row 0). Rows are painted in global painter order,
+ * so a chunk that includes every tile poking into it reproduces the full bake exactly.
+ */
+export function paintRegion(dr: DimRender, c: CanvasRenderingContext2D, rx0: number, rx1: number, ry0: number, ry1: number): void {
+  const { dim, S, H, ve, voidElev, top, seed } = dr;
   const { w, h, ground, deco } = dim;
-  const bottom = Math.ceil((maxVe - voidElev) * H + S * 0.5);
-  const canvas = makeCanvas(w * S, top + h * S + bottom);
-  dr.canvas = canvas;
-  const c = ctx2d(canvas);
-  const faceH = dr.faceH;
+  rx0 = Math.max(0, rx0); ry0 = Math.max(0, ry0); rx1 = Math.min(w, rx1); ry1 = Math.min(h, ry1);
   const veAt = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? voidElev : ve[y * w + x]);
   const gAt = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? T.VOID : ground[y * w + x]);
   const dAt = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? 0 : deco[y * w + x]);
   const underground = dim.kind === 'underworld' || dim.kind === 'interior';
 
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
+  for (let y = ry0; y < ry1; y++) {
+    for (let x = rx0; x < rx1; x++) {
       const i = y * w + x;
       const g = ground[i];
       if (g === T.VOID) continue;
@@ -695,7 +685,7 @@ export function paintDimRender(dr: DimRender): void {
       if (puff) c.restore();
     }
     // deco pass for this row (tall deco overlaps the row above)
-    for (let x = 0; x < w; x++) {
+    for (let x = rx0; x < rx1; x++) {
       const i = y * w + x;
       const d = deco[i];
       if (!d || ground[i] === T.VOID) continue;
@@ -714,39 +704,6 @@ export function paintDimRender(dr: DimRender): void {
   }
 }
 
-/** Desaturated, darkened, cool-tinted copy of the bake. */
-export function ensureFog(dr: DimRender): HTMLCanvasElement {
-  paintDimRender(dr);
-  if (dr.fog) return dr.fog;
-  const src = dr.canvas;
-  const f = makeCanvas(src.width, src.height);
-  const c = ctx2d(f);
-  if (typeof (c as { filter?: unknown }).filter === 'string') {
-    c.filter = 'grayscale(0.8) brightness(0.62) contrast(0.9)';
-    c.drawImage(src, 0, 0);
-    c.filter = 'none';
-  } else {
-    c.drawImage(src, 0, 0);
-    c.globalCompositeOperation = 'saturation';
-    c.globalAlpha = 0.8;
-    c.fillStyle = 'rgb(128,128,128)';
-    c.fillRect(0, 0, f.width, f.height);
-    c.globalAlpha = 1;
-    c.globalCompositeOperation = 'multiply';
-    c.fillStyle = '#8a90aa';
-    c.fillRect(0, 0, f.width, f.height);
-  }
-  // cool night tint, keeping the bake's alpha
-  c.globalCompositeOperation = 'source-atop';
-  c.fillStyle = 'rgba(40,50,100,0.28)';
-  c.fillRect(0, 0, f.width, f.height);
-  c.globalCompositeOperation = 'destination-in';
-  c.drawImage(src, 0, 0);
-  c.globalCompositeOperation = 'source-over';
-  dr.fog = f;
-  return f;
-}
-
 /** Bake-space rectangle a tile occupies (top surface + its cliff face + tall deco). */
 export function footprint(dr: DimRender, i: number, withDeco: boolean): [number, number, number, number] {
   const { dim, S, H, top, ve, faceH } = dr;
@@ -754,29 +711,6 @@ export function footprint(dr: DimRender, i: number, withDeco: boolean): [number,
   const oh = withDeco ? decoOverhang(dim.deco[i]) * S * 0.85 : 0;
   const py = top + y * S - ve[i] * H;
   return [x * S, py - oh, S, S + faceH[i] * H + oh];
-}
-
-/** Render fogMasked: the fog variant restricted to the footprints of fogged tiles. */
-export function buildFogMask(dr: DimRender, fogged: (i: number) => boolean): HTMLCanvasElement {
-  const fog = ensureFog(dr);
-  if (!dr.fogMasked) dr.fogMasked = makeCanvas(fog.width, fog.height);
-  const m = dr.fogMasked;
-  const c = ctx2d(m);
-  c.globalCompositeOperation = 'source-over';
-  c.clearRect(0, 0, m.width, m.height);
-  c.fillStyle = '#000';
-  const { dim } = dr;
-  const n = dim.w * dim.h;
-  for (let i = 0; i < n; i++) {
-    if (dim.ground[i] === T.VOID) continue;
-    const [x, y, ww, hh] = footprint(dr, i, true);
-    if (fogged(i)) c.fillRect(x, y, ww, hh);
-    else c.clearRect(x, y, ww, hh);
-  }
-  c.globalCompositeOperation = 'source-in';
-  c.drawImage(fog, 0, 0);
-  c.globalCompositeOperation = 'source-over';
-  return m;
 }
 
 // ------------------------------------------------------------------ ghost layers

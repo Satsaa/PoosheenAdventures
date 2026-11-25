@@ -51,11 +51,13 @@ void main() {
   ivec2 lp = clamp(ivec2(floor(vLocal)), ivec2(0), ivec2(vSize) - 1);
   int flags = int(vInst.w + 0.5);
   bool face = (flags & 1) != 0;
-  ivec2 st = ivec2(vSrc.xy) + lp;
+  bool flip = (flags & 128) != 0;
+  ivec2 lq = flip ? ivec2(int(vSize.x) - 1 - lp.x, lp.y) : lp;
+  ivec2 st = ivec2(vSrc.xy) + lq;
   if (face && lp.y >= 48) st = ivec2(vSrc.xy) + ivec2(lp.x, 4 + (lp.y - 4) % 44);
   vec4 a = texelFetch(uA, st, 0);
   if (a.a < 0.5) discard;
-  if (vSrc.z >= 0.0 && texelFetch(uA, ivec2(vSrc.zw) + lp, 0).a < 0.5) discard;
+  if (vSrc.z >= 0.0 && texelFetch(uA, ivec2(vSrc.zw) + lq, 0).a < 0.5) discard;
   vec4 n = texelFetch(uN, st, 0);
   vec4 e = texelFetch(uE, st, 0);
   int mat = int(e.a * 255.0 + 0.5);
@@ -64,6 +66,7 @@ void main() {
   else if ((flags & 32) != 0) alb *= vTint.rgb;
   float h = face ? vInst.x - float(lp.y) / 16.0 : vInst.x + n.a * 255.0 / 40.0 - 1.0;
   vec3 nn = n.rgb * 2.0 - 1.0;
+  if (flip) nn.x = -nn.x;
   // rims on raised edges: lit lip on north / west, dark seam on east
   if ((flags & 2) != 0 && lp.y == 0) alb = min(alb * 1.35 + 0.04, 1.0);
   if ((flags & 4) != 0 && lp.x == 0) { alb = min(alb * 1.2 + 0.02, 1.0); nn = normalize(nn + vec3(-0.8, 0.0, 0.4)); }
@@ -71,32 +74,50 @@ void main() {
   oA = vec4(alb, 1.0);
   oN = vec4(nn * 0.5 + 0.5, clamp((h + 1.0) * 40.0 / 255.0, 0.0, 1.0));
   oE = vec4(e.rgb * vTint.a, float(mat) / 255.0);
-  oT = vec4(vInst.yz / 255.0, (flags & 64) != 0 ? 1.0 : 0.0, 1.0);
+  int tx = int(vInst.y + 0.5), ty = int(vInst.z + 0.5);
+  oT = vec4(float(tx & 255), float(ty & 255), float((tx >> 8) + (ty >> 8) * 16), 0.0) / 255.0;
+  oT.a = (flags & 64) != 0 ? 1.0 : 0.0;
 }`;
 
-// ---------------------------------------------------------------- static dimension G-buffer -> screen G-buffer
+// ---------------------------------------------------------------- static terrain layers (overview or chunk) -> screen G-buffer
+export const QUAD_VS = `#version 300 es
+uniform vec2 uOff;   // screen px of texture origin
+uniform float uK;    // screen px per texture px
+uniform vec2 uTex;   // texture size
+uniform vec2 uTarget;
+void main() {
+  vec2 c = vec2(gl_VertexID == 1 || gl_VertexID == 3 ? 1.0 : 0.0, gl_VertexID >= 2 ? 1.0 : 0.0);
+  vec2 p = uOff + c * uTex * uK;
+  gl_Position = vec4(p / uTarget * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
 export const BLIT_FS = HDR + `
 uniform sampler2D uA, uN, uE, uT;
 uniform vec2 uOff;
 uniform float uK;
 uniform vec2 uTex;
+uniform float uFade;
 layout(location=0) out vec4 oA;
 layout(location=1) out vec4 oN;
 layout(location=2) out vec4 oE;
 layout(location=3) out vec4 oT;
+float bayer(ivec2 p) {
+  int m[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
+  return (float(m[(p.y & 3) * 4 + (p.x & 3)]) + 0.5) / 16.0;
+}
 void main() {
+  if (uFade < 1.0 && bayer(ivec2(gl_FragCoord.xy)) >= uFade) discard;
   vec2 dp = (gl_FragCoord.xy - uOff) / uK;
   if (dp.x < 0.0 || dp.y < 0.0 || dp.x >= uTex.x || dp.y >= uTex.y) discard;
   vec2 uv = dp / uTex;
+  ivec2 ip = ivec2(dp);
   vec4 a = texture(uA, uv);
   if (a.a < 0.5) discard;
-  ivec2 ip = ivec2(dp);
   vec4 n = texture(uN, uv);
   vec4 e = texture(uE, uv);
-  float mat = texelFetch(uE, ip, 0).a;
   oA = vec4(a.rgb / a.a, 1.0);
   oN = vec4(normalize(n.rgb * 2.0 - 1.0) * 0.5 + 0.5, n.a);
-  oE = vec4(e.rgb, mat);
+  oE = vec4(e.rgb, texelFetch(uE, ip, 0).a);
   oT = texelFetch(uT, ip, 0);
 }`;
 
@@ -112,7 +133,8 @@ uniform vec4 uLP[${32}];
 uniform vec4 uLC[${32}];
 uniform int uNL;
 uniform float uTime, uFresh, uMotion, uHdr, uRock, uShadowLen;
-uniform vec4 uGhost0;
+uniform vec4 uGhost0;   // on, ghost top (dim px), ghost overview px per dim px
+uniform vec2 uGhostSize;
 out vec4 o;
 float dh(vec4 n) { return n.a * 255.0 / 40.0 - 1.0; }
 float toon(float x) { return smoothstep(0.02, 0.07, x) * 0.36 + smoothstep(0.28, 0.34, x) * 0.34 + smoothstep(0.6, 0.66, x) * 0.30; }
@@ -130,9 +152,9 @@ void main() {
       bg *= 0.55 + n * 0.9;
     }
     if (uGhost0.x > 0.0) {
-      vec2 guv = vec2(dp.x, dp.y - uTop + uGhost0.y) / uGhost0.zw;
+      vec2 guv = vec2(dp.x, dp.y - uTop + uGhost0.y) * uGhost0.z / uGhostSize;
       if (guv.x > 0.0 && guv.y > 0.0 && guv.x < 1.0 && guv.y < 1.0) {
-        vec4 g = textureLod(uGhost, guv, 4.0) * 0.5 + textureLod(uGhost, guv, 5.0) * 0.5;
+        vec4 g = textureLod(uGhost, guv, uGhost0.w) * 0.5 + textureLod(uGhost, guv, uGhost0.w + 1.0) * 0.5;
         float gl2 = dot(g.rgb, vec3(0.3, 0.59, 0.11));
         bg = mix(bg, mix(vec3(gl2), g.rgb, 0.5) * uGhostTint, clamp(g.a * 1.2, 0.0, 1.0) * 0.4);
       }
@@ -146,7 +168,9 @@ void main() {
   vec4 E = texelFetch(gE, fc, 0);
   int mat = int(E.a * 255.0 + 0.5);
   vec4 Tt = texelFetch(gT, fc, 0);
-  vec4 M = texelFetch(uMask, ivec2(Tt.xy * 255.0 + 0.5), 0);
+  ivec3 tb = ivec3(Tt.rgb * 255.0 + 0.5);
+  ivec2 tile = ivec2(tb.x + (tb.z & 15) * 256, tb.y + (tb.z >> 4) * 256);
+  vec4 M = texelFetch(uMask, tile, 0);
   float fog = M.r, fresh = M.g;
   vec3 P = vec3(X, Ys + h, h);
   float t = uTime * uMotion;
@@ -186,8 +210,8 @@ void main() {
   float ao = 1.0 - min(occ * 0.55, 0.6);
   vec3 amb = mix(uAmbBot, uAmbTop, N.z * 0.5 + 0.5) * ao;
   // dynamic objects (chests, doors, NPCs, gates) get a lift + rim so they stay easy to spot
-  float isObj = Tt.b;
-  amb += vec3(0.2, 0.19, 0.24) * isObj;
+  float isObj = Tt.a;
+  amb += vec3(0.3, 0.28, 0.34) * isObj;
   vec3 key = uKeyCol * toon(max(nl, 0.0)) * sh;
   vec3 V = vec3(0.0, 0.7071, 0.7071);
   bool shiny = mat == 1 || mat == 4;

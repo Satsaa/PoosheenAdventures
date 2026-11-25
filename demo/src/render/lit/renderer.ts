@@ -1,18 +1,31 @@
-// WebGL2 lit renderer: per-dimension static G-buffer (composed once from the sprite atlas), then per
-// frame: screen G-buffer (static blit + dynamic object sprites) -> toon-banded lighting with coloured
-// point lights and height-field shadows -> additive particles -> bloom -> grade/vignette composite.
+// WebGL2 lit renderer.
+//
+// Static terrain is split into fixed 512x512 px chunks (32x32 tiles at 16 px/tile) of a per-dimension
+// G-buffer (albedo / normal+height / emissive+material / tile id). Chunks are composed lazily from the
+// sprite atlas when they first become visible (a few per frame), kept in a global LRU with a memory
+// budget, and never evicted while the current frame references them. A low-res overview of the whole
+// dimension (built from tile data in a few ms) is drawn below / instead of chunks when zoomed out and
+// as the placeholder for chunks not composed yet; it is also the source of the stacked-world ghost.
+//
+// Per frame: screen G-buffer (overview + chunks + dynamic object sprites) -> toon-banded lighting with
+// coloured point lights (culled by a spatial grid) and height-field shadows -> additive particles ->
+// bloom -> grade/vignette composite.
 import type { DimId, Dimension, MapObject, World } from '../../core/types';
+import { D, T } from '../../core/types';
 import { bakeAtlas, lastBakeMs } from '../bake/index';
+import { groundMat } from '../bake/ground';
+import { CRYSTAL_LIGHT } from '../bake/models';
 import type { AssetSheet } from '../bake/sheet';
 import { TILE_PX } from '../bake/sheet';
 import type { Particles } from '../particles';
 import { npcColor } from '../objects';
+import { type Overview, type OverviewColors, type RGB, buildOverview, overviewPx } from '../overview';
 import { hexRgb } from '../util';
-import { FLOATS, InstBuf, type Layout, buildStatic, layout, objectKey, wallStyle } from './compose';
+import { FLOATS, InstBuf, type Layout, buildStatic, layout, objectKey, staticFeatures, wallStyle } from './compose';
 import { type Prog, delFramebuffer, delTexture, framebuffer, glStats, program, texture } from './gl';
-import { type Light, type Mood, moodFor, staticLights } from './lights';
+import { type Light, LightGrid, type Mood, moodFor, staticLights } from './lights';
 import {
-  BLIT_FS, BLUR_FS, BRIGHT_FS, COMPOSITE_FS, FULL_VS, LIGHT_FS, MAX_LIGHTS, POINT_FS, POINT_VS, SPRITE_FS, SPRITE_VS,
+  BLIT_FS, BLUR_FS, BRIGHT_FS, COMPOSITE_FS, FULL_VS, LIGHT_FS, MAX_LIGHTS, POINT_FS, POINT_VS, QUAD_VS, SPRITE_FS, SPRITE_VS,
 } from './shaders';
 
 export interface DimMetaIn {
@@ -36,36 +49,67 @@ export interface LitFrame {
   t: number;
   motion: boolean;
   ghost: { dim: Dimension; meta: DimMetaIn } | null;
+  /** objects near the view (already culled by the caller) */
   objs: ObjDraw[];
   lights: Light[];
   particles: Particles | null;
   fresh: number;
 }
 
-interface DimGL {
-  id: DimId;
-  lay: Layout;
+const CHUNK_TILES = 32;
+const CPX = CHUNK_TILES * TILE_PX; // 512
+/** px per tile (css) where chunks start to fade in over the overview, and where they are fully opaque */
+const CHUNK_S0 = 9;
+const CHUNK_S1 = 13;
+/** never show more than this many chunks at once (big screens zoomed out use the overview) */
+const MAX_VISIBLE_CHUNKS = 40;
+/** LRU budget (each chunk = 4 x 512x512 RGBA8 = 4 MB) */
+const CHUNK_BUDGET = 56;
+const MAX_INTERNAL_PX = 1.6e6;
+
+interface Chunk {
+  dim: DimId;
+  cx: number;
+  cy: number;
   tex: WebGLTexture[];
   fbo: WebGLFramebuffer;
-  lights: Light[];
-  mask: WebGLTexture;
-  maskData: Uint8Array;
-  mood: Mood;
-  px: number;
   lastUse: number;
 }
 
-export const litStats = { atlasMs: 0, composeMs: [] as number[], maskMs: 0, lastFrameMs: 0 };
+interface DimGL {
+  id: DimId;
+  dim: Dimension;
+  lay: Layout;
+  cols: number;
+  rows: number;
+  ov: Overview;
+  ovTex: WebGLTexture[];
+  lights: LightGrid;
+  nLights: number;
+  mask: WebGLTexture;
+  maskData: Uint8Array;
+  mood: Mood;
+  chunks: Map<number, Chunk>;
+  lastUse: number;
+}
 
-const MAX_INTERNAL_PX = 1.6e6;
+export const litStats = {
+  atlasMs: 0, overviewMs: [] as number[], prepareMs: [] as number[], chunkMs: [] as number[], maskMs: 0, lastFrameMs: 0,
+  worstFrameMs: 0, chunksLive: 0, chunksComposedLastFrame: 0, pendingChunks: 0,
+};
+
+const push = (a: number[], v: number) => { a.push(v); if (a.length > 200) a.shift(); };
 
 export class LitRenderer {
   gl!: WebGL2RenderingContext;
   lost = false;
   onLost: (() => void) | null = null;
   onRestored: (() => void) | null = null;
+  maxTex = 4096;
   private sheet!: AssetSheet;
   private atlas: WebGLTexture[] = [];
+  private colors!: OverviewColors;
+  private colorsUnder!: OverviewColors;
   private pSprite!: Prog;
   private pBlit!: Prog;
   private pLight!: Prog;
@@ -93,6 +137,7 @@ export class LitRenderer {
   private errLogged = false;
   private pointData = new Float32Array(7 * 320);
   private objInst = new InstBuf();
+  private chunkInst = new InstBuf();
   private lp = new Float32Array(MAX_LIGHTS * 4);
   private lc = new Float32Array(MAX_LIGHTS * 4);
   private colCache = new Map<string, [number, number, number]>();
@@ -105,8 +150,7 @@ export class LitRenderer {
     try {
       const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false, stencil: false, premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
       if (!gl) return null;
-      const r = new LitRenderer(canvas, gl);
-      return r;
+      return new LitRenderer(canvas, gl);
     } catch (err) {
       console.warn('lit renderer unavailable:', err);
       return null;
@@ -123,20 +167,23 @@ export class LitRenderer {
   private init() {
     const gl = this.gl;
     if (gl.getParameter(gl.MAX_DRAW_BUFFERS) < 4) throw new Error('needs 4 draw buffers');
+    this.maxTex = Math.min(16384, gl.getParameter(gl.MAX_TEXTURE_SIZE) as number);
+    if (this.maxTex < 2048) throw new Error('MAX_TEXTURE_SIZE too small');
     this.hdr = !!gl.getExtension('EXT_color_buffer_float');
     const t0 = performance.now();
     this.sheet = bakeAtlas();
     litStats.atlasMs = lastBakeMs || performance.now() - t0;
     const s = this.sheet;
     this.atlas = [s.albedo, s.normal, s.emissive].map((d) => texture(gl, s.w, s.h, { data: new Uint8Array(d.buffer, d.byteOffset, d.byteLength) }));
+    this.colors = this.atlasColors(false);
+    this.colorsUnder = this.atlasColors(true);
     this.pSprite = program(gl, SPRITE_VS, SPRITE_FS, 'sprite');
-    this.pBlit = program(gl, FULL_VS, BLIT_FS, 'blit');
+    this.pBlit = program(gl, QUAD_VS, BLIT_FS, 'blit');
     this.pLight = program(gl, FULL_VS, LIGHT_FS, 'light');
     this.pPoint = program(gl, POINT_VS, POINT_FS, 'point');
     this.pBright = program(gl, FULL_VS, BRIGHT_FS, 'bright');
     this.pBlur = program(gl, FULL_VS, BLUR_FS, 'blur');
     this.pComp = program(gl, FULL_VS, COMPOSITE_FS, 'composite');
-    // sprite VAO: unit quad + per-instance attributes
     this.vaoSprite = gl.createVertexArray()!;
     gl.bindVertexArray(this.vaoSprite);
     const quad = gl.createBuffer()!;
@@ -172,6 +219,56 @@ export class LitRenderer {
     this.bFbo = [];
   }
 
+  /** average sprite colours of the atlas, for the overview */
+  private atlasColors(under: boolean): OverviewColors {
+    const s = this.sheet;
+    const cache = new Map<string, RGB | null>();
+    const avg = (key: string, layer: 'alb' | 'emi', rows?: [number, number]): RGB | null => {
+      const ck = key + layer + (rows ? rows.join() : '');
+      if (cache.has(ck)) return cache.get(ck)!;
+      const f = s.frames.get(key)?.[0];
+      let r = 0, g = 0, b = 0, n = 0;
+      if (f) {
+        const src = layer === 'alb' ? s.albedo : s.emissive;
+        for (let y = rows ? rows[0] : 0; y < (rows ? Math.min(f.h, rows[1]) : f.h); y++)
+          for (let x = 0; x < f.w; x++) {
+            const o = ((f.y + y) * s.w + f.x + x) * 4;
+            if (!s.albedo[o + 3]) continue;
+            r += src[o]; g += src[o + 1]; b += src[o + 2]; n++;
+          }
+      }
+      const c: RGB | null = n ? [r / n, g / n, b / n] : null;
+      cache.set(ck, c);
+      return c;
+    };
+    const gC: (RGB | null)[] = [], fC: (RGB | null)[] = [], dC = new Map<number, RGB | null>();
+    const lavaE = avg('g:' + T.LAVA, 'emi');
+    return {
+      ground: (g) => (gC[g] !== undefined ? gC[g]! : (gC[g] = avg('g:' + g, 'alb') ?? [90, 90, 90])),
+      face: (g) => (fC[g] !== undefined ? fC[g]! : (fC[g] = avg('f:' + g, 'alb', [3, 14]) ?? [40, 30, 30])),
+      deco: (d, g) => {
+        const ck = d * 32 + g;
+        let c = dC.get(ck);
+        if (c === undefined) {
+          c = d === D.HOUSE ? [120, 36, 28] : avg('d:' + d + (d === D.PINE && g === T.SNOW ? ':snow' : d === D.MUSHROOM && under ? ':glow' : ''), 'alb');
+          dC.set(ck, c);
+        }
+        return c;
+      },
+      emit: (g, d, x, y) => {
+        if (g === T.LAVA) return lavaE;
+        if (d === D.CRYSTAL) {
+          const c = CRYSTAL_LIGHT[(x * 7 + y * 13) % CRYSTAL_LIGHT.length];
+          return [c[0] * 140, c[1] * 140, c[2] * 140];
+        }
+        if (d === D.MUSHROOM && under) return [20, 90, 180];
+        if (d === D.HOUSE) return [90, 55, 18];
+        return null;
+      },
+      mat: (g) => groundMat(g),
+    };
+  }
+
   get hdrSupported() { return this.hdr; }
 
   setWorld(world: World, seed: number) {
@@ -180,64 +277,62 @@ export class LitRenderer {
     this.freeDims();
   }
 
+  private freeChunk(c: Chunk) {
+    if (!this.lost) {
+      c.tex.forEach((t) => delTexture(this.gl, t));
+      delFramebuffer(this.gl, c.fbo);
+    }
+  }
+
   private freeDims(keep?: Set<DimId>) {
     const gl = this.gl;
     for (const [id, d] of this.dims) {
       if (keep?.has(id)) continue;
+      for (const c of d.chunks.values()) this.freeChunk(c);
+      d.chunks.clear();
       if (!this.lost) {
-        d.tex.forEach((t) => delTexture(gl, t));
+        d.ovTex.forEach((t) => delTexture(gl, t));
         delTexture(gl, d.mask);
-        delFramebuffer(gl, d.fbo);
       }
       this.dims.delete(id);
     }
   }
 
-  /** Compose (or fetch) the static G-buffer of a dimension. */
+  /** Per-dimension data: layout, overview textures, light grid, mask. O(tiles) CPU, no chunk is composed. */
   prepare(dim: Dimension, meta: DimMetaIn): DimGL {
     let d = this.dims.get(dim.id);
-    if (d) { d.lastUse = performance.now(); return d; }
+    if (d && d.dim === dim) { d.lastUse = performance.now(); return d; }
+    if (d) this.freeDims(new Set([...this.dims.keys()].filter((k) => k !== dim.id)));
     const gl = this.gl;
     const t0 = performance.now();
     const lay = layout(dim, meta.ve, meta.voidElev);
-    const st = buildStatic(dim, lay, this.sheet, this.seed);
-    const mip = { min: gl.LINEAR_MIPMAP_LINEAR, mag: gl.NEAREST };
-    const tex = [texture(gl, lay.W, lay.H, mip), texture(gl, lay.W, lay.H, mip), texture(gl, lay.W, lay.H, mip), texture(gl, lay.W, lay.H)];
-    const fbo = framebuffer(gl, tex);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-    gl.viewport(0, 0, lay.W, lay.H);
-    gl.disable(gl.BLEND);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    this.drawSprites(st.inst, 1, 0, 0, lay.W, lay.H);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    for (let k = 0; k < 3; k++) {
-      gl.bindTexture(gl.TEXTURE_2D, tex[k]);
-      gl.generateMipmap(gl.TEXTURE_2D);
-    }
-    const maskData = new Uint8Array(dim.w * dim.h * 4);
+    const n = dim.w * dim.h;
+    const lift = new Float32Array(n);
+    for (let i = 0; i < n; i++) lift[i] = lay.liftPx[i] / TILE_PX;
+    const under = dim.kind === 'underworld' || dim.kind === 'interior';
+    const opx = overviewPx(dim.w, Math.ceil(lay.H / TILE_PX), this.maxTex);
+    const ov = buildOverview(dim, lift, lay.voidLiftPx / TILE_PX, lay.top / TILE_PX, (lay.H - lay.top) / TILE_PX - dim.h, opx,
+      under ? this.colorsUnder : this.colors, true);
+    push(litStats.overviewMs, ov.ms);
+    const tex = (data: Uint8Array, mip: boolean, nearest = false) => {
+      const t = texture(gl, ov.w, ov.h, { data, min: nearest ? gl.NEAREST : mip ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR, mag: gl.NEAREST });
+      if (mip) gl.generateMipmap(gl.TEXTURE_2D);
+      return t;
+    };
+    const ovTex = [tex(ov.alb, true), tex(ov.nrm!, false), tex(ov.emi!, false), tex(ov.tid!, false, true)];
+    ov.nrm = ov.emi = ov.tid = null; // uploaded; keep albedo-free memory small
+    const feats = staticFeatures(dim, lay);
+    const lights = staticLights(dim, lay, feats, this.sheet, this.seed);
+    const maskData = new Uint8Array(n * 4);
     const mask = texture(gl, dim.w, dim.h, { data: maskData });
     d = {
-      id: dim.id, lay, tex, fbo, mask, maskData, lights: staticLights(dim, lay, st, this.sheet, this.seed),
-      mood: moodFor(this.world, dim), px: lay.W * lay.H, lastUse: performance.now(),
+      id: dim.id, dim, lay, cols: Math.ceil(lay.W / CPX), rows: Math.ceil(lay.H / CPX), ov, ovTex,
+      lights: new LightGrid(lights), nLights: lights.length, mask, maskData, mood: moodFor(this.world, dim),
+      chunks: new Map(), lastUse: performance.now(),
     };
     this.dims.set(dim.id, d);
-    litStats.composeMs.push(performance.now() - t0);
-    if (litStats.composeMs.length > 50) litStats.composeMs.shift();
-    // keep GPU memory bounded: evict least recently used dimensions
-    let total = 0;
-    for (const x of this.dims.values()) total += x.px;
-    if (total > 14e6) {
-      const old = [...this.dims.values()].filter((x) => x !== d).sort((a, b) => a.lastUse - b.lastUse);
-      const keep = new Set(this.dims.keys());
-      for (const o of old) { if (total <= 10e6) break; total -= o.px; keep.delete(o.id); }
-      this.freeDims(keep);
-    }
+    push(litStats.prepareMs, performance.now() - t0);
     return d;
-  }
-
-  layoutOf(dim: Dimension, meta: DimMetaIn): Layout {
-    return this.dims.get(dim.id)?.lay ?? layout(dim, meta.ve, meta.voidElev);
   }
 
   /** Upload the per-tile fog / fresh mask (R = fogged, G = fresh). */
@@ -277,6 +372,58 @@ export class LitRenderer {
     gl.bindVertexArray(null);
   }
 
+  private chunkCount() {
+    let n = 0;
+    for (const d of this.dims.values()) n += d.chunks.size;
+    return n;
+  }
+
+  /** Compose one 512x512 chunk of a dimension's static G-buffer. */
+  private composeChunk(d: DimGL, cx: number, cy: number): Chunk {
+    const gl = this.gl;
+    const t0 = performance.now();
+    const { lay } = d;
+    const lin = { min: gl.LINEAR, mag: gl.NEAREST };
+    const tex = [texture(gl, CPX, CPX, lin), texture(gl, CPX, CPX, lin), texture(gl, CPX, CPX, lin), texture(gl, CPX, CPX)];
+    const fbo = framebuffer(gl, tex);
+    // every tile whose sprites can reach into this chunk: faces drop below their row, lifted tiles and
+    // tall props rise above it, wide props overhang their column
+    const y0px = cy * CPX, y1px = y0px + CPX;
+    const rect = {
+      x0: cx * CHUNK_TILES - 1,
+      x1: (cx + 1) * CHUNK_TILES + 1,
+      y0: Math.floor((y0px - lay.top - TILE_PX - (lay.maxLiftPx - lay.voidLiftPx)) / TILE_PX) - 1,
+      y1: Math.ceil((y1px - lay.top + lay.maxLiftPx + 80) / TILE_PX) + 1,
+    };
+    buildStatic(d.dim, lay, this.sheet, this.seed, rect, this.chunkInst);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.viewport(0, 0, CPX, CPX);
+    gl.disable(gl.BLEND);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    this.drawSprites(this.chunkInst, 1, -cx * CPX, -cy * CPX, CPX, CPX);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const c: Chunk = { dim: d.id, cx, cy, tex, fbo, lastUse: performance.now() };
+    d.chunks.set(cx + cy * 4096, c);
+    push(litStats.chunkMs, performance.now() - t0);
+    return c;
+  }
+
+  /** Evict least-recently-used chunks beyond the budget; chunks in `pinned` are never evicted. */
+  private evict(pinned: Set<Chunk>, budget: number) {
+    let n = this.chunkCount();
+    if (n <= budget) return;
+    const all: [DimGL, number, Chunk][] = [];
+    for (const d of this.dims.values()) for (const [k, c] of d.chunks) if (!pinned.has(c)) all.push([d, k, c]);
+    all.sort((a, b) => a[2].lastUse - b[2].lastUse);
+    for (const [d, k, c] of all) {
+      if (n <= budget) break;
+      this.freeChunk(c);
+      d.chunks.delete(k);
+      n--;
+    }
+  }
+
   private ensureTargets(iw: number, ih: number) {
     if (iw === this.iw && ih === this.ih && this.gFbo) return;
     const gl = this.gl;
@@ -307,59 +454,110 @@ export class LitRenderer {
     return c;
   }
 
+  private blitLayer(tex: WebGLTexture[], offX: number, offY: number, k: number, tw: number, th: number, fade: number, iw: number, ih: number) {
+    const gl = this.gl, pb = this.pBlit;
+    for (let i = 0; i < 4; i++) {
+      gl.activeTexture(gl.TEXTURE0 + i);
+      gl.bindTexture(gl.TEXTURE_2D, tex[i]);
+    }
+    gl.uniform2f(pb.u.uOff, offX, offY);
+    gl.uniform1f(pb.u.uK, k);
+    gl.uniform2f(pb.u.uTex, tw, th);
+    gl.uniform2f(pb.u.uTarget, iw, ih);
+    gl.uniform1f(pb.u.uFade, fade);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
   render(f: LitFrame) {
     if (this.lost) return;
     const gl = this.gl;
     const t0 = performance.now();
     const rs = Math.min(f.dpr, Math.sqrt(MAX_INTERNAL_PX / Math.max(1, f.cssW * f.cssH)), 2);
-    const iw = Math.max(1, Math.round(f.cssW * rs)), ih = Math.max(1, Math.round(f.cssH * rs));
+    const iw = Math.max(1, Math.min(this.maxTex, Math.round(f.cssW * rs))), ih = Math.max(1, Math.min(this.maxTex, Math.round(f.cssH * rs)));
     if (this.canvas.width !== iw || this.canvas.height !== ih) { this.canvas.width = iw; this.canvas.height = ih; }
     this.ensureTargets(iw, ih);
     const d = this.prepare(f.dim, f.meta);
     const gd = f.ghost ? this.prepare(f.ghost.dim, f.ghost.meta) : null;
-    d.lastUse = performance.now();
+    const now = performance.now();
+    d.lastUse = now;
+    if (gd) gd.lastUse = now;
+    // bound per-dimension memory between frames: keep the 6 most recently used, never the ones drawn now
+    if (this.dims.size > 6) {
+      const keep = new Set<DimId>([d.id]);
+      if (gd) keep.add(gd.id);
+      for (const o of [...this.dims.values()].sort((a, b) => b.lastUse - a.lastUse)) { if (keep.size >= 6) break; keep.add(o.id); }
+      this.freeDims(keep);
+    }
     const lay = d.lay, mood = d.mood;
     const s = f.cam.s;
     const k = (s * rs) / TILE_PX;
     const offX = Math.round((f.cssW / 2 - f.cam.x * s) * rs);
     const offY = Math.round((f.cssH / 2 - f.cam.y * s) * rs - lay.top * k);
+
+    // ---- which chunks this frame needs; compose a few, evict only what this frame does not use
+    const vx0 = -offX / k, vx1 = (iw - offX) / k, vy0 = -offY / k, vy1 = (ih - offY) / k; // dim px
+    const cx0 = Math.max(0, Math.floor(vx0 / CPX)), cx1 = Math.min(d.cols - 1, Math.floor(vx1 / CPX));
+    const cy0 = Math.max(0, Math.floor(vy0 / CPX)), cy1 = Math.min(d.rows - 1, Math.floor(vy1 / CPX));
+    const nVis = Math.max(0, cx1 - cx0 + 1) * Math.max(0, cy1 - cy0 + 1);
+    let fade = s <= CHUNK_S0 ? 0 : s >= CHUNK_S1 ? 1 : (s - CHUNK_S0) / (CHUNK_S1 - CHUNK_S0);
+    if (nVis > MAX_VISIBLE_CHUNKS) fade = 0;
+    const visible: Chunk[] = [];
+    let missing: [number, number, number][] = [];
+    if (fade > 0) {
+      for (let cy = cy0; cy <= cy1; cy++)
+        for (let cx = cx0; cx <= cx1; cx++) {
+          const c = d.chunks.get(cx + cy * 4096);
+          if (c) { c.lastUse = now; visible.push(c); }
+          else missing.push([cx, cy, Math.hypot((cx + 0.5) * CPX - (vx0 + vx1) / 2, (cy + 0.5) * CPX - (vy0 + vy1) / 2)]);
+        }
+      missing.sort((a, b) => a[2] - b[2]);
+      // small dimensions compose everything at once (no placeholder flash); big ones a few per frame
+      const budget = visible.length === 0 && missing.length <= 9 ? missing.length : 3;
+      const pinned = new Set(visible);
+      this.evict(pinned, Math.max(CHUNK_BUDGET - budget, pinned.size));
+      for (const [cx, cy] of missing.slice(0, budget)) {
+        const c = this.composeChunk(d, cx, cy);
+        visible.push(c);
+        pinned.add(c);
+      }
+      litStats.chunksComposedLastFrame = Math.min(budget, missing.length);
+      missing = missing.slice(budget);
+    } else litStats.chunksComposedLastFrame = 0;
+    litStats.pendingChunks = missing.length;
+    litStats.chunksLive = this.chunkCount();
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
 
-    // ---- pass A: screen G-buffer
+    // ---- pass A: screen G-buffer (overview below, chunks dithered in over it, objects on top)
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.gFbo);
     gl.viewport(0, 0, iw, ih);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     const pb = this.pBlit;
     gl.useProgram(pb.p);
-    for (let i = 0; i < 4; i++) {
-      gl.activeTexture(gl.TEXTURE0 + i);
-      gl.bindTexture(gl.TEXTURE_2D, d.tex[i]);
-    }
     gl.uniform1i(pb.u.uA, 0); gl.uniform1i(pb.u.uN, 1); gl.uniform1i(pb.u.uE, 2); gl.uniform1i(pb.u.uT, 3);
-    gl.uniform2f(pb.u.uOff, offX, offY);
-    gl.uniform1f(pb.u.uK, k);
-    gl.uniform2f(pb.u.uTex, lay.W, lay.H);
     gl.bindVertexArray(this.vaoEmpty);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const ovK = k * TILE_PX / d.ov.opx;
+    if (fade < 1 || missing.length) this.blitLayer(d.ovTex, offX, offY, ovK, d.ov.w, d.ov.h, 1, iw, ih);
+    if (fade > 0) for (const c of visible) this.blitLayer(c.tex, offX + c.cx * CPX * k, offY + c.cy * CPX * k, k, CPX, CPX, fade, iw, ih);
     // dynamic objects
     const oi = this.objInst;
     oi.n = 0;
     const fr = this.sheet.frames;
-    for (const { o, done, attach } of f.objs) {
-      const key = objectKey(o, done, this.sheet);
-      if (!key) continue;
-      const fl = fr.get(key)!;
-      const frm = fl[0];
-      const i = o.y * f.dim.w + o.x;
-      const L = lay.liftPx[i] ?? 0;
-      const tint = o.kind === 'npc' ? hexRgb(npcColor(o)).map((v) => v / 255) : o.kind === 'gate' && o.gate === 'guard' ? [0.85, 0.45, 0.2] : [1, 1, 1];
-      const dy = attach && wallStyle(o, key) ? -13 : 0;
-      const dx = o.kind === 'gate' && o.gate === 'guard' && done ? 9 : 0;
-      oi.push(o.x * TILE_PX - frm.ox + dx, lay.top + o.y * TILE_PX - L - frm.oy + dy, frm.w, frm.h, frm.x, frm.y, -1, -1, L / TILE_PX, o.x, o.y, 64, tint[0], tint[1], tint[2], 1);
+    if (s >= 4) {
+      for (const { o, done, attach } of f.objs) {
+        const key = objectKey(o, done, this.sheet);
+        if (!key) continue;
+        const frm = fr.get(key)![0];
+        const i = o.y * f.dim.w + o.x;
+        const L = lay.liftPx[i] ?? 0;
+        const tint = o.kind === 'npc' ? hexRgb(npcColor(o)).map((v) => v / 255) : o.kind === 'gate' && o.gate === 'guard' ? [0.85, 0.45, 0.2] : [1, 1, 1];
+        const dy = attach && wallStyle(o, key) ? -13 : 0;
+        const dx = o.kind === 'gate' && o.gate === 'guard' && done ? 9 : 0;
+        oi.push(o.x * TILE_PX - frm.ox + dx, lay.top + o.y * TILE_PX - L - frm.oy + dy, frm.w, frm.h, frm.x, frm.y, -1, -1, L / TILE_PX, o.x, o.y, 64, tint[0], tint[1], tint[2], 1);
+      }
+      this.drawSprites(oi, k, offX, offY, iw, ih);
     }
-    this.drawSprites(oi, k, offX, offY, iw, ih);
 
     // ---- pass B: lighting
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.litFbo);
@@ -373,7 +571,7 @@ export class LitRenderer {
     gl.activeTexture(gl.TEXTURE4);
     gl.bindTexture(gl.TEXTURE_2D, d.mask);
     gl.activeTexture(gl.TEXTURE5);
-    gl.bindTexture(gl.TEXTURE_2D, gd ? gd.tex[0] : d.tex[0]);
+    gl.bindTexture(gl.TEXTURE_2D, gd ? gd.ovTex[0] : d.ovTex[0]);
     gl.uniform1i(pl.u.gA, 0); gl.uniform1i(pl.u.gN, 1); gl.uniform1i(pl.u.gE, 2); gl.uniform1i(pl.u.gT, 3);
     gl.uniform1i(pl.u.uMask, 4); gl.uniform1i(pl.u.uGhost, 5);
     gl.uniform2f(pl.u.uOff, offX, offY);
@@ -393,25 +591,37 @@ export class LitRenderer {
     gl.uniform1f(pl.u.uFresh, f.fresh);
     gl.uniform1f(pl.u.uHdr, this.hdr ? 1 : 0.5);
     gl.uniform1f(pl.u.uRock, mood.rock);
-    gl.uniform1f(pl.u.uShadowLen, mood.shadowLen);
-    gl.uniform4f(pl.u.uGhost0, gd ? 1 : 0, gd ? gd.lay.top : 0, gd ? gd.lay.W : 1, gd ? gd.lay.H : 1);
-    // lights: cull to view, keep the strongest MAX_LIGHTS
-    const vx0 = f.cam.x - f.cssW / 2 / s, vx1 = f.cam.x + f.cssW / 2 / s;
-    const vy0 = f.cam.y - f.cssH / 2 / s, vy1 = f.cam.y + f.cssH / 2 / s + 2;
-    const cand: [Light, number][] = [];
-    const consider = (l: Light) => {
-      if (l.x + l.r < vx0 || l.x - l.r > vx1 || l.y - l.z + l.r < vy0 || l.y - l.z - l.r > vy1) return;
-      const dc = Math.hypot(l.x - f.cam.x, l.y - f.cam.y) / Math.max(4, (vx1 - vx0) * 0.5);
-      cand.push([l, (l.c[0] + l.c[1] + l.c[2]) * l.r / (1 + dc * dc)]);
-    };
-    for (const l of d.lights) consider(l);
-    for (const l of f.lights) consider(l);
-    cand.sort((a, b) => b[1] - a[1]);
-    const nl = Math.min(MAX_LIGHTS, cand.length);
-    for (let i = 0; i < nl; i++) {
-      const l = cand[i][0];
-      this.lp.set([l.x, l.y, l.z, l.r], i * 4);
-      this.lc.set([l.c[0], l.c[1], l.c[2], l.pulse], i * 4);
+    gl.uniform1f(pl.u.uShadowLen, s >= 4 ? mood.shadowLen : 0);
+    if (gd) {
+      // blur level: about 2 css px of the ghost overview per screen px
+      const gScale = gd.ov.opx / TILE_PX;
+      const lod = Math.max(0, Math.log2(Math.max(1, (gd.ov.opx * 3) / Math.max(0.5, s / 4))));
+      gl.uniform4f(pl.u.uGhost0, 1, gd.lay.top, gScale, lod);
+      gl.uniform2f(pl.u.uGhostSize, gd.ov.w, gd.ov.h);
+    } else {
+      gl.uniform4f(pl.u.uGhost0, 0, 0, 1, 0);
+      gl.uniform2f(pl.u.uGhostSize, 1, 1);
+    }
+    // lights: spatial-grid query around the view, keep the strongest MAX_LIGHTS
+    let nl = 0;
+    if (s >= 5) {
+      const wx0 = vx0 / TILE_PX, wx1 = vx1 / TILE_PX, wy0 = (vy0 - lay.top) / TILE_PX, wy1 = (vy1 - lay.top) / TILE_PX + 2;
+      const ccx = (wx0 + wx1) / 2, ccy = (wy0 + wy1) / 2, half = Math.max(4, (wx1 - wx0) * 0.5);
+      const cand: [Light, number][] = [];
+      const consider = (l: Light) => {
+        if (l.x + l.r < wx0 || l.x - l.r > wx1 || l.y - l.z + l.r < wy0 || l.y - l.z - l.r > wy1) return;
+        const dc = Math.hypot(l.x - ccx, l.y - ccy) / half;
+        cand.push([l, (l.c[0] + l.c[1] + l.c[2]) * l.r / (1 + dc * dc)]);
+      };
+      d.lights.query(wx0, wy0, wx1, wy1, consider);
+      for (const l of f.lights) consider(l);
+      cand.sort((a, b) => b[1] - a[1]);
+      nl = Math.min(MAX_LIGHTS, cand.length);
+      for (let i = 0; i < nl; i++) {
+        const l = cand[i][0];
+        this.lp.set([l.x, l.y, l.z, l.r], i * 4);
+        this.lc.set([l.c[0], l.c[1], l.c[2], l.pulse], i * 4);
+      }
     }
     gl.uniform4fv(pl.u.uLP, this.lp);
     gl.uniform4fv(pl.u.uLC, this.lc);
@@ -480,9 +690,9 @@ export class LitRenderer {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     };
     blur(0, 1, 1, 0);
-    blur(1, 0, 0, 1); // tight glow in 0
+    blur(1, 0, 0, 1);
     blur(0, 1, 2.5, 0);
-    blur(1, 2, 0, 2.5); // wide glow in 2
+    blur(1, 2, 0, 2.5);
 
     // ---- composite to the canvas
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -515,6 +725,12 @@ export class LitRenderer {
       if (e && !gl.isContextLost()) { console.warn('GL error 0x' + e.toString(16)); this.errLogged = true; }
     }
     litStats.lastFrameMs = performance.now() - t0;
+    litStats.worstFrameMs = Math.max(litStats.worstFrameMs, litStats.lastFrameMs);
+  }
+
+  /** world-tile bounds of the static lights / tiles: for tests */
+  stats() {
+    return { dims: this.dims.size, chunks: this.chunkCount(), ...glStats };
   }
 
   destroy() {

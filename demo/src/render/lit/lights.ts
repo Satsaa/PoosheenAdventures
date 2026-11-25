@@ -3,7 +3,7 @@ import { D, T, type Dimension, type MapObject, type World } from '../../core/typ
 import { CRYSTAL_LIGHT } from '../bake/models';
 import type { AssetSheet } from '../bake/sheet';
 import { TILE_PX } from '../bake/sheet';
-import { type Layout, type StaticOut, variant } from './compose';
+import { type Layout, variant } from './compose';
 import { npcColor } from '../objects';
 import { hexRgb } from '../util';
 
@@ -17,9 +17,30 @@ export interface Light {
   pulse: number;
 }
 
+/** Uniform grid over a dimension so huge worlds only look at the lights near the view. */
+export class LightGrid {
+  private cells = new Map<number, Light[]>();
+  constructor(lights: Light[], readonly cell = 16) {
+    for (const l of lights) {
+      const k = Math.floor(l.x / cell) + Math.floor(l.y / cell) * 65536;
+      let c = this.cells.get(k);
+      if (!c) this.cells.set(k, (c = []));
+      c.push(l);
+    }
+  }
+  query(x0: number, y0: number, x1: number, y1: number, cb: (l: Light) => void) {
+    const c = this.cell, m = 6; // lights reach a few tiles beyond their cell
+    for (let cy = Math.floor((y0 - m) / c); cy <= Math.floor((y1 + m) / c); cy++)
+      for (let cx = Math.floor((x0 - m) / c); cx <= Math.floor((x1 + m) / c); cx++) {
+        const l = this.cells.get(cx + cy * 65536);
+        if (l) for (const x of l) cb(x);
+      }
+  }
+}
+
 const L = (x: number, y: number, z: number, r: number, c: [number, number, number], pulse = 0): Light => ({ x, y, z, r, c, pulse });
 
-export function staticLights(dim: Dimension, lay: Layout, st: StaticOut, sheet: AssetSheet, seed: number): Light[] {
+export function staticLights(dim: Dimension, lay: Layout, st: { torches: [number, number, number][]; windows: [number, number, number][] }, sheet: AssetSheet, seed: number): Light[] {
   const out: Light[] = [];
   const { w, h, ground, deco } = dim;
   const under = dim.kind === 'underworld' || dim.kind === 'interior';
@@ -146,7 +167,7 @@ export function moodFor(world: World | null, dim: Dimension): Mood {
   };
   switch (dim.kind) {
     case 'underworld':
-      return { ...base, keyDir: norm([-0.3, -0.2, 0.9]), keyCol: [0.22, 0.18, 0.4], ambTop: [0.2, 0.16, 0.32], ambBot: [0.07, 0.05, 0.11],
+      return { ...base, keyDir: norm([-0.3, -0.2, 0.9]), keyCol: [0.3, 0.24, 0.5], ambTop: [0.27, 0.22, 0.42], ambBot: [0.1, 0.07, 0.15],
         bg0: [0.015, 0.01, 0.025], bg1: [0.03, 0.02, 0.045], rock: 1, shadowLen: 0, bloom: 1.25, bloomThr: 0.55, sat: 1.25, shadowTint: [0.35, 0.1, 0.55], haze: 0, highTint: [1.05, 0.98, 1.0] };
     case 'sky':
       return { ...base, keyDir: norm([-0.55, -0.15, 0.82]), keyCol: [1.25, 1.02, 0.78], ambTop: [0.5, 0.6, 0.85], ambBot: [0.22, 0.26, 0.42],

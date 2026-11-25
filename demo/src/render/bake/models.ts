@@ -216,12 +216,12 @@ export function houseModel(depth: number, col: number): Model {
   const wallH = 0.72, roofH = 0.35 + depth * 0.2;
   const cy = depth / 2;
   return model([
-    { ramp: R.wall }, { ramp: R.timber }, { ramp: R.roof }, { ramp: R.glass, emit: [255, 170, 60] }, { ramp: R.rock },
+    { ramp: R.wall }, { ramp: R.timber }, { ramp: R.roof }, { ramp: R.glass, emit: [150, 95, 35] }, { ramp: R.rock },
   ], [
     [(x, y, z) => box(x, y, z, x0 + W / 2, cy + 0.02, wallH / 2, W / 2 - 0.08, depth / 2 - 0.1, wallH / 2), 0],
     [(x, y, z) => Math.max(box(x, y, z, x0 + W / 2, cy + 0.02, wallH / 2, W / 2 - 0.06, depth / 2 - 0.08, wallH / 2 + 0.005),
       -box(x, y, z, x0 + W / 2, cy + 0.02, wallH / 2 + 0.02, W / 2 - 0.13, depth / 2 - 0.02, wallH / 2 - 0.06)), 1],
-    [(x, y, z) => roofX(x, y, z, ox0 - 0.04, ox1 + 0.04, cy, depth / 2 + 0.04, wallH - 0.02, roofH), 2],
+    [(x, y, z) => roofX(x, y, z, ox0 - 0.04, ox1 + 0.04, cy, depth / 2 + 0.04, wallH - 0.02, roofH) + Math.max(0, Math.sin(z * 55)) * 0.012 + (Math.abs(y - cy) < 0.035 ? -0.02 : 0), 2],
     // windows on the south wall, one per tile except where a door may sit (middle)
     [(x, y, z) => {
       let dd = 1e9;
