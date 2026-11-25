@@ -330,7 +330,7 @@ function priceLine(w: World, id: ItemId): { key: string; nodes: Node[] } {
   const base = s.items.rupees?.cap ?? 99;
   const big = s.items.wallet?.cap ?? 300;
   const list: [string, number, number, string][] = id === 'rupees'
-    ? [['Bombs', s.priceBombs, base, 'base wallet'], ['Arrows', s.priceArrows, base, 'base wallet'], ...(s.merchant ? [['Peddler heart', s.pricePeddlerHeart, base, 'base wallet'] as [string, number, number, string]] : [])]
+    ? [['Bombs', s.priceBombs, base, 'base wallet'], ['Arrows', s.priceArrows, base, 'base wallet'], ...(s.merchant && w.npcs.some((n) => n.id === 'merchant') ? [['Peddler heart', s.pricePeddlerHeart, base, 'base wallet'] as [string, number, number, string]] : [])]
     : [['Shop heart', s.priceHeart, big, 'Big Wallet']];
   const key = JSON.stringify(list);
   const nodes: Node[] = [h('span', { class: 'pa-tf-k' }, 'Prices')];

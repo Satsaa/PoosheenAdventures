@@ -86,14 +86,17 @@ export function createGraphTab(): TabView {
       });
       const minY = Math.min(...anchors.map((a) => a.y));
       const maxY = Math.max(...anchors.map((a) => a.y));
+      // panels are tall and narrow: give each band a height that grows with its region count
+      const span = Math.max(1, (maxY - minY) * scale);
+      const stretch = Math.max(1.2, Math.min(3, (60 + regions.length * 26) / span, Y_STRETCH * 1.6));
       const head = 18;
       const padTop = 26; // satellites sit above nodes
       const padBot = 26; // labels sit below nodes
-      const band: Band = { world: w, dim: d, top: y, h: head + padTop + (maxY - minY) * scale * Y_STRETCH + padBot };
+      const band: Band = { world: w, dim: d, top: y, h: head + padTop + (maxY - minY) * scale * stretch + padBot };
       bands.push(band);
       for (const a of anchors) {
         const nx = MX + a.x * scale;
-        const ny = y + head + padTop + (a.y - minY) * scale * Y_STRETCH;
+        const ny = y + head + padTop + (a.y - minY) * scale * stretch;
         const places = a.r.children.filter((c) => c.kind === 'place');
         const angles = [-90, -45, -135, -15, -165, 20, 160, 55, 125];
         const sats: Sat[] = places.map((p, i) => {
