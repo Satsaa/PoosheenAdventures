@@ -34,6 +34,8 @@ export const MAT = {
   FOLIAGE: 5,
   /** albedo is multiplied by the instance tint (NPC clothes) */
   TINT: 6,
+  /** falling water: animated streaks scrolling down */
+  FALL: 7,
 } as const;
 
 export interface Frame {

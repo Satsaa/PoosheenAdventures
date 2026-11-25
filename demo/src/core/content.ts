@@ -10,7 +10,7 @@ export const BASE_ITEMS: ItemDef[] = [
   def('glove', 'Lifting Skill', 'skill', '✊', '#e0a35c'),
   def('bombBag', 'Bomb Bag', 'tool', '◉', '#6f8fd8'),
   def('bow', 'Bow', 'tool', '➶', '#c9a36a'),
-  def('flippers', 'Swim Skill', 'skill', '≈', '#4fc4d8'),
+  def('flippers', 'Swim Gear', 'tool', '≈', '#4fc4d8'),
   def('hookshot', 'Hookshot', 'tool', '⚓', '#b9c2cc'),
   def('lantern', 'Lantern', 'tool', '✦', '#ffcf5a'),
   def('wallet', 'Big Wallet', 'tool', '▣', '#7ed87e'),

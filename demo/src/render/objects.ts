@@ -276,6 +276,44 @@ export function drawObject(c: C, o: MapObject, x: number, y: number, s: number, 
   }
 }
 
+function drawWaterfall(c: C, o: MapObject, x: number, y: number, s: number, t: number) {
+  const dir = o.dir || 's';
+  const foam = (fx: number, fy: number, n: number, horiz: boolean) => {
+    for (let k = 0; k < n; k++) {
+      const ph = Math.sin(t * 4 + k * 1.7) * s * 0.02;
+      const px = horiz ? fx - s * 0.42 + (k * s * 0.84) / (n - 1) : fx + ph;
+      const py = horiz ? fy + ph : fy - s * 0.42 + (k * s * 0.84) / (n - 1);
+      circle(c, px, py, s * (0.09 + (k % 2) * 0.03), k % 2 ? 'rgba(235,248,255,0.9)' : 'rgba(200,230,245,0.85)');
+    }
+  };
+  if (dir === 'e' || dir === 'w') {
+    // side-on cascade over the step on the upstream edge
+    const ex = x + (dir === 'e' ? -s * 0.45 : s * 0.45);
+    const g = c.createLinearGradient(0, y - s * 0.55, 0, y + s * 0.3);
+    g.addColorStop(0, '#7cc8ee');
+    g.addColorStop(1, '#2a78b0');
+    c.fillStyle = g;
+    c.fillRect(ex - s * 0.07, y - s * 0.5, s * 0.14, s * 0.9);
+    c.fillStyle = 'rgba(255,255,255,0.7)';
+    for (let k = 0; k < 3; k++) {
+      const v = ((t * 1.4 + k / 3) % 1);
+      c.fillRect(ex - s * 0.05 + k * s * 0.04, y - s * 0.5 + v * s * 0.8, Math.max(1, s * 0.03), s * 0.12);
+    }
+    foam(ex + (dir === 'e' ? s * 0.12 : -s * 0.12), y, 4, false);
+  } else foam(x, y + (dir === 'n' ? s * 0.42 : -s * 0.42), 5, true);
+  if (o.style === 'ladder') {
+    const lx = dir === 'e' || dir === 'w' ? x : x + s * 0.36;
+    const ly0 = dir === 's' ? y - s * 0.95 : y - s * 0.5, ly1 = dir === 's' ? y - s * 0.4 : y + s * 0.1;
+    c.strokeStyle = '#2f6e2a';
+    c.lineWidth = Math.max(1.5, s * 0.05);
+    c.beginPath();
+    c.moveTo(lx - s * 0.09, ly0); c.lineTo(lx - s * 0.09, ly1);
+    c.moveTo(lx + s * 0.09, ly0); c.lineTo(lx + s * 0.09, ly1);
+    for (let k = 0; k < 4; k++) { const yy = ly0 + ((k + 0.5) * (ly1 - ly0)) / 4; c.moveTo(lx - s * 0.09, yy); c.lineTo(lx + s * 0.09, yy); }
+    c.stroke();
+  }
+}
+
 function drawLedge(c: C, dir: string, x: number, y: number, s: number, t: number) {
   const a = dir === 'n' ? -Math.PI / 2 : dir === 'e' ? 0 : dir === 'w' ? Math.PI : Math.PI / 2;
   const k = (t * 1.2) % 1;
@@ -431,6 +469,7 @@ function drawEntrance(c: C, o: MapObject, style: string, x: number, y: number, s
 
 function drawGate(c: C, o: MapObject, x: number, y: number, s: number, t: number, done: boolean) {
   const g = o.gate || 'open';
+  if ((g as string) === 'waterfall') { drawWaterfall(c, o, x, y, s, t); return; }
   switch (g) {
     case 'open':
       return;

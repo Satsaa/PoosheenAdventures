@@ -26,8 +26,8 @@ export const PAL: Record<number, GroundPal> = {
   [T.DIRT]: { top: ['#8e5f3a', '#9a6a42', '#a6764b'], dk: '#6a4227', lt: '#bd8f60', face: EARTH, lip: '#8a5c38', prio: 4 },
   [T.STONE]: { top: ['#7f848e', '#8b909a', '#989ca5'], dk: '#5c606a', lt: '#b8bcc4', face: ['#6a6d78', '#2f2f3a', '#45464f'], prio: 3.5 },
   [T.SNOW]: { top: ['#dde8f4', '#e8f0f9', '#f5f9fd'], dk: '#b4c8e2', lt: '#ffffff', face: ['#8aa0c2', '#3c4a6a', '#5d7095'], lip: '#eef5fc', prio: 7 },
-  [T.WATER]: { top: ['#2a7fbf', '#2f8bcb', '#3596d4'], dk: '#1f6aa6', lt: '#8fd3f7', face: ['#2c78b4', '#123a66', '#1b5288'], prio: 1, liquid: true },
-  [T.DEEP]: { top: ['#18508e', '#1b5797', '#1e5d9e'], dk: '#123f75', lt: '#4c8fcf', face: ['#174a85', '#0a2140', '#0f3360'], prio: 0, liquid: true },
+  [T.WATER]: { top: ['#3592c8', '#3c9fd2', '#45abda'], dk: '#2a7fb4', lt: '#a6e2fa', face: ['#2c78b4', '#123a66', '#1b5288'], prio: 1, liquid: true },
+  [T.DEEP]: { top: ['#0e3466', '#113b72', '#14417a'], dk: '#0a2a55', lt: '#dbe9f5', face: ['#174a85', '#0a2140', '#0f3360'], prio: 0, liquid: true },
   [T.FLOOR]: { top: ['#9c8263', '#a68b6b', '#b09574'], dk: '#6e5a43', lt: '#c8ad89', face: ['#5c4838', '#231a14', '#3a2d22'], prio: -1 },
   [T.WALL]: { top: ['#857f9a', '#8e88a3', '#9791ac'], dk: '#5e5872', lt: '#c8c3da', face: ['#4e4860', '#15121c', '#25202f'], prio: -1 },
   [T.CAVE]: { top: ['#37313f', '#3e3747', '#463e50'], dk: '#29232f', lt: '#625a70', face: ['#2e2838', '#0e0b12', '#1c1724'], prio: 3 },
@@ -77,4 +77,5 @@ export const GATE_COL: Record<string, string> = {
   ledge: '#ffe08a',
   portal: '#b06cff',
   open: '#ffffff',
+  waterfall: '#8fd3f7',
 };

@@ -57,7 +57,7 @@ export function addNpcs(ctx: Ctx, rng: Rng, plan: Plan, regions: RegionBP[], sta
   // --- Trade chain: three static NPCs, an optional quest whose reward unlocks the pricey shop shelf.
   if (S.tradeQuest) {
   const names = rng.shuffle(NPC_NAMES.filter((n) => !ctx.npcs.some((p) => p.name === n))).slice(0, 3);
-  const spots = rng.shuffle(regions).slice(0, 3);
+  const spots = rng.shuffle(regions.filter((r) => !r.barren)).slice(0, 3);
   const t1 = ctx.item({ id: 'quest:trade1', name: 'Yarn Ball', kind: 'quest', icon: '◍', color: '#ff9fd0' });
   const t2 = ctx.item({ id: 'quest:trade2', name: 'Knitted Hat', kind: 'quest', icon: '◓', color: '#ff9fd0' });
   const gives: [ItemId, Req, string, string][] = [

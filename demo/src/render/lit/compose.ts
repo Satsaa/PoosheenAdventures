@@ -134,6 +134,14 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
           inst.push(px, py, P, P, nf.x, nf.y, mv.x, mv.y, L / P, x, y, flags);
         }
       }
+      // foam where a waterfall lands (the water tile north of this one is higher)
+      if (g === T.WATER && gAt(x, y - 1) === T.WATER && lAt(x, y - 1) > L) {
+        const fm = get('fm:0');
+        if (fm) {
+          const mv = fm[variant(x, y, seed + 21, fm.length)];
+          inst.push(px, py, P, P, mv.x, mv.y, -1, -1, L / P, x, y, FLAG.TINTALL, 1.1, 1.15, 1.2, 1);
+        }
+      }
       // cliff face below
       const LS = lAt(x, y + 1);
       if (LS < L) {
@@ -170,6 +178,13 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
         if (d === D.MUSHROOM && under) key += ':glow';
         const dl = get(key);
         if (dl) inst.sprite(dl[variant(x, y, seed + d * 7, dl.length)], x, y, x, y, L, top);
+      }
+      // bridge rails on plank tiles spanning water
+      if (ground[i] === T.PLANK && dim.kind !== 'interior') {
+        const wet = (xx: number, yy: number) => { const gg = gAt(xx, yy); return gg === T.WATER || gg === T.DEEP || gg === T.VOID; };
+        const ns = wet(x - 1, y) && wet(x + 1, y), ew = wet(x, y - 1) && wet(x, y + 1);
+        const rl = ns || ew ? get(ns ? 'rail:ns' : 'rail:ew') : null;
+        if (rl) inst.sprite(rl[0], x, y, x, y, L, top);
       }
       // wall torches on south-facing interior walls
       if (dim.kind === 'interior' && isWallG(ground[i]) && y + 1 < h && !isWallG(ground[i + w]) && ground[i + w] !== T.VOID && (x * 7 + y * 3) % 5 === 0) {
@@ -232,7 +247,8 @@ export function objectKey(o: MapObject, done: boolean, sheet: AssetSheet): strin
     case 'gate': {
       const g = o.gate || 'open';
       if (g === 'open') return null;
-      if (g === 'ledge') k = 'o:ledge:' + (o.dir || 's');
+      if ((g as string) === 'waterfall') k = 'o:wf:' + (o.dir || 's') + (o.style === 'ladder' ? ':ladder' : '');
+      else if (g === 'ledge') k = 'o:ledge:' + (o.dir || 's');
       else if (g === 'guard') k = 'o:guard';
       else if (g === 'stairs') k = 'o:ent:stairs-down';
       else k = 'o:gate:' + g;

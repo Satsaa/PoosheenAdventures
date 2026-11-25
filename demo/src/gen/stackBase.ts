@@ -3,7 +3,7 @@
 import { D, T, type Dimension, type LocId } from '../core/types';
 import { Rng, childSeed, valueNoise } from '../core/rng';
 import type { StackBP } from './blueprint';
-import { SH, SW } from './spatial';
+import { SH, SW, lineKey } from './spatial';
 
 export interface BiomeStyle {
   ground: number;
@@ -20,11 +20,11 @@ export const STYLES: Record<string, BiomeStyle> = {
   plains: { ground: T.GRASS, rim: [D.TREE], solid: [D.TREE, D.ROCK], soft: [D.TUFT, D.FLOWER, D.FLOWER], density: 0.025 },
   forest: { ground: T.GRASS, rim: [D.TREE, D.PINE], solid: [D.TREE, D.PINE], soft: [D.TUFT, D.MUSHROOM], density: 0.08 },
   mountain: { ground: T.STONE, rim: [D.ROCK], solid: [D.ROCK], soft: [D.TUFT], density: 0.05 },
-  lake: { ground: T.SWAMP, rim: [], rimGround: T.WATER, solid: [D.REED], soft: [D.REED, D.TUFT], density: 0.03, pond: T.WATER },
+  lake: { ground: T.SWAMP, rim: [], rimGround: T.DEEP, solid: [D.REED], soft: [D.REED, D.TUFT], density: 0.03, pond: T.WATER },
   desert: { ground: T.SAND, rim: [D.ROCK, D.CACTUS], solid: [D.CACTUS, D.ROCK], soft: [], density: 0.035 },
   snow: { ground: T.SNOW, rim: [D.PINE], solid: [D.PINE, D.ROCK], soft: [], density: 0.045 },
   badlands: { ground: T.DIRT, rim: [D.ROCK], solid: [D.DEADTREE, D.ROCK], soft: [D.TUFT], density: 0.045 },
-  beach: { ground: T.SAND, rim: [], rimGround: T.WATER, solid: [D.PALM, D.ROCK], soft: [D.TUFT], density: 0.03 },
+  beach: { ground: T.SAND, rim: [], rimGround: T.DEEP, solid: [D.PALM, D.ROCK], soft: [D.TUFT], density: 0.03 },
   cavern: { ground: T.CAVE, rim: [], rimGround: T.CAVEWALL, solid: [D.STALAG], soft: [D.MUSHROOM], density: 0.04 },
   flooded: { ground: T.CAVE, rim: [], rimGround: T.CAVEWALL, solid: [D.STALAG], soft: [D.MUSHROOM], density: 0.02, pond: T.WATER },
   crystal: { ground: T.CAVE, rim: [], rimGround: T.CAVEWALL, solid: [D.CRYSTAL, D.STALAG], soft: [], density: 0.05 },
@@ -45,6 +45,12 @@ export interface ST {
   scenery: number;
   /** 1 = rim tile (solid edge of a region) */
   border: Uint8Array;
+  /** river stretch per tile (index into segs, +1), 0 = no river. Bridges keep it: water runs under them */
+  river: Int16Array;
+  /** 1 = bridge deck over river water */
+  bridge: Uint8Array;
+  /** every stretch of every river: a new stretch starts at each waterfall */
+  segs: { river: number; seg: number; level: number }[];
   /** 1 = something was placed here or wants this tile kept clear */
   reserved: Uint8Array;
   /** shuffled interior tiles per region */
@@ -59,7 +65,7 @@ export interface ST {
 
 const N8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] as const;
 
-export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wobble: number, scenery: number): ST {
+export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wobble: number, scenery: number, riverWidth = 1): ST {
   const w = gw * SW, h = gh * SH, n = w * h;
   const dim: Dimension = {
     id: bp.id, name: bp.name, kind: bp.kind, w, h, sw: SW, sh: SH, stack: bp.stack,
@@ -68,7 +74,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
   };
   const st: ST = {
     bp, dim, rng: new Rng(childSeed(seed, 'tiles' + bp.id)), w, h, scenery, owner: new Int16Array(n).fill(-1),
-    border: new Uint8Array(n), reserved: new Uint8Array(n), interior: bp.regions.map(() => []),
+    border: new Uint8Array(n), river: new Int16Array(n), bridge: new Uint8Array(n), segs: [], reserved: new Uint8Array(n), interior: bp.regions.map(() => []),
     barriers: new Map(), anchors: new Map(), mouths: bp.regions.map(() => []), problems: [],
   };
   const reg = st.owner;
@@ -76,13 +82,16 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
   // 1. organic region shapes: screens, warped by smooth noise. The warp is the same for every
   //    stacked world, so a cave really lies under the land that owns its entrance.
   const A = wobble;
+  const scr = new Int32Array(n);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const wx = x + (valueNoise(seed, x / 9, y / 9) - 0.5) * 2 * A;
     const wy = y + (valueNoise(seed ^ 0x51ed, x / 9, y / 9) - 0.5) * 2 * A;
     const sx = Math.max(0, Math.min(gw - 1, Math.floor(wx / SW)));
     const sy = Math.max(0, Math.min(gh - 1, Math.floor(wy / SH)));
+    scr[y * w + x] = sy * gw + sx;
     reg[y * w + x] = bp.part.cell[sy * gw + sx];
   }
+  markRivers(st, scr, gw, riverWidth);
 
   // 2. rims: any tile touching another region (or the map edge) is solid
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
@@ -92,6 +101,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
       const nx = x + dx, ny = y + dy;
       if (nx < 0 || ny < 0 || nx >= w || ny >= h || reg[ny * w + nx] !== reg[i]) { st.border[i] = 1; break; }
     }
+    if (st.river[i]) st.border[i] = 1; // water is not land: it bounds the walkable area like a rim does
   }
 
   // 3. each region keeps its largest walkable piece; slivers cut off by the warp become rim
@@ -123,7 +133,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
     if (!st.border[i]) st.interior[reg[i]].push(i);
   }
   bp.regions.forEach((r, k) => {
-    if (st.interior[k].length < 90) st.problems.push(`${r.name} is too small to hold anything`);
+    if (st.interior[k].length < (r.barren ? 6 : 90)) st.problems.push(`${r.name} is too small to hold anything`);
     st.interior[k] = st.rng.shuffle(st.interior[k]);
   });
 
@@ -135,6 +145,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
     const region = bp.regions[r], style = STYLES[region.biome];
     dim.elev[i] = region.elev;
     dim.ground[i] = style.ground;
+    if (st.river[i]) { dim.ground[i] = T.WATER; dim.elev[i] = st.segs[st.river[i] - 1].level; continue; }
     if (!st.border[i]) { dim.solid[i] = 0; continue; }
     if (style.rimGround !== undefined) {
       dim.ground[i] = style.rimGround;
@@ -159,7 +170,7 @@ export function carveOpenings(st: ST): void {
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const path: number[] = [];
         let cx = x + dx, cy = y + dy, ok = true, seenB = false;
-        while (ok && path.length < 9) {
+        while (ok && path.length < 12) {
           if (cx < 1 || cy < 1 || cx >= w - 1 || cy >= h - 1) { ok = false; break; }
           const j = cy * w + cx, rj = regOf[j];
           if (!border[j]) { ok = rj === op.b && path.length >= 2 && seenB && !st.reserved[j]; break; }
@@ -171,7 +182,7 @@ export function carveOpenings(st: ST): void {
           path.push(j);
           cx += dx; cy += dy;
         }
-        if (ok && path.length >= 2 && path.length < 9 && !border[cy * w + cx]) cands.push({ pa: i, pb: cy * w + cx, path, d: dy !== 0 ? (dy > 0 ? 2 : 0) : dx > 0 ? 1 : 3 });
+        if (ok && path.length >= 2 && path.length < 12 && !border[cy * w + cx]) cands.push({ pa: i, pb: cy * w + cx, path, d: dy !== 0 ? (dy > 0 ? 2 : 0) : dx > 0 ? 1 : 3 });
       }
     }
     if (!cands.length) { st.problems.push(`no room for ${op.label} between ${st.bp.regions[op.a].name} and ${st.bp.regions[op.b].name}`); continue; }
@@ -187,7 +198,8 @@ export function carveOpenings(st: ST): void {
       dim.deco[j] = D.NONE;
       dim.region[j] = regOf[j];
       dim.elev[j] = side.elev;
-      dim.ground[j] = op.gate === 'water' ? T.WATER : st.bp.kind === 'sky' ? T.PLANK : st.bp.kind === 'underworld' ? T.CAVE : T.PATH;
+      if (st.river[j]) st.bridge[j] = 1; // a bridge deck: walkers cross above, swimmers pass below
+      dim.ground[j] = op.gate === 'water' ? T.WATER : st.river[j] || st.bp.kind === 'sky' ? T.PLANK : st.bp.kind === 'underworld' ? T.CAVE : T.PATH;
     });
     const gate = c.path[lastA];
     st.barriers.set(gate, op.edgeId);
@@ -207,4 +219,99 @@ export function carveOpenings(st: ST): void {
     st.mouths[op.a].push(c.pa);
     st.mouths[op.b].push(c.pb);
   }
+}
+
+/**
+ * River tiles: every tile that looks across a river line (or a river corner) of the warped screen
+ * grid. The same warp shapes regions, so a river on a region border replaces exactly its rim.
+ */
+function markRivers(st: ST, scr: Int32Array, gw: number, width: number): void {
+  const rivers = st.bp.rivers ?? [];
+  if (!rivers.length) return;
+  const { w, h, river } = st;
+  const cw = gw + 1;
+  const lineAt = new Map<number, number>();
+  const cornerAt = new Map<number, number>();
+  rivers.forEach((r, ri) => {
+    const base = st.segs.length;
+    const count = r.seg[r.seg.length - 1] + 1;
+    for (let k = 0; k < count; k++) st.segs.push({ river: ri, seg: k, level: r.level[r.seg.indexOf(k)] });
+    r.lines.forEach((l, k) => lineAt.set(lineKey(l.a, l.b), base + r.seg[k]));
+    r.corners.forEach((c, k) => cornerAt.set(c, base + r.seg[Math.min(Math.max(k - 1, 0), r.seg.length - 1)]));
+  });
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x, s = scr[i], sx = s % gw, sy = (s / gw) | 0;
+    for (const [dx, dy] of N8) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      const t = scr[ny * w + nx];
+      if (t === s) continue;
+      const tx = t % gw, ty = (t / gw) | 0, ax = Math.abs(tx - sx), ay = Math.abs(ty - sy);
+      const g = ax + ay === 1 ? lineAt.get(lineKey(s, t)) : ax === 1 && ay === 1 ? cornerAt.get(Math.max(sy, ty) * cw + Math.max(sx, tx)) : undefined;
+      if (g !== undefined) { river[i] = g + 1; break; }
+    }
+  }
+  tidyRivers(st);
+  // wider rivers: grow the band, but never up onto land that lies below the water level
+  for (let grow = 1; grow < width; grow++) {
+    const prev = river.slice();
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      if (prev[i] || st.owner[i] < 0) continue;
+      for (const [dx, dy] of N8) {
+        const g = prev[(y + dy) * w + x + dx];
+        if (g && st.bp.regions[st.owner[i]].elev >= st.segs[g - 1].level) { river[i] = g; break; }
+      }
+    }
+  }
+}
+
+/**
+ * Each stretch of river must be one body of water. Stray tiles that the warp cut off join the
+ * neighbouring stretch they touch; water that touches no stretch at all stops being river
+ * (it stays on the map as a still pool).
+ */
+function tidyRivers(st: ST): void {
+  const { w, h, river } = st, n = w * h;
+  for (let pass = 0; pass < 4; pass++) {
+    const comp = new Int32Array(n).fill(-1);
+    const size: number[] = [], seg: number[] = [];
+    for (let s = 0; s < n; s++) {
+      if (!river[s] || comp[s] >= 0) continue;
+      const id = size.length, stack = [s];
+      comp[s] = id;
+      let count = 0;
+      while (stack.length) {
+        const i = stack.pop()!, x = i % w;
+        count++;
+        for (const j of [i - w, x < w - 1 ? i + 1 : -1, i + w, x > 0 ? i - 1 : -1]) {
+          if (j < 0 || j >= n || comp[j] >= 0 || river[j] !== river[s]) continue;
+          comp[j] = id;
+          stack.push(j);
+        }
+      }
+      size.push(count);
+      seg.push(river[s]);
+    }
+    const main = new Map<number, number>();
+    size.forEach((c, id) => { if (!main.has(seg[id]) || c > size[main.get(seg[id])!]) main.set(seg[id], id); });
+    let changed = false;
+    const adopt = new Map<number, number>(); // stray component -> stretch it touches
+    for (let i = 0; i < n; i++) {
+      const c = comp[i];
+      if (c < 0 || main.get(seg[c]) === c || adopt.has(c)) continue;
+      const x = i % w;
+      for (const j of [i - w, x < w - 1 ? i + 1 : -1, i + w, x > 0 ? i - 1 : -1]) {
+        if (j >= 0 && j < n && river[j] && river[j] !== river[i] && main.get(river[j]) === comp[j]) { adopt.set(c, river[j]); break; }
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      const c = comp[i];
+      if (c < 0 || main.get(seg[c]) === c) continue;
+      river[i] = adopt.get(c) ?? 0;
+      changed = true;
+    }
+    if (!changed) break;
+  }
+  void h;
 }

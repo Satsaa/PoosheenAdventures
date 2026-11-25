@@ -9,7 +9,7 @@ import { makePlan, type Plan } from './plan';
 import { buildStack, localSource, placeItem } from './regions';
 import { singleRoom } from './dungeon';
 import { addNpcs } from './npcs';
-import { growRegions, type Partition } from './spatial';
+import { growRegions, splitByRivers, traceRivers, type Partition } from './spatial';
 import { oneWaySafe, requiredTable } from './validate';
 import type { GenSettings } from '../core/settings';
 
@@ -43,16 +43,42 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   const plan = makePlan(new Rng(childSeed(seed, 'plan')), ctx);
 
   // 1. worlds: partition space first
-  const part = growRegions(new Rng(childSeed(seed, 'over')), GW, GH, S.regions);
-  const entryRegion = part.cell[Math.max(0, GH - 2) * GW + Math.max(0, (GW >> 1) - 1)];
+  const base = growRegions(new Rng(childSeed(seed, 'over')), GW, GH, S.regions);
+  const startScreen = Math.max(0, GH - 2) * GW + Math.max(0, (GW >> 1) - 1);
+  const baseEntry = base.cell[startScreen];
   let others = rng.shuffle(BIOMES.filter((b) => b.id !== 'plains'));
   const usedNames = new Set<string>();
-  const themes = part.regions.map((_, i) => {
+  const baseThemes = base.regions.map((_, i) => {
     if (!others.length) others = rng.shuffle(BIOMES.filter((b) => b.id !== 'plains'));
-    const b = i === entryRegion ? BIOMES[0] : others.pop()!;
+    const b = i === baseEntry ? BIOMES[0] : others.pop()!;
     const name = rng.shuffle(b.name).find((n) => !usedNames.has(n)) ?? `${b.name[0]} ${i}`;
     usedNames.add(name);
     return { biome: b.id, elev: S.cliffs ? rng.pick(b.elev) : 1, name, color: b.color };
+  });
+  // rivers flow downhill over this land; a region cut in two by one becomes two banks
+  // (a course that would leave a bank too small to hold anything is not taken; wider rivers need wider banks)
+  const minBank = 1 + S.riverWidth;
+  const roomyBanks = (rs: Parameters<typeof splitByRivers>[1]) => {
+    const cut = splitByRivers(base, rs);
+    return cut.part.regions.every((screens, i) => screens.length >= Math.min(minBank, base.regions[cut.origin[i]].length));
+  };
+  const rivers = S.rivers > 0 ? traceRivers(new Rng(childSeed(seed, 'rivers')), base, (r) => baseThemes[r].elev, S.rivers, roomyBanks) : [];
+  const { part, origin } = splitByRivers(base, rivers);
+  const entryRegion = part.cell[startScreen];
+  // a split region's parts are named after where they lie: "north bank", "east bank", ...
+  const centre = (screens: number[]) => ({ x: screens.reduce((a, c) => a + (c % GW), 0) / screens.length, y: screens.reduce((a, c) => a + ((c / GW) | 0), 0) / screens.length });
+  const taken = new Set<string>();
+  const themes = origin.map((o, i) => {
+    const t = baseThemes[o];
+    const parts = origin.filter((x) => x === o).length;
+    if (parts === 1 || i === entryRegion) { taken.add(t.name); return t; }
+    const whole = centre(base.regions[o]), mine = centre(part.regions[i]);
+    const dx = mine.x - whole.x, dy = mine.y - whole.y;
+    const side = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'east' : 'west') : dy > 0 ? 'south' : 'north';
+    let name = `${t.name}, ${side} bank`;
+    for (let k = 2; taken.has(name); k++) name = `${t.name}, ${side} bank ${k}`;
+    taken.add(name);
+    return { ...t, name };
   });
   const game = hnode('game', 'game', 'Poosheen Adventures', seed);
 
@@ -95,11 +121,12 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
 
   const over = buildStack(ctx, {
     id: 'over', kind: 'overworld', name: 'Overworld', stack: 0, part, seed: childSeed(seed, 'overw'), payloads: plan.over,
-    entryRegion, entryCaps: [], entryPayloads: plan.gifts, theme: (i) => themes[i], onPortal,
+    entryRegion, entryCaps: [], entryPayloads: plan.gifts, theme: (i) => themes[i], onPortal, rivers,
   });
   game.children = ctx.stacks.map((s) => s.hnode);
   const start = over.regions[entryRegion];
   const regions = ctx.stacks.flatMap((s) => s.regions);
+  const roomy = regions.filter((r) => !r.barren);
 
   // 3. the village: spawn, shop, and a rupee source that needs nothing
   start.feats.push({ f: 'spot', obj: { id: 'o.start', kind: 'start', label: 'Home (start)' } });
@@ -119,7 +146,7 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   start.hnode.children.push(shop.node);
 
   // 4. optional secrets: heart pieces behind ANY tool, so later tools reward backtracking
-  for (const r of regions) {
+  for (const r of roomy) {
     const frng = new Rng(childSeed(r.hnode.seed, 'filler'));
     if (frng.chance(S.secrets)) placeItem(ctx, frng, r, 'heart', frng.shuffle(plan.tools).slice(0, 3), false);
     if (r !== start && frng.chance(0.4)) localSource(ctx, r, 'rupees');
@@ -131,10 +158,10 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   for (const t of S.everyToolUsed ? plan.tools : []) {
     const spent = GATES[t].spends;
     if (asked.has(t) || (spent && asked.has(spent))) continue;
-    placeItem(ctx, drng, drng.pick(regions), 'heart', [t], false, true);
+    placeItem(ctx, drng, drng.pick(roomy), 'heart', [t], false, true);
   }
   // without the trade chain the wallet would not exist; hide it in a chest instead
-  if (!S.tradeQuest) placeItem(ctx, drng, drng.pick(regions), 'wallet', drng.shuffle(plan.tools).slice(0, 2), false);
+  if (!S.tradeQuest) placeItem(ctx, drng, drng.pick(roomy), 'wallet', drng.shuffle(plan.tools).slice(0, 2), false);
   addNpcs(ctx, new Rng(childSeed(seed, 'npc')), plan, regions, start);
 
   const graph: LogicGraph = {
@@ -182,6 +209,7 @@ function addLoops(ctx: Ctx, rng: Rng, graph: LogicGraph, over: StackBP): void {
       if (!rng.chance(S.extraStairs)) continue;
       const screen = rng.pick(stack.part.regions[r.idx]);
       const top = over.regions[over.part.cell[screen]];
+      if (top.barren) continue;
       const e = ctx.edge(top.id, r.id, NONE, 'portal');
       const down = stack.stack < 0;
       top.feats.push({ f: 'vertical', edgeId: e.id, style: down ? 'stairs-down' : 'beanstalk', label: down ? 'Stairs to the Underworld (shortcut)' : 'Beanstalk (shortcut)', req: NONE, other: r });
@@ -227,7 +255,7 @@ function addLoops(ctx: Ctx, rng: Rng, graph: LogicGraph, over: StackBP): void {
  * Report upward, after loops exist: what each node provides is the union of its children's,
  * and `needs` is recomputed as "any of the ways in", so extra stairs and shortcuts show up.
  */
-function finishTree(n: HNode, ctx: Ctx): ItemId[] {
+export function finishTree(n: HNode, ctx: Ctx): ItemId[] {
   const own = new Set(n.provides);
   for (const l of n.locs) for (const c of ctx.checks) if (c.loc === l) own.add(c.item);
   for (const c of n.children) for (const it of finishTree(c, ctx)) own.add(it);

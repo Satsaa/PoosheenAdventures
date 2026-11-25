@@ -8,6 +8,7 @@ import {
 } from './terrain';
 import { drawObject, drawPin, pinRank, pinColor } from './objects';
 import { Particles } from './particles';
+import { FLOW_VEC, WK, type WaterInfo, computeWater, isWaterfall } from './water';
 import { FlatChunks, type FChunk, type FlatOverview, buildFlatOverview, flatOverviewFog } from './flatChunks';
 import { LitRenderer, type ObjDraw } from './lit/renderer';
 import { type Layout, layout } from './lit/compose';
@@ -78,6 +79,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   const flat = new FlatChunks();
   const flatOv = new Map<DimId, FlatOverview>();
   let regionSize: Int32Array | null = null;
+  const waterCache = new Map<DimId, WaterInfo>();
   let freshT0 = -1;
   let freshPath: Path2D | null = null;
   let sortedObjs: MapObject[] = [];
@@ -252,6 +254,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     lit?.setWorld(w, hashStr(w.seed));
     flat.clear();
     flatOv.clear();
+    waterCache.clear();
     dim = null;
     dr = null;
     hover = null;
@@ -693,20 +696,52 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     const d = dim!, r = dr!;
     const s = cam.s;
     if (s < 7 || reduced) return;
-    const water = new Path2D(), lava = new Path2D(), cloud = new Path2D();
-    let nw = 0, nl = 0, nc = 0;
+    const water = new Path2D(), lava = new Path2D(), cloud = new Path2D(), foam = new Path2D(), fall = new Path2D();
+    let nw = 0, nl = 0, nc = 0, nf = 0;
+    let wi = waterCache.get(d.id);
+    if (!wi) waterCache.set(d.id, (wi = computeWater(d, r.ve)));
     for (let y = v.y0; y <= v.y1; y++) {
       for (let x = v.x0; x <= v.x1; x++) {
         const i = y * d.w + x;
         const g = d.ground[i];
         if (g !== T.WATER && g !== T.DEEP && g !== T.LAVA && g !== T.CLOUD) continue;
+        // waterfall face below a water tile: streaks running down
+        if (g === T.WATER && y + 1 < d.h && r.ve[i + d.w] < r.ve[i] - 0.01) {
+          const ft = sy(y + 1 - r.ve[i] * r.hT), fb = sy(y + 1 - r.ve[i + d.w] * r.hT), fx0 = sx(x);
+          for (let k = 0; k < 3; k++) {
+            const hk = hash2(x, k, 31);
+            const u = (t * (0.9 + hk) + hk * 5) % 1;
+            const yy = ft + (fb - ft) * u, len = (fb - ft) * 0.25;
+            fall.rect(fx0 + s * (0.1 + 0.8 * hk), yy, Math.max(1, s * 0.05), Math.min(len, fb - yy));
+          }
+          nf++;
+        }
         if (y + 1 < d.h && r.ve[i + d.w] > r.ve[i] + 0.01) continue; // hidden behind a cliff
         const h = hash2(x, y, 77);
         const px = sx(x), py = sy(y - r.ve[i] * r.hT);
+        if (g === T.WATER && wi.flow[i]) {
+          // river: short streaks drifting downstream
+          const [fdx, fdy] = FLOW_VEC[wi.flow[i]];
+          const u = (t * 0.6 + h * 3) % 1;
+          const cx = px + s * (0.5 + (fdx ? (u - 0.5) * 0.9 : (h - 0.5) * 0.6)), cy = py + s * (0.5 + (fdy ? (u - 0.5) * 0.9 : (h * 1.7 % 1 - 0.5) * 0.6));
+          water.moveTo(cx, cy);
+          water.lineTo(cx + fdx * s * 0.22, cy + fdy * s * 0.22);
+          nw++;
+          continue;
+        }
+        if (g === T.DEEP || wi.kind[i] === WK.ROUGH) {
+          // rough water: fast, frequent whitecaps
+          const k = Math.sin(t * 2.2 + h * 11);
+          if (k > 0.3) {
+            const fx = px + s * (0.15 + 0.6 * h), fy = py + s * (0.3 + 0.4 * ((h * 5.3) % 1));
+            foam.moveTo(fx + s * 0.1 * k, fy);
+            foam.arc(fx, fy, s * 0.1 * k, Math.PI, 0);
+          }
+        }
         if (g === T.WATER || g === T.DEEP) {
-          const ph = t * 0.45 + h * 9;
+          const ph = t * (g === T.DEEP ? 0.9 : 0.35) + h * 9;
           const k = Math.sin(ph * 2.1);
-          if (k < 0.2) continue;
+          if (k < (g === T.DEEP ? 0 : 0.35)) continue;
           const fx = px + s * (0.15 + 0.5 * ((h * 7.3 + t * 0.08) % 1)), fy = py + s * (0.25 + 0.5 * ((h * 3.1) % 1));
           water.moveTo(fx, fy);
           water.quadraticCurveTo(fx + s * 0.1, fy - s * 0.06 * k, fx + s * 0.22, fy);
@@ -734,6 +769,14 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       ctx.lineCap = 'round';
       ctx.stroke(water);
     }
+    if (nf) {
+      ctx.fillStyle = 'rgba(230,248,255,0.75)';
+      ctx.fill(fall);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'rgba(235,248,255,0.55)';
+    ctx.fill(foam);
+    ctx.globalCompositeOperation = 'lighter';
     if (nl) {
       ctx.fillStyle = 'rgba(255,170,60,0.22)';
       ctx.fill(lava);
@@ -800,7 +843,9 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
         else if (o.kind === 'gate' && (o.gate === 'seal' || o.gate === 'portal') && !done && Math.random() < dt * 5) {
           const a = Math.random() * 6.283;
           particles.add('mote', wx + Math.cos(a) * 0.45, wy + Math.sin(a) * 0.45, { vx: -Math.cos(a) * 0.3, vy: -Math.sin(a) * 0.3 - 0.2, max: 1.2, size: 4, col: o.gate === 'seal' ? 'rgb(255,110,240)' : 'rgb(190,120,255)' });
-        } else if (o.kind === 'start' && Math.random() < dt * 2)
+        } else if (isWaterfall(o) && Math.random() < dt * 7)
+          particles.add('mote', wx + (Math.random() - 0.5) * 0.9, wy - 0.1 - Math.random() * 0.3, { vx: (Math.random() - 0.5) * 0.3, vy: -0.3 - Math.random() * 0.3, max: 1.4, size: 7, col: 'rgb(190,225,250)' });
+        else if (o.kind === 'start' && Math.random() < dt * 2)
           particles.add('mote', wx + (Math.random() - 0.5) * 0.8, wy, { vy: -0.5, max: 1.6, size: 4, col: 'rgb(160,255,200)' });
       }
     }
@@ -925,7 +970,10 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       if (x < -200 || x > W + 200 || y < -50 || y > Hh + 50) continue;
       const sa = size ? smoothstep(2500, 6500, size * cam.s * cam.s) : 1;
       if (sa <= 0.02) continue;
-      const txt = r.name.toUpperCase();
+      const river = r.biome === 'river';
+      ctx.font = river ? `italic 600 ${Math.max(10, fs - 2)}px ${FONT}` : `700 ${fs}px ${FONT}`;
+      (ctx as unknown as { letterSpacing: string }).letterSpacing = river ? '0.5px' : '1.5px';
+      const txt = river ? r.name : r.name.toUpperCase();
       const tw0 = ctx.measureText(txt).width;
       const rc: [number, number, number, number] = [x - tw0 / 2 - 4, y - fs, x + tw0 / 2 + 4, y + fs];
       if (placed.some((p) => p[0] < rc[2] && rc[0] < p[2] && p[1] < rc[3] && rc[1] < p[3])) continue;
@@ -938,7 +986,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       ctx.fillText(txt, x, y);
       const tw = ctx.measureText(txt).width;
       ctx.fillStyle = shade(r.color || '#ffffff', 0.2, 0.9);
-      ctx.fillRect(x - tw * 0.25, y + fs * 0.75, tw * 0.5, 1.5);
+      if (!river) ctx.fillRect(x - tw * 0.25, y + fs * 0.75, tw * 0.5, 1.5);
     }
     ctx.restore();
   }

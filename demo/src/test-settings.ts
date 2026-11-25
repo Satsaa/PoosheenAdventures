@@ -46,7 +46,7 @@ const broke = generateWorld('broke', { priceHeart: 300, maxAttempts: 2, items: {
 const reported = !broke.ok && broke.lints.some((l) => l.id === 'complete' && !l.ok);
 console.log('impossible price reported by the validator:', reported);
 // settings must actually take effect
-const tiny = generateWorld('tiny', { worldW: 5, worldH: 4, regions: 3, underworld: false, sky: false, dungeons: 1, favorQuest: false, tradeQuest: false, merchant: false,
+const tiny = generateWorld('tiny', { worldW: 5, worldH: 4, regions: 3, rivers: 0, underworld: false, sky: false, dungeons: 1, favorQuest: false, tradeQuest: false, merchant: false,
   items: { ...d0.items, bow: { enabled: false }, hookshot: { enabled: false }, sword: { enabled: true, order: 'start', home: 'any' }, lantern: { enabled: true, order: 'start', home: 'any' } } });
 const got0 = tiny.solution.spheres[0].collected.map((c) => c.item);
 const effect = tiny.ok && tiny.dims[0].w === 60 && tiny.dims[0].h === 40 && tiny.dims[0].regions.length === 3 && !tiny.dims.some((d) => d.id === 'under' || d.id === 'sky')

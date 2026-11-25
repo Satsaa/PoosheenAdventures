@@ -175,9 +175,38 @@ void main() {
   vec3 P = vec3(X, Ys + h, h);
   float t = uTime * uMotion;
   vec3 emi = E.rgb * 1.8;
+  int flowC = int(M.b * 255.0 + 0.5), wk = int(M.a * 255.0 + 0.5);
   if (mat == 1) {
     vec2 q = floor(P.xy * 16.0) / 16.0;
-    N = normalize(N + vec3(sin(q.x * 4.7 + t * 1.1) + sin(q.y * 6.1 - t * 1.7 + q.x * 2.3), cos(q.y * 5.3 + t * 1.3) + sin(q.x * 3.9 - t * 0.9), 0.0) * 0.28);
+    if (wk == 2) {
+      // rough deep water: choppy, fast, whitecaps
+      N = normalize(N + vec3(sin(q.x * 7.3 + t * 2.1) + sin(q.y * 9.7 - t * 2.6 + q.x * 3.1), cos(q.y * 8.1 + t * 1.9) + sin(q.x * 6.3 - t * 1.7), 0.0) * 0.45);
+      float cap = sin(q.x * 5.1 + q.y * 2.3 + t * 1.6) * sin(q.y * 4.3 - q.x * 1.7 - t * 1.2);
+      emi += vec3(0.5, 0.58, 0.62) * step(0.86, cap) * 0.5;
+    } else if (flowC > 0) {
+      // river: streaks drifting downstream
+      vec2 fd = flowC == 1 ? vec2(0.0, -1.0) : flowC == 2 ? vec2(1.0, 0.0) : flowC == 3 ? vec2(0.0, 1.0) : vec2(-1.0, 0.0);
+      float along = dot(q, fd), across = dot(q, vec2(-fd.y, fd.x));
+      float lane = floor(across * 5.0);
+      float st = fract(along * 0.9 - t * 0.7 * uMotion + hash(vec2(lane, 1.0)) * 7.0);
+      emi += vec3(0.22, 0.32, 0.38) * smoothstep(0.82, 0.97, st) * step(0.35, hash(vec2(lane, 2.0)));
+      N = normalize(N + vec3(fd * 0.3 * sin(along * 7.0 - t * 3.0), 0.0));
+    } else {
+      // calm: gentle swell
+      N = normalize(N + vec3(sin(q.x * 3.7 + t * 0.6) + sin(q.y * 4.1 - t * 0.8), cos(q.y * 3.3 + t * 0.7), 0.0) * 0.12);
+    }
+    if (uRock > 0.0) {
+      // underground water: soft caustics glow
+      float c = pow(abs(sin(q.x * 3.1 + t * 0.9) * sin(q.y * 2.7 - t * 1.1 + q.x)), 3.0);
+      emi += vec3(0.05, 0.22, 0.3) * (0.4 + c);
+    }
+  } else if (mat == 7) {
+    // falling water: bright streaks scrolling down the face, per texel column
+    float col = floor(dp.x);
+    float r = hash(vec2(col, 3.0));
+    float v = fract(dp.y / 16.0 * 1.4 - t * (1.1 + r) + r * 7.0);
+    emi += vec3(0.45, 0.6, 0.7) * smoothstep(0.7, 0.95, v) * (uMotion > 0.0 ? 1.0 : 0.4) + vec3(0.04, 0.08, 0.12);
+    N = normalize(vec3(0.0, 0.7, 0.7));
   } else if (mat == 2) {
     vec2 q = floor(P.xy * 8.0) / 8.0;
     emi *= 0.75 + 0.35 * sin(t * 1.8 + q.x * 2.1 + q.y * 1.7) + 0.15 * sin(t * 3.7 + q.y * 5.0);
@@ -214,7 +243,7 @@ void main() {
   amb += vec3(0.3, 0.28, 0.34) * isObj;
   vec3 key = uKeyCol * toon(max(nl, 0.0)) * sh;
   vec3 V = vec3(0.0, 0.7071, 0.7071);
-  bool shiny = mat == 1 || mat == 4;
+  bool shiny = mat == 1 || mat == 4 || mat == 7;
   vec3 spec = vec3(0.0);
   if (shiny) {
     vec3 hv = normalize(uKeyDir + V);

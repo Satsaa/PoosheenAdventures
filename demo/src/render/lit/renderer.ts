@@ -21,6 +21,7 @@ import type { Particles } from '../particles';
 import { npcColor } from '../objects';
 import { type Overview, type OverviewColors, type RGB, buildOverview, overviewPx } from '../overview';
 import { hexRgb } from '../util';
+import { computeWater } from '../water';
 import { FLOATS, InstBuf, type Layout, buildStatic, layout, objectKey, staticFeatures, wallStyle } from './compose';
 import { type Prog, delFramebuffer, delTexture, framebuffer, glStats, program, texture } from './gl';
 import { type Light, LightGrid, type Mood, moodFor, staticLights } from './lights';
@@ -324,6 +325,9 @@ export class LitRenderer {
     const feats = staticFeatures(dim, lay);
     const lights = staticLights(dim, lay, feats, this.sheet, this.seed);
     const maskData = new Uint8Array(n * 4);
+    // B = river flow direction, A = water kind (static; setMask only rewrites R/G)
+    const wi = computeWater(dim, meta.ve);
+    for (let i = 0; i < n; i++) { maskData[i * 4 + 2] = wi.flow[i]; maskData[i * 4 + 3] = wi.kind[i]; }
     const mask = texture(gl, dim.w, dim.h, { data: maskData });
     d = {
       id: dim.id, dim, lay, cols: Math.ceil(lay.W / CPX), rows: Math.ceil(lay.H / CPX), ov, ovTex,

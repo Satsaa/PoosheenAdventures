@@ -56,6 +56,21 @@ Open `dist/index.html` in a browser. No server needed.
    separate exactly the two zones of its edge. A map that disagrees is discarded and the
    next attempt runs from a derived seed, so results stay deterministic per seed.
 
+## Rivers
+
+- A river is a path on the lattice of screen corners, traced downhill before the lock graph
+  exists. A course that would cut off a bank too small to use is rejected.
+- On a region border it replaces the rim. Through a region it splits that region into two
+  banks, which the lock-graph builder then treats as ordinary neighbouring regions joined by a
+  bridge (any gate can stand on a bridge).
+- River water (`T.WATER`) is swimmable with the Swim Gear; rough water (`T.DEEP`, lake and
+  sea rims) never is.
+- River logic is read off the painted map: each stretch is a zone, a bank level with the
+  water is a two-way shore edge needing the Swim Gear, and a drop in level is a one-way
+  waterfall. These are extra edges, so they cannot break a solvable world; one-way edges are
+  re-checked and get a ladder or vine (two-way) if they could trap the player.
+- Caves can have an underground river across the room, with the treasure on the far bank.
+
 ## Settings
 
 `generateWorld(seed, settings?)` takes a partial `GenSettings`; anything missing falls back to

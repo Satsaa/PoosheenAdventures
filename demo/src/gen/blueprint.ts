@@ -3,7 +3,7 @@
 import type {
   Check, DimId, DimKind, Edge, GateKind, HKind, HNode, ItemDef, ItemId, LocId, MapObject, Npc, Quest, Req, Source,
 } from '../core/types';
-import type { Partition } from './spatial';
+import type { Partition, River } from './spatial';
 import { NONE } from '../core/req';
 import type { GenSettings } from '../core/settings';
 
@@ -29,6 +29,8 @@ export interface RegionBP {
   color: string;
   hnode: HNode;
   feats: Feature[];
+  /** a sliver (one screen or less): connected, but nothing is placed in it */
+  barren?: boolean;
 }
 
 export interface OpeningBP {
@@ -50,6 +52,8 @@ export interface StackBP {
   regions: RegionBP[];
   openings: OpeningBP[];
   hnode: HNode;
+  /** river courses on the screen lattice; realised as water bands by the tile pass */
+  rivers?: River[];
   /** touching region pairs the tree did not use: candidates for loops and ledges */
   unused?: [string, string][];
 }
@@ -58,6 +62,8 @@ export interface RoomBP {
   cell: number;
   loc: LocId;
   objs: ObjTpl[];
+  /** an underground river crosses the room: this is the far bank */
+  far?: { loc: LocId; edgeId: string; req: Req; objs: ObjTpl[] };
 }
 
 export interface DoorBP {

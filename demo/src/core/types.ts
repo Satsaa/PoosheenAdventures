@@ -37,7 +37,9 @@ export interface ItemDef {
 // ---------------------------------------------------------------- logic graph
 export type GateKind =
   | 'open' | 'bush' | 'boulder' | 'cracked' | 'water' | 'chasm' | 'dark' | 'eye'
-  | 'locked' | 'bossdoor' | 'seal' | 'guard' | 'stairs' | 'ledge' | 'portal';
+  | 'locked' | 'bossdoor' | 'seal' | 'guard' | 'stairs' | 'ledge' | 'portal'
+  /** river logic: wading in or out at a level bank, and going over a fall */
+  | 'shore' | 'waterfall';
 
 export interface Loc {
   id: LocId;

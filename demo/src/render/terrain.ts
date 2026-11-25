@@ -44,6 +44,30 @@ export function isWallG(g: number) {
   return g === T.WALL || g === T.CAVEWALL;
 }
 
+/** Wooden rails + posts on a bridge plank tile spanning water. */
+function drawRails(c: C, x: number, y: number, py: number, S: number, gAt: (x: number, y: number) => number) {
+  const wet = (xx: number, yy: number) => { const g = gAt(xx, yy); return g === T.WATER || g === T.DEEP || g === T.VOID; };
+  const ns = wet(x - 1, y) && wet(x + 1, y), ew = wet(x, y - 1) && wet(x, y + 1);
+  if (!ns && !ew) return;
+  const px = x * S, rh = S * 0.22;
+  c.fillStyle = 'rgba(5,15,30,0.35)';
+  if (ns) c.fillRect(px + S, py + S * 0.15, S * 0.25, S); else c.fillRect(px, py + S, S, S * 0.25);
+  c.fillStyle = '#4a2c14';
+  for (const side of [0.04, 0.88]) {
+    if (ns) {
+      c.fillRect(px + side * S, py - rh, S * 0.08, S);
+      c.fillStyle = '#7a4c24';
+      c.fillRect(px + side * S, py - rh, S * 0.08, S * 0.05);
+      c.fillStyle = '#4a2c14';
+    } else {
+      const yy = py + side * S;
+      c.fillRect(px, yy - rh, S, S * 0.07);
+      c.fillRect(px + S * 0.12, yy - rh, S * 0.06, rh);
+      c.fillRect(px + S * 0.82, yy - rh, S * 0.06, rh);
+    }
+  }
+}
+
 /** Flat bake resolution: fixed, the bake is chunked so dimension size does not matter. */
 function bakeSize(_dim: Dimension): number {
   return 20;
@@ -234,7 +258,20 @@ function drawTop(c: C, g: number, x: number, y: number, px: number, py: number, 
       break;
     case T.WATER:
     case T.DEEP: {
-      c.strokeStyle = withAlpha(p.lt, g === T.WATER ? 0.45 : 0.3);
+      if (g === T.DEEP) {
+        // rough water: whitecaps
+        c.fillStyle = 'rgba(235,245,255,0.75)';
+        for (let i = 0; i < 2; i++) {
+          if (r() < 0.55) continue;
+          const wx = px + S * (0.1 + r() * 0.6), wy = py + S * (0.2 + r() * 0.6);
+          c.beginPath();
+          c.moveTo(wx, wy);
+          c.quadraticCurveTo(wx + S * 0.1, wy - S * 0.1, wx + S * 0.22, wy);
+          c.quadraticCurveTo(wx + S * 0.1, wy - S * 0.04, wx, wy);
+          c.fill();
+        }
+      }
+      c.strokeStyle = withAlpha(p.lt, g === T.WATER ? 0.35 : 0.3);
       c.lineWidth = Math.max(1, S * 0.04);
       c.beginPath();
       for (let i = 0; i < 2; i++) {
@@ -674,6 +711,13 @@ export function paintRegion(dr: DimRender, c: CanvasRenderingContext2D, rx0: num
         c.fillStyle = 'rgba(10,6,20,0.45)';
         c.fillRect(px + S - Math.max(1, S * 0.05), py, Math.max(1, S * 0.05), S);
       }
+      // foam where a waterfall lands
+      if (g === T.WATER && gAt(x, y - 1) === T.WATER && veAt(x, y - 1) > e) {
+        c.fillStyle = 'rgba(235,248,255,0.85)';
+        c.beginPath();
+        for (let k = 0; k < 4; k++) { const fx = px + S * (0.12 + k * 0.25); c.moveTo(fx + S * 0.14, py + S * 0.05); c.arc(fx, py + S * 0.05, S * 0.14, 0, Math.PI * 2); }
+        c.fill();
+      }
       // cliff face below
       const eS = veAt(x, y + 1);
       if (eS < e) {
@@ -688,6 +732,7 @@ export function paintRegion(dr: DimRender, c: CanvasRenderingContext2D, rx0: num
     for (let x = rx0; x < rx1; x++) {
       const i = y * w + x;
       const d = deco[i];
+      if (ground[i] === T.PLANK && dim.kind !== 'interior') drawRails(c, x, y, top + y * S - ve[i] * H, S, gAt);
       if (!d || ground[i] === T.VOID) continue;
       const px = x * S;
       const py = top + y * S - ve[i] * H;

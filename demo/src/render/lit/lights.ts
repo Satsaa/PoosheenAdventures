@@ -111,6 +111,7 @@ export function objectLights(objs: { o: MapObject; done: boolean; z: number }[])
         if (!done) out.push(L(x, y + 0.2, z + 0.6, 3.6, [1.8, 0.2, 0.25], 2));
         break;
       case 'gate': {
+        if ((o.gate as string) === 'waterfall') { out.push(L(x, y - 0.3, z + 0.6, 3.0, [0.22, 0.4, 0.6], 0.7)); break; }
         if (done) break;
         const g = o.gate;
         if (g === 'seal') out.push(L(x, y + 0.2, z + 0.5, 3.6, [1.7, 0.35, 1.6], 2.5));

@@ -20,6 +20,7 @@ export interface StackSpec {
   entryCaps: ItemId[];
   entryPayloads: number;
   theme: (idx: number) => { biome: string; elev: number; name: string; color: string };
+  rivers?: StackBP['rivers'];
   /** a portal payload landed in `region`: build the sub-world and connect it */
   onPortal: (region: RegionBP, payload: Payload) => void;
 }
@@ -30,6 +31,7 @@ export function buildStack(ctx: Ctx, spec: StackSpec): StackBP {
   const rng = new Rng(spec.seed);
   const world = hnode(spec.id, 'world', spec.name, spec.seed, { dim: spec.id });
   const stack: StackBP = { id: spec.id, kind: spec.kind, name: spec.name, stack: spec.stack, part: spec.part, regions: [], openings: [], hnode: world };
+  stack.rivers = spec.rivers;
   ctx.stacks.push(stack);
 
   spec.part.regions.forEach((_, idx) => {
@@ -37,7 +39,7 @@ export function buildStack(ctx: Ctx, spec: StackSpec): StackBP {
     const id = `${spec.id}${idx}`;
     const node = hnode(id, 'region', th.name, childSeed(spec.seed, id), { biome: th.biome, elev: th.elev, dim: spec.id });
     node.locs.push(ctx.loc(id, th.name, id, spec.id));
-    stack.regions.push({ id, idx, stack, hnode: node, feats: [], ...th });
+    stack.regions.push({ id, idx, stack, hnode: node, feats: [], ...th, barren: spec.part.regions[idx].length <= 1 && spec.part.regions.length > 1 });
   });
   const byId = new Map(stack.regions.map((r) => [r.id, r]));
 
@@ -53,6 +55,7 @@ export function buildStack(ctx: Ctx, spec: StackSpec): StackBP {
     freeChance: 1 - ctx.settings.lockDensity,
     depthBias: ctx.settings.linearity,
     likes: (a, b) => [...likesOf(byId.get(a)!.biome), ...likesOf(byId.get(b)!.biome)],
+    barren: new Set(stack.regions.filter((r) => r.barren).map((r) => r.id)),
   });
   for (const le of lg.edges) {
     const a = byId.get(le.a)!, b = byId.get(le.b)!;
@@ -179,12 +182,27 @@ export function placeItem(ctx: Ctx, rng: Rng, region: RegionBP, item: ItemId, ca
   if (roll < 0.34) {
     const dark = caps.includes('lantern') && rng.chance(0.4);
     const id = `${region.id}.${ctx.uid('cave')}`;
-    const s = singleRoom(ctx, id, dark ? 'Lightless Cave' : 'Cave', 'cave', childSeed(region.hnode.seed, id));
+    // a river can run through a place too: the cave's treasure then sits on the far bank
+    const wet = caps.includes('flippers') && rng.chance(ctx.settings.riverCaves);
+    const s = singleRoom(ctx, id, wet ? 'River Cave' : dark ? 'Lightless Cave' : 'Cave', 'cave', childSeed(region.hnode.seed, id));
     const req = dark ? has('lantern') : NONE;
     const e = ctx.edge(region.id, s.entryLoc, req, dark ? 'dark' : 'portal');
     s.interior.entranceEdge = e.id;
-    const c = ctx.check(s.entryLoc, item, 'chest', `Cave chest (${what})`);
-    s.room.objs.push({ id: 'o.' + c.id, kind: 'chest', label: c.label, checkId: c.id });
+    let chestLoc = s.entryLoc;
+    if (wet) {
+      const swim = has('flippers');
+      chestLoc = ctx.loc(id + '.far', 'River Cave: far bank', id + '.far', id);
+      const far = hnode(chestLoc, 'room', 'Far bank', childSeed(region.hnode.seed, id + 'far'), { dim: id });
+      far.locs.push(chestLoc);
+      far.needs = swim;
+      far.provides = [item];
+      s.node.children.push(far);
+      const cross = ctx.edge(s.entryLoc, chestLoc, swim, 'water');
+      s.node.edges.push({ a: s.entryLoc, b: chestLoc, req: swim, gate: 'water' });
+      s.room.far = { loc: chestLoc, edgeId: cross.id, req: swim, objs: [] };
+    }
+    const c = ctx.check(chestLoc, item, 'chest', `${wet ? 'River cave' : 'Cave'} chest (${what})`);
+    (s.room.far?.objs ?? s.room.objs).push({ id: 'o.' + c.id, kind: 'chest', label: c.label, checkId: c.id });
     s.node.provides = [item];
     s.node.needs = req;
     if (main) s.node.entryCaps = caps;

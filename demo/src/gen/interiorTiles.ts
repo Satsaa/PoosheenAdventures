@@ -12,6 +12,9 @@ const STYLE: Record<string, { floor: number; wall: number }> = {
   house: { floor: T.PLANK, wall: T.WALL },
 };
 
+/** first of the two rows an underground river occupies */
+const RIVER_ROW = 4;
+
 export interface InteriorTiles {
   dim: Dimension;
   /** tile of the way out, inside the entry room */
@@ -45,8 +48,20 @@ export function realiseInterior(bp: InteriorBP, seed: number): InteriorTiles {
       if (x === 0 || y === 0 || x === SW - 1 || y === SH - 1) { dim.ground[i] = st.wall; dim.elev[i] = 1; }
       else floor(i);
     }
-    anchors.set((y0 + 1) * w + x0 + 1, room.loc);
+    anchors.set((y0 + 1) * w + x0 + 1, room.far?.loc ?? room.loc);
     taken.add((y0 + 1) * w + x0 + 1);
+    if (room.far) {
+      // an underground river crosses the room wall to wall; the whole band is the gate
+      anchors.set((y0 + SH - 2) * w + x0 + 1, room.loc);
+      taken.add((y0 + SH - 2) * w + x0 + 1);
+      for (const yy of [RIVER_ROW, RIVER_ROW + 1]) for (let x = 1; x < SW - 1; x++) {
+        const i = (y0 + yy) * w + x0 + x;
+        dim.ground[i] = T.WATER; dim.solid[i] = 1;
+        barriers.set(i, room.far.edgeId);
+        taken.add(i);
+      }
+      dim.objects.push({ id: 'g.' + room.far.edgeId, kind: 'gate', x: x0 + (SW >> 1), y: y0 + RIVER_ROW, label: 'Underground river', gate: 'water', req: room.far.req, edgeId: room.far.edgeId });
+    }
     dim.regions.push({ id: room.loc, name: '', biome: bp.style, elev: 0, x: x0 + SW / 2, y: y0 + SH / 2, color: '#888' });
   });
 
@@ -83,15 +98,19 @@ export function realiseInterior(bp: InteriorBP, seed: number): InteriorTiles {
       dim.solid[i] = 1; dim.deco[i] = deco; taken.add(i);
     }
     // objects on free floor, spaced out
-    for (const tpl of room.objs) {
-      for (let tries = 0; tries < 200; tries++) {
-        const x = x0 + rng.range(2, SW - 3), y = y0 + rng.range(2, SH - 3), i = y * w + x;
-        if (taken.has(i) || taken.has(i - 1) || taken.has(i + 1) || dim.solid[i]) continue;
-        taken.add(i);
-        dim.objects.push({ ...tpl, x, y } as MapObject);
-        break;
+    const drop = (tpls: typeof room.objs, yMin: number, yMax: number) => {
+      for (const tpl of tpls) {
+        for (let tries = 0; tries < 200; tries++) {
+          const x = x0 + rng.range(2, SW - 3), y = y0 + rng.range(yMin, yMax), i = y * w + x;
+          if (taken.has(i) || taken.has(i - 1) || taken.has(i + 1) || dim.solid[i]) continue;
+          taken.add(i);
+          dim.objects.push({ ...tpl, x, y } as MapObject);
+          break;
+        }
       }
-    }
+    };
+    if (room.far) { drop(room.objs, RIVER_ROW + 2, SH - 3); drop(room.far.objs, 1, RIVER_ROW - 1); }
+    else drop(room.objs, 2, SH - 3);
   });
   return { dim, exit, barriers, anchors };
 }

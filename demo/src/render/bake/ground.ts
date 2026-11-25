@@ -39,8 +39,8 @@ export const GROUND_RAMP: Record<number, string[]> = {
   [T.DIRT]: ['#38241a', '#52341f', '#6c4729', '#875c36'],
   [T.STONE]: ['#2a2a36', '#3b3c4b', '#525465', '#6d7083'],
   [T.SNOW]: ['#6a80a6', '#94abc9', '#c2d3e7', '#e8f1fb'],
-  [T.WATER]: ['#0e2c50', '#154471', '#1d5a8d', '#2c76ab'],
-  [T.DEEP]: ['#071733', '#0b244a', '#10325f', '#163f72'],
+  [T.WATER]: ['#17507a', '#1f6a96', '#2a85ae', '#3fa3c6'],
+  [T.DEEP]: ['#050f26', '#081a3a', '#0c2550', '#123166'],
   [T.FLOOR]: ['#36291f', '#4d3a2b', '#644c37', '#7b6046'],
   [T.WALL]: ['#2c2838', '#3f394d', '#554e67', '#6d6582'],
   [T.CAVE]: ['#16131d', '#1f1a28', '#2a2434', '#362e42'],
@@ -120,10 +120,18 @@ export function groundTile(g: number, v: number): Sprite {
           st = top * 0.62 + (n1 - 0.5) * 1.0 + (n2 - 0.5) * 0.6 + (r > 0.97 ? 1 : 0);
           break;
         case T.WATER:
-        case T.DEEP:
+          // clear, calm: smooth gradients, a few light sparkles
           h = 0;
-          st = top * 0.45 + (n1 - 0.5) * 1.2;
+          st = top * 0.5 + (n1 - 0.5) * 0.9 + (r > 0.97 ? 1 : 0);
           break;
+        case T.DEEP: {
+          // rough: dark, choppy ridges with whitecaps
+          const ridge = Math.sin((x * 0.8 + y * 1.3 + n1 * 6) * 1.4);
+          h = ridge * 0.01;
+          st = top * 0.4 + (n2 - 0.5) * 1.4 + ridge * 0.5;
+          if (ridge > 0.85 && r < 0.45) { s.set(x, y, [200, 220, 235], 0, 0, 1, 0.01, null, MAT.WATER); H[y * N + x] = 0.01; S[y * N + x] = -1; continue; }
+          break;
+        }
         case T.FLOOR: {
           const bx = Math.floor(x / 8), by = Math.floor(y / 8);
           const gx = x % 8, gy = y % 8;
@@ -188,12 +196,15 @@ export function groundTile(g: number, v: number): Sprite {
       H[i] = h;
       S[i] = st;
     }
+  const pre = new Uint8Array(N * N);
+  for (let i = 0; i < N * N; i++) pre[i] = S[i] === -1 ? 1 : 0;
   for (let y = 0; y < N; y++)
     for (let x = 0; x < N; x++) {
       const i = y * N + x;
       const hx = H[y * N + ((x + 1) % N)] - H[y * N + ((x + N - 1) % N)];
       const hy = H[((y + 1) % N) * N + x] - H[((y + N - 1) % N) * N + x];
       const k = 0.5 * N * 2.2;
+      if (pre[i]) continue; // whitecap pixel already written
       const st = Math.max(0, Math.min(top, Math.round(S[i])));
       s.set(x, y, rgb(ramp[st]), -hx * k, -hy * k, 1, H[i], E[i], M[i]);
     }
@@ -237,7 +248,8 @@ export function faceStrip(g: number, v: number): Sprite {
       if (kind === 'water') {
         const streak = hashN(x, 0, seed) < 0.3 || (rr < 0.08);
         const st = streak ? 3 : 1 + Math.round(n1);
-        s.set(x, r, rgb(GROUND_RAMP[T.WATER][Math.min(3, st)]), 0, 1, 0.15, 0, streak ? [40, 70, 90] : null, MAT.WATER);
+        const deep = g === T.DEEP;
+        s.set(x, r, rgb(GROUND_RAMP[deep ? T.DEEP : T.WATER][Math.min(3, st)]), 0, 1, 0.15, 0, streak ? [40, 70, 90] : null, deep ? MAT.WATER : MAT.FALL);
         continue;
       }
       if (kind === 'lava') {
@@ -258,7 +270,8 @@ export function faceStrip(g: number, v: number): Sprite {
       } else if (kind === 'wood') {
         const post = x >= 2 && x <= 4 || x >= 11 && x <= 13;
         st = post ? 2 : 0;
-        if (!post) { s.set(x, r, [0, 0, 0], 0, 1, 0, 0, null, 0); s.alb[(r * N + x) * 4 + 3] = 0; continue; }
+        // between the posts: the dark gap under the bridge deck
+        if (!post) { s.set(x, r, r < 3 ? [20, 12, 6] : [10, 18, 30], 0, 1, 0, 0, null, 0); continue; }
         nx = x === 2 || x === 11 ? -0.6 : x === 4 || x === 13 ? 0.6 : 0;
       } else if (kind === 'cloud') {
         st = 2 + (n1 - 0.5) * 2;

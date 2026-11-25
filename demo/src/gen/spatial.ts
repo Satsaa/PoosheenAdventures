@@ -111,3 +111,122 @@ export function growBlob(rng: Rng, gw: number, gh: number, start: number, count:
   }
   return set;
 }
+
+// ---------------------------------------------------------------- rivers
+// A river runs along the lines BETWEEN screens (a path on the lattice of screen corners).
+// That makes it a border by construction: where it follows a region border it replaces the
+// rim, and where it cuts through a region the region is split into two banks.
+
+export interface River {
+  /** lattice corners in flow order; corner index = cy * (gw + 1) + cx */
+  corners: number[];
+  /** one line per step: the two screens it separates */
+  lines: { a: number; b: number }[];
+  /** water level per line, never rising downstream */
+  level: number[];
+  /** stretch index per line; a new stretch starts at every drop (waterfall) */
+  seg: number[];
+}
+
+export const lineKey = (a: number, b: number): number => (a < b ? a * 65536 + b : b * 65536 + a);
+
+export function traceRivers(
+  rng: Rng, part: Partition, elevOf: (region: number) => number, count: number,
+  /** a course is kept only if the world still works with it, e.g. it cuts off no bank too small to use */
+  accept: (rivers: River[]) => boolean = () => true,
+): River[] {
+  const { gw, gh } = part;
+  const cw = gw + 1;
+  const taken = new Set<number>(); // corners used by any river, plus their neighbours, so rivers never touch
+  const rivers: River[] = [];
+  const edge = (cx: number, cy: number) => cx === 0 || cy === 0 || cx === gw || cy === gh;
+  /** the two screens separated by the lattice step from (cx,cy) in direction d, or null if it is not an inner line */
+  const sides = (cx: number, cy: number, dx: number, dy: number): { a: number; b: number } | null => {
+    if (dx !== 0) {
+      const x = dx > 0 ? cx : cx - 1;
+      if (cy < 1 || cy > gh - 1 || x < 0 || x >= gw) return null;
+      return { a: (cy - 1) * gw + x, b: cy * gw + x };
+    }
+    const y = dy > 0 ? cy : cy - 1;
+    if (cx < 1 || cx > gw - 1 || y < 0 || y >= gh) return null;
+    return { a: y * gw + cx - 1, b: y * gw + cx };
+  };
+  const levelOf = (l: { a: number; b: number }) => Math.min(elevOf(part.cell[l.a]), elevOf(part.cell[l.b]));
+
+  for (let tries = 0; tries < count * 12 && rivers.length < count; tries++) {
+    if (gw < 3 || gh < 3) break;
+    // spring: a free inner corner, the highest of a few samples
+    let start = -1, startLevel = -1;
+    for (let i = 0; i < 8; i++) {
+      const cx = rng.range(1, gw - 1), cy = rng.range(1, gh - 1), c = cy * cw + cx;
+      if (taken.has(c)) continue;
+      let best = -1;
+      for (const [dx, dy] of N4) { const s = sides(cx, cy, dx, dy); if (s) best = Math.max(best, levelOf(s)); }
+      if (best > startLevel) { startLevel = best; start = c; }
+    }
+    if (start < 0) continue;
+    const r: River = { corners: [start], lines: [], level: [], seg: [] };
+    const seen = new Set([start]);
+    let cx = start % cw, cy = (start / cw) | 0, level = 99, pdx = 0, pdy = 0;
+    for (let step = 0; step < gw + gh + 8; step++) {
+      const opts: { dx: number; dy: number; l: { a: number; b: number }; lv: number; w: number }[] = [];
+      for (const [dx, dy] of N4) {
+        const nx = cx + dx, ny = cy + dy, n = ny * cw + nx;
+        const l = sides(cx, cy, dx, dy);
+        if (!l || seen.has(n) || taken.has(n)) continue;
+        const lv = levelOf(l);
+        if (lv > level) continue; // water does not flow uphill
+        const toEdge = Math.min(nx, ny, gw - nx, gh - ny), nowEdge = Math.min(cx, cy, gw - cx, gh - cy);
+        let w = 1;
+        if (dx === pdx && dy === pdy) w *= 1.6; // keeps courses from zig-zagging
+        if (toEdge < nowEdge) w *= 1.8; // rivers head for the sea
+        if (part.cell[l.a] !== part.cell[l.b]) w *= 1.3; // existing borders are natural beds, but not the only ones
+        opts.push({ dx, dy, l, lv, w });
+      }
+      if (!opts.length) break;
+      const o = rng.weighted(opts, (x) => x.w);
+      cx += o.dx; cy += o.dy; pdx = o.dx; pdy = o.dy;
+      r.seg.push(r.level.length && o.lv < level ? r.seg[r.seg.length - 1] + 1 : r.seg.length ? r.seg[r.seg.length - 1] : 0);
+      level = o.lv;
+      r.lines.push(o.l); r.level.push(o.lv);
+      r.corners.push(cy * cw + cx);
+      seen.add(cy * cw + cx);
+      if (edge(cx, cy)) break; // flows off the map
+    }
+    if (r.lines.length < 3 || !accept([...rivers, r])) continue;
+    rivers.push(r);
+    for (const c of r.corners) {
+      const x = c % cw, y = (c / cw) | 0;
+      for (let yy = y - 1; yy <= y + 1; yy++) for (let xx = x - 1; xx <= x + 1; xx++) taken.add(yy * cw + xx);
+    }
+  }
+  return rivers;
+}
+
+/**
+ * Regions that a river cuts in two become two regions (two banks). Returns the refined
+ * partition and, for each new region, the region it came from.
+ */
+export function splitByRivers(part: Partition, rivers: River[]): { part: Partition; origin: number[] } {
+  const { gw, gh } = part;
+  const wet = new Set<number>();
+  for (const r of rivers) for (const l of r.lines) wet.add(lineKey(l.a, l.b));
+  const cell = new Int16Array(part.cell.length).fill(-1);
+  const origin: number[] = [];
+  for (let s = 0; s < cell.length; s++) {
+    if (part.cell[s] < 0 || cell[s] >= 0) continue;
+    const id = origin.length;
+    origin.push(part.cell[s]);
+    const stack = [s];
+    cell[s] = id;
+    while (stack.length) {
+      const u = stack.pop()!;
+      for (const v of neighbours(gw, gh, u)) {
+        if (cell[v] >= 0 || part.cell[v] !== part.cell[s] || wet.has(lineKey(u, v))) continue;
+        cell[v] = id;
+        stack.push(v);
+      }
+    }
+  }
+  return { part: finish(gw, gh, cell, origin.length), origin };
+}

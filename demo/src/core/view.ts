@@ -34,7 +34,7 @@ export function stateAt(world: World, k: number): WorldState {
   for (const [check, s] of Object.entries(sol.checkSphere)) if (s <= k) done.add('o.' + check);
   const unlocked = new Set(sol.spheres.slice(0, k + 1).flatMap((s) => s.opened));
   for (const e of world.graph.edges) {
-    const open = e.lock ? unlocked.has(e.id) : e.gate !== 'open' && e.gate !== 'ledge' && e.gate !== 'portal' && evalReq(e.req, caps, world.items);
+    const open = e.lock ? unlocked.has(e.id) : e.gate !== 'open' && e.gate !== 'ledge' && e.gate !== 'portal' && e.gate !== 'shore' && e.gate !== 'waterfall' && evalReq(e.req, caps, world.items);
     if (open) done.add('g.' + e.id);
   }
   const hidden = new Set<string>();

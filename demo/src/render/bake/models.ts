@@ -470,6 +470,44 @@ export function objectModels(): ObjSpec[] {
     [(x, y, z) => Math.min(sph(x, y, z, 0.38, 0.8, 0.5, 0.045), sph(x, y, z, 0.62, 0.8, 0.5, 0.045)), 2],
     [(x, y, z) => Math.min(capsule(x, y, z, 0.25, 0.55, 0.65, 0.08, 0.5, 1.0, 0.05), capsule(x, y, z, 0.75, 0.55, 0.65, 0.92, 0.5, 1.0, 0.05)), 3],
   ], { zMax: 1.08, padX: 0.15 }));
+  // waterfalls: foam at the base / lip, side cascades for east-west drops, optional ladder (vine) beside
+  const foamM: Mat = { ramp: ['#8fb4c8', '#bcd8e6', '#e2f2fa'], emit: [10, 16, 20], bias: 0.3 };
+  const sheet: Mat = { ramp: ['#2c7fae', '#5ab0d8', '#bfe8fa'], id: MAT.FALL, bias: 0.4 };
+  const vine: Mat = { ramp: ['#1d4a1c', '#2f6e2a', '#4a9a3a'] };
+  const foamRow = (y0: number): F => (x, y, z) => { let dd = 1e9; for (let k = 0; k < 6; k++) dd = Math.min(dd, sph(x, y, z, 0.08 + k * 0.17, y0 + (k % 2) * 0.06, 0.03, 0.09 + (k % 3) * 0.015)); return dd; };
+  const ladder = (lx: number, ly: number, along: 'x' | 'y'): F => (x, y, z) => {
+    const u = along === 'x' ? x - lx : y - ly, v = along === 'x' ? y - ly : x - lx;
+    let dd = Math.min(Math.hypot(u - 0.09, v) - 0.025, Math.hypot(u + 0.09, v) - 0.025);
+    dd = Math.max(dd, z - 0.62, -z);
+    for (let k = 0; k < 4; k++) dd = Math.min(dd, Math.max(Math.abs(u) - 0.1, Math.abs(v) - 0.02, Math.abs(z - (0.08 + k * 0.14)) - 0.018));
+    return dd;
+  };
+  for (const ld of [false, true]) {
+    const sfx = ld ? ':ladder' : '';
+    add('o:wf:s' + sfx, model([foamM, vine], [[foamRow(0.06), 0], ...(ld ? [[ladder(0.86, 0.03, 'x'), 1] as Part] : [])], { zMax: 0.65, padX: 0.1, outline: 0.85 }));
+    add('o:wf:n' + sfx, model([foamM, vine], [[foamRow(0.9), 0], ...(ld ? [[ladder(0.86, 0.97, 'x'), 1] as Part] : [])], { zMax: 0.65, padX: 0.1, outline: 0.85 }));
+    for (const dir of ['e', 'w'] as const) {
+      const ex = dir === 'e' ? 0.04 : 0.96;
+      add('o:wf:' + dir + sfx, model([sheet, foamM, vine], [
+        [(x, y, z) => box(x, y, z, ex, 0.5, 0.24, 0.05, 0.42, 0.24, 0.02), 0],
+        [(x, y, z) => { let dd = 1e9; for (let k = 0; k < 5; k++) dd = Math.min(dd, sph(x, y, z, ex + (dir === 'e' ? 0.14 : -0.14), 0.12 + k * 0.19, 0.03, 0.1)); return dd; }, 1],
+        ...(ld ? [[ladder(ex, 0.9, 'y'), 2] as Part] : []),
+      ], { zMax: 0.65, padX: 0.15, outline: 0.85 }));
+    }
+  }
+  // bridge rails: along the long sides of a plank tile (ns = bridge runs north-south)
+  const railM: Mat = { ramp: ['#2a170a', '#4a2c14', '#6e4420', '#8e5c2c'] };
+  const rails = (ns: boolean): F => (x, y, z) => {
+    let dd = 1e9;
+    for (const side of [0.06, 0.94]) {
+      const px = ns ? side : 0.5, py = ns ? 0.5 : side;
+      dd = Math.min(dd, ns ? capsule(x, y, z, px, 0.0, 0.26, px, 1.0, 0.26, 0.03) : capsule(x, y, z, 0.0, py, 0.26, 1.0, py, 0.26, 0.03));
+      for (const t of [0.15, 0.85]) dd = Math.min(dd, ns ? cylZ(x, y, z, px, t, 0, 0.28, 0.035) : cylZ(x, y, z, t, py, 0, 0.28, 0.035));
+    }
+    return dd;
+  };
+  add('rail:ns', model([railM], [[rails(true), 0]], { zMax: 0.32, padX: 0.05, outline: 0.7 }));
+  add('rail:ew', model([railM], [[rails(false), 0]], { zMax: 0.32, padX: 0.05, outline: 0.7 }));
   // interior wall torch
   add('torch', model([{ ramp: R.wood }, { ramp: R.ember, emit: [255, 150, 40] }], [
     [(x, y, z) => capsule(x, y, z, 0.5, 0.92, 0.25, 0.5, 0.98, 0.45, 0.04), 0],

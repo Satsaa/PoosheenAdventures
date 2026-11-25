@@ -50,6 +50,8 @@ export interface LockGraphInput {
   likes?: (a: string, b: string) => ItemId[];
   /** higher = longer chains, lower = bushier */
   depthBias?: number;
+  /** nodes too small to hold anything: attached like any other, but never given a payload */
+  barren?: Set<string>;
 }
 
 export interface LockGraphOutput {
@@ -112,8 +114,11 @@ export function buildLockGraph(inp: LockGraphInput): LockGraphOutput {
       opts = options();
       if (!opts.length) break;
     }
-    const remaining = inp.nodes.length - placed.size;
-    const progress = queue.length > 0 && (queue.length >= remaining || rng.chance(queue.length / remaining + 0.25));
+    const barren = inp.barren;
+    const roomy = barren ? opts.filter((o) => !barren.has(o.c)) : opts;
+    const remaining = inp.nodes.filter((n) => !placed.has(n) && !barren?.has(n)).length;
+    const progress = roomy.length > 0 && queue.length > 0 && (queue.length >= remaining || rng.chance(queue.length / remaining + 0.25));
+    if (progress) opts = roomy;
 
     let gateItem: ItemId | null = null;
     if (progress && pending.length) {
@@ -160,7 +165,7 @@ export function buildLockGraph(inp: LockGraphInput): LockGraphOutput {
     capsAt.set(opt.c, have.slice());
     if (progress) give(opt.c, Math.max(1, Math.ceil(queue.length / remaining)));
   }
-  if (queue.length) give(order[order.length - 1], queue.length);
+  if (queue.length) give([...order].reverse().find((n) => !inp.barren?.has(n)) ?? order[order.length - 1], queue.length);
 
   const unused = inp.candidates.filter(([a, b]) => placed.has(a) && placed.has(b) && !used.has(key(a, b)));
   return { edges, order, tier, assign, capsAt, lockDepth, unused };
