@@ -46,7 +46,7 @@ export function addNpcs(ctx: Ctx, rng: Rng, plan: Plan, regions: RegionBP[], sta
   const dayOnly = timeOk && rng.chance(S.timeGates);
   const owl = timeOk && rng.chance(S.timeGates) ? 1 : -1;
   if (stops.length) {
-  const merchant = { id: 'merchant', name: 'Pinjata the Peddler', role: 'Travelling shop', icon: '$', color: '#ff9f6b', stages: [] as NpcStage[] };
+  const merchant = { id: 'merchant', name: 'Pawdrick the Peddler', role: 'Travelling shop', icon: '$', color: '#ff9f6b', stages: [] as NpcStage[] };
   const heart = ctx.check(regionOf(ctx.itemHome.get(stops[0])!).id, 'heart', 'shop', "Peddler's heart piece", all(has(stops[0]), dayOnly ? at('day') : NONE, use('rupees', S.pricePeddlerHeart)));
   stops.forEach((tool, i) => {
     const r = regionOf(ctx.itemHome.get(tool)!);

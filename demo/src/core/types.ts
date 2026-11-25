@@ -88,6 +88,8 @@ export interface Source {
   gives: ItemId;
   req: Req;
   label: string;
+  /** set when the supply is what an enemy kind drops (see ENEMIES in core/content) */
+  enemy?: string;
 }
 
 export interface LogicGraph {

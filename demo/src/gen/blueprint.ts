@@ -106,6 +106,8 @@ export class Ctx {
   interiors: InteriorBP[] = [];
   /** item -> zone where it is obtained, for NPCs that follow the player's progress */
   itemHome = new Map<ItemId, LocId>();
+  /** the zone the player starts in */
+  start: LocId = '';
   /** what the player is guaranteed to own when the sanctum is placed */
   sanctumCaps: ItemId[] = [];
   private seq = 0;

@@ -53,6 +53,23 @@ export function evalReq(req: Req, caps: Caps, items: Record<ItemId, ItemDef>): b
   }
 }
 
+/**
+ * Like evalReq, but for this very moment: a time requirement only holds if it is that time of
+ * day right now. evalReq answers "can the player ever meet this", openNow "is it met as we speak".
+ */
+export function openNow(req: Req, caps: Caps, items: Record<ItemId, ItemDef>, phase: Phase): boolean {
+  switch (req.t) {
+    case 'time':
+      return req.phase === phase;
+    case 'all':
+      return req.of.every((r) => openNow(r, caps, items, phase));
+    case 'any':
+      return req.of.some((r) => openNow(r, caps, items, phase));
+    default:
+      return evalReq(req, caps, items);
+  }
+}
+
 /** Every item id mentioned anywhere in the requirement. */
 export function reqItems(req: Req, out: Set<ItemId> = new Set()): Set<ItemId> {
   if (req.t === 'has' || req.t === 'use') out.add(req.item);

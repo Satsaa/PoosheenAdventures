@@ -135,6 +135,7 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   });
   game.children = ctx.stacks.map((s) => s.hnode);
   const start = over.regions[entryRegion];
+  ctx.start = start.id;
   const regions = ctx.stacks.flatMap((s) => s.regions);
   const roomy = regions.filter((r) => !r.barren);
 
@@ -198,7 +199,7 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
       r.feats.push({ f: 'spot', obj: { id: `o.en.${r.id}.${k}`, kind: 'enemy', enemy: e.id, label: e.name, icon: e.icon, phase: e.night ? 'night' : undefined } });
       if (!fight || seen.has(e.drops + (e.night ? 'n' : ''))) continue;
       seen.add(e.drops + (e.night ? 'n' : ''));
-      ctx.source(r.id, e.drops, `${e.plural} (${ctx.items[e.drops].name})`, e.night ? all(fight, at('night')) : fight);
+      ctx.source(r.id, e.drops, `${e.plural} (${ctx.items[e.drops].name.toLowerCase()})`, e.night ? all(fight, at('night')) : fight).enemy = e.id;
     }
   }
   // home should look like a village
@@ -307,7 +308,8 @@ export function finishTree(n: HNode, ctx: Ctx): ItemId[] {
   const inside = new Set<string>();
   const collect = (m: HNode) => { m.locs.forEach((l) => inside.add(l)); m.children.forEach(collect); };
   collect(n);
-  if (inside.size && n.kind !== 'game') {
+  if (inside.has(ctx.start)) n.needs = NONE; // you begin here: nothing is needed to get in
+  else if (inside.size && n.kind !== 'game') {
     const ways = ctx.edges
       .filter((e) => (inside.has(e.b) && !inside.has(e.a)) || (inside.has(e.a) && !inside.has(e.b) && !e.oneWay))
       .map((e) => (e.lock ? has('key:' + e.lock) : e.req));
