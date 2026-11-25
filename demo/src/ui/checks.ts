@@ -1,4 +1,5 @@
 // Checks tab: validator lints, generation stats, world counts, and a batch test over many seeds.
+import { countChanges } from '../core/settings';
 import { h } from './shared';
 import type { TabCtx, TabView } from './tab';
 
@@ -81,12 +82,21 @@ export function createChecksTab(): TabView {
           `Seed “${world.seed}” · ${world.stats.attempts} attempt${world.stats.attempts === 1 ? '' : 's'} · ${world.stats.ms} ms`)),
       h('h3', { class: 'pa-label pa-sec-t' }, 'Validator'),
       lints,
+      settingsHint(ctx) ?? '',
       h('h3', { class: 'pa-label pa-sec-t' }, 'This world'),
       h('dl', { class: 'pa-counts' }, ...counts.flatMap(([k, v]) => [h('div', null, h('dt', null, k), h('dd', { class: 'pa-num' }, String(v)))])),
       h('h3', { class: 'pa-label pa-sec-t' }, 'Batch test'),
       h('div', { class: 'pa-batch' }, btn, track, tally),
     );
     paint();
+  }
+
+  function settingsHint(ctx: TabCtx): HTMLElement | null {
+    const n = ctx.world.settings ? countChanges(ctx.world.settings) : 0;
+    if (ctx.world.lints.every((l) => l.ok) || n === 0) return null;
+    return h('div', { class: 'pa-hint' },
+      h('span', null, `Settings in effect differ from defaults (${n} changed).`),
+      h('button', { class: 'pa-btn2', type: 'button', onclick: () => ctx.goTab('settings') }, 'Open settings'));
   }
 
   return { el, render, match: () => [] };

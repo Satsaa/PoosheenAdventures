@@ -13,7 +13,8 @@ export function createPlaythroughTab(): TabView {
     const inv = new Map(Object.entries(state.inv));
     const own = (id: string) => inv.get(id) ?? 0;
     const items = Object.values(world.items);
-    const tools = items.filter((i) => i.kind === 'tool' || i.kind === 'skill');
+    const placed = new Set(world.graph.checks.map((c) => c.item));
+    const tools = items.filter((i) => (i.kind === 'tool' || i.kind === 'skill') && placed.has(i.id));
     const cons = items.filter((i) => i.kind === 'consumable');
     const ownedTools = tools.filter((t) => own(t.id) > 0).length;
     const total = (id: string) => world.graph.checks.filter((c) => c.item === id).length;
