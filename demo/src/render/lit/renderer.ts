@@ -64,7 +64,7 @@ const CHUNK_S1 = 13;
 /** never show more than this many chunks at once (big screens zoomed out use the overview) */
 const MAX_VISIBLE_CHUNKS = 40;
 /** LRU budget (each chunk = 4 x 512x512 RGBA8 = 4 MB) */
-const CHUNK_BUDGET = 56;
+const CHUNK_BUDGET = 48;
 const MAX_INTERNAL_PX = 1.6e6;
 
 interface Chunk {

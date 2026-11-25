@@ -15,6 +15,7 @@ let state: WorldState;
 let dimId: DimId = 'over';
 let fog = true;
 let timer = 0;
+let regenTimer = 0;
 
 // settings are a per-viewer convenience: remembered in this browser only
 const STORE = 'poosheen-worldgen-settings';
@@ -48,7 +49,13 @@ const panels = createPanels($('panels'), {
   changeSettings: (next) => {
     settings = normalizeSettings(next);
     try { localStorage.setItem(STORE, JSON.stringify(settings)); } catch { /* not remembered, still applied */ }
-    generate(world.seed, true);
+    // small worlds regenerate on every tick; when the last one was slow, wait for the slider to settle
+    clearTimeout(regenTimer);
+    if (world.stats.ms < 120) generate(world.seed, true);
+    else {
+      $('status').textContent = 'generating…';
+      regenTimer = window.setTimeout(() => generate(world.seed, true), 220);
+    }
   },
 });
 

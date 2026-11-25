@@ -923,7 +923,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     for (const [r, size] of order) {
       const x = sx(r.x + 0.5), y = sy(r.y + 0.5 - tileElevY(r.x, r.y));
       if (x < -200 || x > W + 200 || y < -50 || y > Hh + 50) continue;
-      const sa = size ? smoothstep(6000, 16000, size * cam.s * cam.s) : 1;
+      const sa = size ? smoothstep(2500, 6500, size * cam.s * cam.s) : 1;
       if (sa <= 0.02) continue;
       const txt = r.name.toUpperCase();
       const tw0 = ctx.measureText(txt).width;

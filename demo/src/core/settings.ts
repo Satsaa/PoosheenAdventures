@@ -49,15 +49,10 @@ const num = (key: SettingKey, group: string, label: string, type: 'int' | 'float
 const flag = (key: SettingKey, group: string, label: string, def: boolean, help: string, keywords = ''): SettingDef =>
   ({ key, group, label, type: 'bool', default: def, help, keywords });
 
-/** Largest world the demo's renderer draws reliably today; the generator itself goes far beyond. */
-export const RENDER_MAX_W = 16;
-export const RENDER_MAX_H = 10;
-
 export const SETTING_DEFS: SettingDef[] = [
-  // The generator is tested up to 64×48 screens (768×480 tiles, about 2 s). The demo's map view
-  // cannot draw maps that large yet, so the sliders stop at RENDER_MAX_* until it can.
-  num('worldW', 'World', 'World width', 'int', 3, RENDER_MAX_W, 1, 8, 'Overworld width in screens. One screen is 12×10 tiles.', 'size map columns'),
-  num('worldH', 'World', 'World height', 'int', 3, RENDER_MAX_H, 1, 6, 'Overworld height in screens.', 'size map rows'),
+  // Tested up to 64×48 screens (768×480 tiles): generation takes about 2 s there, and the map view draws it in chunks.
+  num('worldW', 'World', 'World width', 'int', 3, 64, 1, 8, 'Overworld width in screens. One screen is 12×10 tiles. Very large worlds take a second or two to generate.', 'size map columns'),
+  num('worldH', 'World', 'World height', 'int', 3, 48, 1, 6, 'Overworld height in screens.', 'size map rows'),
   num('regions', 'World', 'Regions', 'int', 1, 96, 1, 7, 'How many biomes the overworld is split into. Limited by the map size and the border wobble, so each region keeps room for its places.', 'biomes areas count'),
   num('borderWobble', 'World', 'Border wobble', 'float', 0, 8, 0.5, 4.5, 'How far region borders stray from the screen grid, in tiles. 0 gives straight, blocky borders. A screen is 12×10 tiles, so more than 8 would tear small regions apart.', 'warp noise organic shape'),
   flag('cliffs', 'World', 'Height differences', true, 'Regions sit at different heights, which makes cliffs, stairs and one-way ledges. Off puts everything on one level.', 'elevation layers cliffs flat'),
@@ -141,8 +136,7 @@ export function defaultSettings(): GenSettings {
 }
 
 /** Fill in missing fields and clamp everything into range, so any partial or stale object is safe to use. */
-/** `anySize` lifts the world-size slider limits (the generator handles up to 64×48 screens). */
-export function normalizeSettings(partial?: Partial<GenSettings> | null, anySize = false): GenSettings {
+export function normalizeSettings(partial?: Partial<GenSettings> | null): GenSettings {
   const s = defaultSettings();
   const out = s as unknown as Record<string, number | boolean>;
   const src = (partial ?? {}) as Record<string, unknown>;
@@ -150,8 +144,7 @@ export function normalizeSettings(partial?: Partial<GenSettings> | null, anySize
     const v = src[d.key];
     if (d.type === 'bool') { if (typeof v === 'boolean') out[d.key] = v; continue; }
     if (typeof v !== 'number' || !Number.isFinite(v)) continue;
-    const max = anySize && d.key === 'worldW' ? 64 : anySize && d.key === 'worldH' ? 48 : d.max!;
-    const c = Math.max(d.min!, Math.min(max, v));
+    const c = Math.max(d.min!, Math.min(d.max!, v));
     out[d.key] = d.type === 'int' ? Math.round(c) : c;
   }
   for (const d of ITEM_SETTING_DEFS) {
