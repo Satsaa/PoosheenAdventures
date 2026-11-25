@@ -36,7 +36,10 @@ export function addNpcs(ctx: Ctx, rng: Rng, plan: Plan, regions: RegionBP[], sta
 
   // --- Travelling merchant: follows the player's progress and is a moving ammo source.
   const S = ctx.settings;
-  const stops = (S.merchant ? [plan.tools[1], plan.tools[3], plan.tools[5]] : []).filter(Boolean) as ItemId[];
+  // up to three stops, spread over however many tools this world has
+  const T = plan.tools;
+  const picks = T.length >= 6 ? [1, 3, 5] : [Math.min(1, T.length - 1), T.length >> 1, T.length - 1];
+  const stops = S.merchant && T.length ? [...new Set(picks)].sort((a, b) => a - b).map((i) => T[i]) : [];
   if (stops.length) {
   const merchant = { id: 'merchant', name: 'Pinjata the Peddler', role: 'Travelling shop', icon: '$', color: '#ff9f6b', stages: [] as ReturnType<typeof stageAt>[] };
   const heart = ctx.check(regionOf(ctx.itemHome.get(stops[0])!).id, 'heart', 'shop', "Peddler's heart piece", all(has(stops[0]), use('rupees', S.pricePeddlerHeart)));

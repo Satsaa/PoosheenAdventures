@@ -75,7 +75,10 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
       for (const s of sub.regions[idx]) count.set(themes[part.cell[s]].biome, (count.get(themes[part.cell[s]].biome) ?? 0) + 1);
       const above = [...count].sort((a, b) => b[1] - a[1])[0][0];
       const u = UNDER_BIOMES[above];
-      return { biome: u.id, elev: 0, name: u.name, color: u.color };
+      let name = u.name;
+      for (let k = 2; usedNames.has(name); k++) name = k === 2 ? `Deep ${u.name}` : `${u.name} ${k}`;
+      usedNames.add(name);
+      return { biome: u.id, elev: 0, name, color: u.color };
     };
     const stack = buildStack(ctx, {
       id: kind, kind: kind === 'under' ? 'underworld' : 'sky', name: kind === 'under' ? 'Underworld' : 'Sky', stack: kind === 'under' ? -1 : 1,

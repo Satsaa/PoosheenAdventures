@@ -195,11 +195,13 @@ $('btnGhost').addEventListener('click', (e) => {
   b.setAttribute('aria-pressed', String(on));
   map.setGhost(on);
 });
+// the lit renderer is optional: without WebGL2 (or before it exists) the button simply is not offered
+const look = map as unknown as { setRenderer?: (mode: 'lit' | 'flat') => void; renderer?: 'lit' | 'flat' };
+$('btnLook').hidden = typeof look.setRenderer !== 'function';
 $('btnLook').addEventListener('click', (e) => {
   const b = e.currentTarget as HTMLElement;
-  const lit = b.getAttribute('aria-pressed') !== 'true';
-  map.setRenderer(lit ? 'lit' : 'flat');
-  b.setAttribute('aria-pressed', String(map.renderer === 'lit'));
+  look.setRenderer?.(b.getAttribute('aria-pressed') !== 'true' ? 'lit' : 'flat');
+  b.setAttribute('aria-pressed', String(look.renderer === 'lit'));
 });
 $('btnFog').addEventListener('click', (e) => {
   const b = e.currentTarget as HTMLElement;
@@ -227,7 +229,7 @@ window.addEventListener('resize', () => map.resize());
 if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => map.resize()).observe(canvas);
 
 map.setGhost(true);
-$('btnLook').setAttribute('aria-pressed', String(map.renderer === 'lit'));
+$('btnLook').setAttribute('aria-pressed', String(look.renderer === 'lit'));
 const fromHash = cleanSeed(decodeURIComponent(location.hash.slice(1)));
 if (location.hash.length > 1) $<HTMLInputElement>('seed').value = fromHash;
 generate($<HTMLInputElement>('seed').value);

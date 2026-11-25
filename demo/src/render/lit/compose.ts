@@ -1,0 +1,223 @@
+// Builds sprite instance lists: the static terrain of a dimension (composed once into a per-dimension
+// G-buffer) and the dynamic objects (drawn each frame on top). Same painter order and elevation rules
+// as the flat renderer: row by row north -> south, tile tops shifted up by their lift, cliff faces
+// below where the south neighbour is lower, tall props overlapping the row above.
+import { D, T, type Dimension, type MapObject } from '../../core/types';
+import type { AssetSheet, Frame } from '../bake/sheet';
+import { TILE_PX } from '../bake/sheet';
+import { pal } from '../palette';
+import { hash2 } from '../util';
+import { isWallG } from '../terrain';
+
+export const FLAG = { FACE: 1, BEV_N: 2, BEV_W: 4, BEV_E: 8, TINTALL: 32 } as const;
+export const FLOATS = 16;
+const P = TILE_PX;
+
+export class InstBuf {
+  f = new Float32Array(FLOATS * 1024);
+  n = 0;
+  push(dx: number, dy: number, w: number, h: number, sx: number, sy: number, mx: number, my: number,
+    z: number, tx: number, ty: number, flags: number, r = 1, g = 1, b = 1, e = 1) {
+    if ((this.n + 1) * FLOATS > this.f.length) {
+      const nf = new Float32Array(this.f.length * 2);
+      nf.set(this.f);
+      this.f = nf;
+    }
+    const o = this.n++ * FLOATS, f = this.f;
+    f[o] = dx; f[o + 1] = dy; f[o + 2] = w; f[o + 3] = h;
+    f[o + 4] = sx; f[o + 5] = sy; f[o + 6] = mx; f[o + 7] = my;
+    f[o + 8] = z; f[o + 9] = tx; f[o + 10] = ty; f[o + 11] = flags;
+    f[o + 12] = r; f[o + 13] = g; f[o + 14] = b; f[o + 15] = e;
+  }
+  sprite(fr: Frame, tileX: number, tileY: number, x: number, y: number, liftPx: number, top: number, flags = 0, tint: readonly number[] = [1, 1, 1], e = 1, dyExtra = 0) {
+    this.push(x * P - fr.ox, top + y * P - liftPx - fr.oy + dyExtra, fr.w, fr.h, fr.x, fr.y, -1, -1, liftPx / P, tileX, tileY, flags, tint[0], tint[1], tint[2], e);
+  }
+}
+
+export interface Layout {
+  /** G-buffer size in px */
+  W: number;
+  H: number;
+  /** px above row 0 */
+  top: number;
+  /** per-tile lift in px (rounded elev * 6.4) */
+  liftPx: Int16Array;
+  voidLiftPx: number;
+  maxLiftPx: number;
+}
+
+export const liftOf = (ve: number) => Math.round(ve * TILE_PX * 0.4);
+
+export function layout(dim: Dimension, ve: Float32Array, voidElev: number): Layout {
+  const n = dim.w * dim.h;
+  const liftPx = new Int16Array(n);
+  let maxL = 0;
+  for (let i = 0; i < n; i++) {
+    liftPx[i] = dim.ground[i] === T.VOID ? liftOf(voidElev) : liftOf(ve[i]);
+    if (dim.ground[i] !== T.VOID && liftPx[i] > maxL) maxL = liftPx[i];
+  }
+  const voidLiftPx = liftOf(voidElev);
+  const top = maxL + 36;
+  return { W: dim.w * P, H: top + dim.h * P + (maxL - voidLiftPx) + 8, top, liftPx, voidLiftPx, maxLiftPx: maxL };
+}
+
+export function variant(x: number, y: number, salt: number, n: number) {
+  return Math.min(n - 1, Math.floor(hash2(x, y, salt) * n));
+}
+
+export interface StaticOut {
+  inst: InstBuf;
+  /** world positions (tiles; z = height) of wall torches and lit house windows */
+  torches: [number, number, number][];
+  windows: [number, number, number][];
+}
+
+export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed: number): StaticOut {
+  const { w, h, ground, deco } = dim;
+  const { liftPx, top, voidLiftPx } = lay;
+  const inst = new InstBuf();
+  const torches: [number, number, number][] = [];
+  const windows: [number, number, number][] = [];
+  const fr = sheet.frames;
+  const gAt = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? T.VOID : ground[y * w + x]);
+  const lAt = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? voidLiftPx : liftPx[y * w + x]);
+  const dAt = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? 0 : deco[y * w + x]);
+  const under = dim.kind === 'underworld' || dim.kind === 'interior';
+  const get = (k: string) => fr.get(k);
+  const lavaTint = [1.0, 0.55, 0.2];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      const g = ground[i];
+      if (g === T.VOID) continue;
+      const L = liftPx[i];
+      const px = x * P, py = top + y * P - L;
+      const gl = get('g:' + g);
+      if (!gl) continue;
+      const p = pal(g);
+      let flags = 0;
+      if (!p.liquid) {
+        if (lAt(x, y - 1) < L) flags |= FLAG.BEV_N;
+        if (lAt(x - 1, y) < L) flags |= FLAG.BEV_W;
+        if (lAt(x + 1, y) < L) flags |= FLAG.BEV_E;
+      }
+      const f0 = gl[variant(x, y, seed + g, gl.length)];
+      inst.push(px, py, P, P, f0.x, f0.y, -1, -1, L / P, x, y, flags);
+      // edge blends with higher-priority neighbours on the same level
+      if (p.prio >= 0) {
+        const nbs: [number, number, number][] = [[x, y - 1, 0], [x + 1, y, 1], [x, y + 1, 2], [x - 1, y, 3]];
+        for (const [nx, ny, dir] of nbs) {
+          const ng = gAt(nx, ny);
+          if (ng === g || ng === T.VOID || lAt(nx, ny) !== L) continue;
+          const q = pal(ng);
+          if (p.liquid && !q.liquid) {
+            const fm = get('fm:' + dir)!;
+            const mv = fm[variant(Math.min(x, nx), Math.min(y, ny), seed + 7 + dir, fm.length)];
+            const tint = g === T.LAVA ? lavaTint : [1, 1, 1];
+            inst.push(px, py, P, P, mv.x, mv.y, -1, -1, L / P, x, y, FLAG.TINTALL, tint[0], tint[1], tint[2], 1);
+            if (q.prio < 0) continue;
+          }
+          if (q.prio <= p.prio) continue;
+          if (p.liquid && q.liquid) continue;
+          const ngl = get('g:' + ng);
+          const mk = get('m:' + dir);
+          if (!ngl || !mk) continue;
+          const nf = ngl[variant(nx, ny, seed + ng, ngl.length)];
+          const mv = mk[variant(Math.min(x, nx), Math.min(y, ny), seed + 3 + dir, mk.length)];
+          inst.push(px, py, P, P, nf.x, nf.y, mv.x, mv.y, L / P, x, y, flags);
+        }
+      }
+      // cliff face below
+      const LS = lAt(x, y + 1);
+      if (LS < L) {
+        const fl = get('f:' + g);
+        if (fl) {
+          const ff = fl[variant(x, y, seed + 11, fl.length)];
+          inst.push(px, py + P, P, L - LS, ff.x, ff.y, -1, -1, L / P, x, y, FLAG.FACE);
+        }
+      }
+    }
+    // props of this row
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      const d = deco[i];
+      if (ground[i] === T.VOID) continue;
+      const L = liftPx[i];
+      if (d === D.HOUSE) {
+        if (dAt(x, y + 1) === D.HOUSE) continue;
+        let depth = 1;
+        while (depth < 3 && dAt(x, y - depth) === D.HOUSE) depth++;
+        const wl = dAt(x - 1, y) !== D.HOUSE, wr = dAt(x + 1, y) !== D.HOUSE;
+        const col = wl && wr ? 3 : wl ? 0 : wr ? 2 : 1;
+        const hf = get(`h:${depth}:${col}`);
+        if (hf) {
+          const f = hf[0];
+          inst.push(x * P - f.ox, top + (y - depth + 1) * P - L - f.oy, f.w, f.h, f.x, f.y, -1, -1, L / P, x, y, 0);
+          if (col !== 1 || x % 2 === 0) windows.push([x + 0.5, y + 1.1, L / P + 0.45]);
+        }
+        continue;
+      }
+      if (d) {
+        let key = 'd:' + d;
+        if (d === D.PINE && ground[i] === T.SNOW) key += ':snow';
+        if (d === D.MUSHROOM && under) key += ':glow';
+        const dl = get(key);
+        if (dl) inst.sprite(dl[variant(x, y, seed + d * 7, dl.length)], x, y, x, y, L, top);
+      }
+      // wall torches on south-facing interior walls
+      if (dim.kind === 'interior' && isWallG(ground[i]) && y + 1 < h && !isWallG(ground[i + w]) && ground[i + w] !== T.VOID && (x * 7 + y * 3) % 5 === 0) {
+        const tl = get('torch');
+        const LS = liftPx[i + w];
+        if (tl) {
+          const f = tl[0];
+          inst.push(x * P - f.ox, top + y * P - LS - f.oy, f.w, f.h, f.x, f.y, -1, -1, LS / P, x, y, 0);
+          torches.push([x + 0.5, y + 1.05, LS / P + 0.6]);
+        }
+      }
+    }
+  }
+  return { inst, torches, windows };
+}
+
+// ---------------------------------------------------------------- objects
+
+export function objectKey(o: MapObject, done: boolean, sheet: AssetSheet): string | null {
+  let k: string | null = null;
+  switch (o.kind) {
+    case 'chest': k = 'o:chest'; break;
+    case 'npc': k = 'o:npc'; break;
+    case 'boss': k = 'o:boss'; break;
+    case 'start': k = 'o:start'; break;
+    case 'ledge': k = 'o:ledge:' + (o.dir || 's'); break;
+    case 'source': {
+      const s = `${o.style || ''} ${o.icon || ''} ${o.label || ''} ${o.sourceId || ''}`.toLowerCase();
+      k = /pot|jar|urn|vase/.test(s) ? 'o:src:pot' : /grass|bush|tuft/.test(s) ? 'o:src:grass' : 'o:src:flower';
+      break;
+    }
+    case 'stairs':
+    case 'entrance': {
+      const st = o.kind === 'stairs' && !(o.style || '').startsWith('stairs') ? 'stairs-down' : o.style || 'house';
+      k = 'o:ent:' + st;
+      if (!sheet.frames.has(k)) k = 'o:ent:house';
+      break;
+    }
+    case 'gate': {
+      const g = o.gate || 'open';
+      if (g === 'open') return null;
+      if (g === 'ledge') k = 'o:ledge:' + (o.dir || 's');
+      else if (g === 'guard') k = 'o:guard';
+      else if (g === 'stairs') k = 'o:ent:stairs-down';
+      else k = 'o:gate:' + g;
+      break;
+    }
+  }
+  if (!k) return null;
+  if (done && sheet.frames.has(k + ':done')) k += ':done';
+  return sheet.frames.has(k) ? k : null;
+}
+
+/** Entrance styles drawn into the wall behind them (house front / cliff face). */
+export function wallStyle(o: MapObject, key: string): boolean {
+  if (o.kind === 'gate') return o.gate === 'cracked';
+  return key.startsWith('o:ent:') && !/stairs|beanstalk|exit/.test(key);
+}

@@ -41,8 +41,9 @@ export class SettingsModel {
   effItem(id: ItemId, f: Field): Val { return this.eff.items[id]?.[f]; }
   defItem(id: ItemId, f: Field): Val { return this.defaults.items[id]?.[f]; }
 
-  modified(key: SettingKey): boolean { return this.get(key) !== this.def(key) || this.effVal(key) !== this.def(key); }
-  modifiedItem(id: ItemId, f: Field): boolean { return this.getItem(id, f) !== this.defItem(id, f) || this.effItem(id, f) !== this.defItem(id, f); }
+  // "modified" means the user asked for something else. A default that other settings limit is not a change.
+  modified(key: SettingKey): boolean { return this.get(key) !== this.def(key); }
+  modifiedItem(id: ItemId, f: Field): boolean { return this.getItem(id, f) !== this.defItem(id, f); }
 
   set(key: SettingKey, v: number | boolean): void {
     if (this.cur[key] === v) return;

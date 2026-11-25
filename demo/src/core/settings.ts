@@ -80,7 +80,7 @@ export const SETTING_DEFS: SettingDef[] = [
 
   flag('favorQuest', 'Quests & NPCs', 'Guard favor quest', true, 'A required side quest: fetch an item, earn a flag, and a guard opens a border.', 'npc flag fetch'),
   flag('tradeQuest', 'Quests & NPCs', 'Trade chain', true, 'Three NPCs trade up to the Big Wallet. When off, the wallet becomes a hidden chest.', 'npc optional side quest wallet'),
-  flag('merchant', 'Quests & NPCs', 'Travelling peddler', true, 'An NPC that follows the player\'s progress and is a moving ammo source.', 'npc dynamic shop moving'),
+  flag('merchant', 'Quests & NPCs', 'Travelling peddler', true, 'An NPC that follows the player\'s progress and is a moving ammo source. Needs at least one tool in the world to follow.', 'npc dynamic shop moving'),
 
   num('priceBombs', 'Economy', 'Bomb price', 'int', 1, 300, 1, 20, 'Rupees per refill at shops. A price above the wallet capacity makes the shelf unusable, and the checks will say so.', 'shop cost rupees'),
   num('priceArrows', 'Economy', 'Arrow price', 'int', 1, 300, 1, 10, 'Rupees per refill at shops.', 'shop cost rupees'),
@@ -156,7 +156,9 @@ export function normalizeSettings(partial?: Partial<GenSettings> | null): GenSet
     if (d.fields.includes('cap') && typeof it.cap === 'number' && Number.isFinite(it.cap)) t.cap = Math.round(Math.max(d.capRange![0], Math.min(d.capRange![1], it.cap)));
   }
   // structural limits that depend on each other
-  s.regions = Math.max(2, Math.min(s.regions, Math.floor((s.worldW * s.worldH) / 5)));
+  s.regions = Math.max(3, Math.min(s.regions, Math.floor((s.worldW * s.worldH) / 5)));
+  // the Big Wallet is an upgrade: it can never hold less than the base wallet
+  s.items.wallet.cap = Math.max(s.items.wallet.cap ?? 0, s.items.rupees.cap ?? 0);
   s.sealMedallions = Math.min(s.sealMedallions, s.dungeons);
   s.underworldSize = Math.min(s.underworldSize, s.worldW * s.worldH - 2);
   s.skySize = Math.min(s.skySize, s.worldW * s.worldH - 2);
@@ -167,7 +169,18 @@ export function normalizeSettings(partial?: Partial<GenSettings> | null): GenSet
 export function countChanges(s: GenSettings): number {
   const d = defaultSettings();
   let n = 0;
-  for (const def of SETTING_DEFS) if (s[def.key] !== d[def.key]) n++;
-  for (const def of ITEM_SETTING_DEFS) for (const f of def.fields) if (s.items[def.id]?.[f] !== d.items[def.id][f]) n++;
+  // a value only counts as changed if putting the default back would actually alter it
+  // (a default that other settings clamp, like 7 regions on a small map, is not a change)
+  for (const def of SETTING_DEFS) {
+    if (s[def.key] === d[def.key]) continue;
+    if (normalizeSettings({ ...s, [def.key]: d[def.key] })[def.key] !== s[def.key]) n++;
+  }
+  for (const def of ITEM_SETTING_DEFS) {
+    for (const f of def.fields) {
+      if (s.items[def.id]?.[f] === d.items[def.id][f]) continue;
+      const probe = normalizeSettings({ ...s, items: { ...s.items, [def.id]: { ...s.items[def.id], [f]: d.items[def.id][f] } } });
+      if (probe.items[def.id][f] !== s.items[def.id]?.[f]) n++;
+    }
+  }
   return n;
 }

@@ -57,6 +57,12 @@ export function runLints(g: LogicGraph, items: Items, sol: Solution, npcs: Npc[]
   }
   add('replenish', 'Each ammo gate has a free refill on its near side', bad, `${spends} ammo gates`);
 
+  // shops and other paid refills must be payable with the best wallet the world offers
+  const last = sol.spheres[sol.spheres.length - 1];
+  const endCaps = { inv: new Map(Object.entries(last?.inv ?? {})), renewable: new Set(last?.renewable ?? []) };
+  add('sources', 'Every refill and shop shelf can actually be used',
+    g.sources.filter((s) => !evalReq(s.req, endCaps, items)).map((s) => s.label), `${g.sources.length} sources`);
+
   // small keys: worst-case logic passed (implied by solvable); also report the raw counts
   const scopes = [...new Set(g.edges.filter((e) => e.lock).map((e) => e.lock!))];
   add('keys', 'Small keys cannot be wasted (worst-case order)',

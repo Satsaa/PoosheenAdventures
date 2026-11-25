@@ -169,7 +169,7 @@ export function settingRow(model: SettingsModel, d: SettingDef, prefix: string):
       note.hidden = !note.textContent;
     },
     highlight(words) { lbl.replaceChildren(...marked(d.label, words)); },
-    changed: () => (model.effVal(d.key) !== model.def(d.key) ? 1 : 0),
+    changed: () => (model.modified(d.key) ? 1 : 0),
   };
 }
 
@@ -285,7 +285,7 @@ export function itemRow(model: SettingsModel, d: ItemSettingDef, prefix: string,
       }
     },
     highlight(words) { lbl.replaceChildren(...marked(name, words)); },
-    changed: () => d.fields.filter((f) => model.effItem(d.id, f) !== model.defItem(d.id, f)).length,
+    changed: () => d.fields.filter((f) => model.modifiedItem(d.id, f)).length,
   };
 }
 

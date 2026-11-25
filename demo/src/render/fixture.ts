@@ -3,6 +3,7 @@
 // tile coordinates, and a 3-room interior. Non-render fields of World are minimal stubs.
 import { D, T, type Dimension, type GateKind, type MapObject, type RegionInfo, type World } from '../core/types';
 import { Rng, valueNoise } from '../core/rng';
+import { defaultSettings } from '../core/settings';
 
 type Biome = 'plains' | 'forest' | 'desert' | 'snow' | 'swamp' | 'volcano' | 'lake';
 
@@ -419,6 +420,7 @@ export function makeFixtureWorld(seedStr = 'fixture'): World {
   const locs = dims.flatMap((d) => d.zoneLoc.map((id) => ({ id, name: id, hnode: d.id, dim: d.id, x: 0, y: 0 })));
   return {
     seed: seedStr,
+    settings: defaultSettings(),
     items: {},
     dims,
     tree: { id: 'game', kind: 'game', name: 'Fixture', seed, entryCaps: [], provides: [], needs: { t: 'none' }, edges: [], children: [], locs: [], meta: {} },
