@@ -42,7 +42,10 @@ export function createQuestsTab(): TabView {
 
     const nBox = h('div', { class: 'pa-cards' });
     for (const n of world.npcs) {
-      const active = state.npcStage[n.id] ?? 0;
+      // stateAt falls back to stage 0 even when its condition does not hold yet (e.g. the peddler)
+      const k0 = state.npcStage[n.id] ?? 0;
+      const absent = !n.stages[k0] || !reqOk(world, state, n.stages[k0].when);
+      const active = absent ? -1 : k0;
       const ol = h('ol', { class: 'pa-stepper' });
       n.stages.forEach((st, i) => {
         const where = ix.loc.get(st.loc)?.name ?? st.loc;
@@ -59,6 +62,7 @@ export function createQuestsTab(): TabView {
         h('header', { class: 'pa-card-h' },
           h('span', { class: 'pa-npc-i', style: { '--chip-c': n.color }, 'aria-hidden': 'true' }, n.icon),
           h('h4', { class: 'pa-card-t' }, n.name),
+          absent ? h('span', { class: 'pa-tag', title: 'No stage condition holds yet' }, 'not around yet') : null,
           h('span', { class: 'pa-muted pa-card-n' }, n.role)),
         ol));
     }

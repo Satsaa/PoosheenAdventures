@@ -39,7 +39,7 @@ export function createTreeTab(): TabView {
         title: target ? `Show ${n.name} on the map` : undefined,
         onclick: () => { if (target) cb.focusLoc(target); },
       }, n.name || '(unnamed)', sub2 ? h('span', { class: 'pa-tsub' }, sub2) : null),
-      fresh ? h('span', { class: 'pa-tag is-fresh', title: 'Became reachable in this sphere' }, 'new') : null,
+      fresh && n.kind !== 'game' && n.kind !== 'world' ? h('span', { class: 'pa-tag is-fresh', title: 'Became reachable in this sphere' }, 'new') : null,
     );
     const fields = h('div', { class: 'pa-tfields' },
       h('div', { class: 'pa-tf' }, h('span', { class: 'pa-tf-k' }, 'needs'),

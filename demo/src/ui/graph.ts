@@ -203,6 +203,8 @@ export function createGraphTab(): TabView {
 
     // region nodes + satellites
     const nodeLayer = s('g', { class: 'pa-g-nodes' });
+    const satLines = s('g', { class: 'pa-g-satlines' });
+    for (const n of L.nodes.values()) for (const st of n.sats) satLines.append(s('line', { class: 'pa-g-satline', x1: n.x, y1: n.y, x2: st.x, y2: st.y }));
     const regionLabels: { n: RNode; text: string }[] = [];
     for (const n of L.nodes.values()) {
       const on = reachable(n);
@@ -234,7 +236,6 @@ export function createGraphTab(): TabView {
           'aria-label': `${st.place.name} (${kindName})${sOn ? '' : ', not reachable yet'}: show on map`,
         },
         s('title', null, `${st.place.name} (${kindName})${need.t !== 'none' ? '\nneeds ' + fmtReq(need, world.items) : ''}\n${sOn ? 'reachable' : 'not reachable yet'}`),
-        s('line', { class: 'pa-g-satline', x1: n.x, y1: n.y, x2: st.x, y2: st.y }),
         s('circle', { class: 'pa-g-selring', cx: st.x, cy: st.y, r: SAT_R + 4 }),
         s('circle', { class: 'pa-g-satdot', cx: st.x, cy: st.y, r: SAT_R }),
         s('text', { class: 'pa-g-satg', x: st.x, y: st.y + 0.5, 'text-anchor': 'middle', 'dominant-baseline': 'central' }, st.glyph));
@@ -291,7 +292,7 @@ export function createGraphTab(): TabView {
       g.append(t);
       labelLayer.append(g);
     }
-    svg.append(labelLayer, nodeLayer, lblLayer);
+    svg.append(satLines, labelLayer, nodeLayer, lblLayer);
 
     const legend = h('div', { class: 'pa-legend', 'aria-label': 'Legend' },
       h('span', { class: 'pa-lg' }, h('i', { class: 'pa-lg-line is-on' }), 'open now'),
