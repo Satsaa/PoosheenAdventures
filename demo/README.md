@@ -24,6 +24,7 @@ Open `dist/index.html` in a browser. No server needed.
 | `src/core/req.ts` | Requirement expressions: `has`, `use` (spend a renewable), `all`, `any`. |
 | `src/core/solver.ts` | Sphere search. Renewable consumables, worst-case small keys. |
 | `src/core/content.ts` | The premade set: items, the gate each one opens, biomes. |
+| `src/core/settings.ts` | Generation and item settings, described by metadata so a UI or config file can be generated from them. |
 | `src/gen/plan.ts` | Level 0. Fixes the tool order and what each world must contain. |
 | `src/gen/lockgraph.ts` | The generic forward lock-and-key builder, used for regions and for dungeon rooms. |
 | `src/gen/regions.ts` | World → regions → places. Same routine for overworld, underworld, sky. |
@@ -54,6 +55,21 @@ Open `dist/index.html` in a browser. No server needed.
 8. **Tiles are verified.** Walkable tiles are flood-filled into zones; every gate must
    separate exactly the two zones of its edge. A map that disagrees is discarded and the
    next attempt runs from a derived seed, so results stay deterministic per seed.
+
+## Settings
+
+`generateWorld(seed, settings?)` takes a partial `GenSettings`; anything missing falls back to
+the defaults and everything is clamped into range. The same seed with the same settings
+always gives the same world.
+
+- **Generation settings** cover world size and region count, the stacked layers, dungeon
+  count and size, lock density, loops and ledges, which quests and NPCs exist, and prices.
+- **Item settings** switch each tool on or off, say roughly when it appears (start, early,
+  any, late) and whether it is loose or a dungeon treasure, and set carry capacities.
+
+Settings that cannot work are not silently fixed. A shop price above any wallet, for
+example, shows up as a failed "everything is obtainable" check. `npm test` includes a fuzz
+run of random settings across seeds.
 
 ## Known simplifications
 
