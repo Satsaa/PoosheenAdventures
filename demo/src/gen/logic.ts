@@ -2,7 +2,7 @@
 import type { HNode, ItemId, LogicGraph } from '../core/types';
 import { Rng, childSeed } from '../core/rng';
 import { BASE_ITEMS, BIOMES, GATES, UNDER_BIOMES } from '../core/content';
-import { NONE, use } from '../core/req';
+import { NONE, reqItems, use } from '../core/req';
 import { solve } from '../core/solver';
 import { Ctx, hnode, type RegionBP, type StackBP } from './blueprint';
 import { makePlan, type Plan } from './plan';
@@ -113,6 +113,15 @@ export function buildBlueprint(seed: number): Blueprint {
     const frng = new Rng(childSeed(r.hnode.seed, 'filler'));
     if (frng.chance(0.75)) placeItem(ctx, frng, r, 'heart', frng.shuffle(plan.tools).slice(0, 3), false);
     if (r !== start && frng.chance(0.4)) localSource(ctx, r, 'rupees');
+  }
+  // every tool should open something somewhere: a tool no edge asks for gets its own secret alcove
+  const asked = new Set<ItemId>();
+  for (const e of ctx.edges) reqItems(e.req, asked);
+  const drng = new Rng(childSeed(seed, 'dead'));
+  for (const t of plan.tools) {
+    const spent = GATES[t].spends;
+    if (asked.has(t) || (spent && asked.has(spent))) continue;
+    placeItem(ctx, drng, drng.pick(regions), 'heart', [t], false, true);
   }
   addNpcs(ctx, new Rng(childSeed(seed, 'npc')), plan, regions, start);
 

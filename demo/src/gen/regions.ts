@@ -165,9 +165,9 @@ function elderGift(ctx: Ctx, region: RegionBP, p: Payload): void {
 }
 
 /** A loose item: cave, gated alcove, or chest in the open. `main` items never hide behind later tools. */
-export function placeItem(ctx: Ctx, rng: Rng, region: RegionBP, item: ItemId, caps: ItemId[], main: boolean): void {
+export function placeItem(ctx: Ctx, rng: Rng, region: RegionBP, item: ItemId, caps: ItemId[], main: boolean, forceAlcove = false): void {
   const gateable = caps.filter((c) => GATES[c]);
-  const roll = rng.next();
+  const roll = forceAlcove ? 0.5 : rng.next();
   const what = ctx.items[item].name;
   if (roll < 0.34) {
     const dark = caps.includes('lantern') && rng.chance(0.4);
