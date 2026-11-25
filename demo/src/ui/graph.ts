@@ -9,7 +9,8 @@ import type { TabCtx, TabView } from './tab';
 const W = 360;
 const MX = 24;
 const NODE_R = 10;
-const SAT_R = 6;
+const SAT_R = 7;
+const Y_STRETCH = 1.6; // panels are tall and narrow: spread the map vertically
 const FS = 10; // region label size (viewBox units)
 const EFS = 9; // edge label size
 
@@ -88,15 +89,15 @@ export function createGraphTab(): TabView {
       const head = 18;
       const padTop = 26; // satellites sit above nodes
       const padBot = 26; // labels sit below nodes
-      const band: Band = { world: w, dim: d, top: y, h: head + padTop + (maxY - minY) * scale + padBot };
+      const band: Band = { world: w, dim: d, top: y, h: head + padTop + (maxY - minY) * scale * Y_STRETCH + padBot };
       bands.push(band);
       for (const a of anchors) {
         const nx = MX + a.x * scale;
-        const ny = y + head + padTop + (a.y - minY) * scale;
+        const ny = y + head + padTop + (a.y - minY) * scale * Y_STRETCH;
         const places = a.r.children.filter((c) => c.kind === 'place');
         const angles = [-90, -45, -135, -15, -165, 20, 160, 55, 125];
         const sats: Sat[] = places.map((p, i) => {
-          const ring = NODE_R + 9 + Math.floor(i / angles.length) * 13;
+          const ring = NODE_R + 10 + Math.floor(i / angles.length) * 15;
           const ang = (angles[i % angles.length] * Math.PI) / 180;
           const sub = new Set(ix.subLocs.get(p.id) ?? []);
           const entry = world.graph.edges.find((e) => sub.has(e.b) && !sub.has(e.a)) ?? world.graph.edges.find((e) => sub.has(e.a) && !sub.has(e.b));
