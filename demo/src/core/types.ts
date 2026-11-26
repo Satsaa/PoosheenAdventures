@@ -153,7 +153,11 @@ export interface MapObject {
   sourceId?: string;
   /** entrance / stairs: where it leads */
   to?: { dim: DimId; x: number; y: number };
-  /** ledge: direction of the allowed drop */
+  /**
+   * Which way you walk to pass through. Ledges: the direction of the drop. Gates, doors and
+   * entrances: the door stands ACROSS this direction, so 'n' and 's' mean a door seen face-on in
+   * an east-west wall, 'e' and 'w' a door seen edge-on in a north-south wall.
+   */
   dir?: 'n' | 's' | 'e' | 'w';
   /** npc: which npc and which stage stands here */
   npcId?: string;

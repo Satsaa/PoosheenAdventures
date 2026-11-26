@@ -52,7 +52,7 @@ export function realiseTiles(bp: Blueprint, seed: number): TileResult {
     if (!door) { problems.push(`${ib.name} has no entrance on the map`); continue; }
     door.obj.to = { dim: it.dim.id, x: it.exit.x, y: it.exit.y };
     it.dim.parent = { dim: door.dim, x: door.x, y: door.y };
-    it.dim.objects.push({ id: 'x.' + ib.entranceEdge, kind: 'entrance', x: it.exit.x, y: it.exit.y, label: 'Way out', style: 'exit', edgeId: ib.entranceEdge, to: { dim: door.dim, x: door.x, y: door.y } });
+    it.dim.objects.push({ id: 'x.' + ib.entranceEdge, kind: 'entrance', x: it.exit.x, y: it.exit.y, label: 'Way out', style: 'exit', dir: 's', edgeId: ib.entranceEdge, to: { dim: door.dim, x: door.x, y: door.y } });
     layers.push({ dim: it.dim, barriers: it.barriers, anchors: it.anchors });
   }
 

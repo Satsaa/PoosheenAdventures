@@ -127,7 +127,7 @@ export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => voi
             });
           }
           if (f.f === 'house') continue;
-          const obj: MapObject = { id: 'd.' + f.edgeId, kind: 'entrance', x: at.x, y: at.y, label: f.label, style: f.style, req: f.req, edgeId: f.edgeId };
+          const obj: MapObject = { id: 'd.' + f.edgeId, kind: 'entrance', x: at.x, y: at.y, label: f.label, style: f.style, req: f.req, edgeId: f.edgeId, dir: 'n' };
           dim.objects.push(obj);
           st.mouths[r.idx].push(at.y * w + at.x);
           doors.set(f.edgeId, { dim: dim.id, x: at.x, y: at.y, obj });
