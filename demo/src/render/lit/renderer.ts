@@ -707,13 +707,13 @@ export class LitRenderer {
         if (!look) return;
         const x = i % W, y = (i / W) | 0, L = lay.liftPx[i], fm = look.frame;
         if (fade > 0 && x >= wx0 && x <= wx1 && y >= wy0 && y <= wy1)
-          pi.push(x * TILE_PX - fm.ox, lay.top + y * TILE_PX - L - fm.oy, fm.w, fm.h, fm.x, fm.y, -1, -1, L / TILE_PX, x, y, 0, look.r, look.g, look.b, look.windows ? night * 1.2 : 1);
+          pi.push(x * TILE_PX - fm.ox, lay.top + y * TILE_PX - L - fm.oy, fm.w, fm.h, fm.x, fm.y, -1, -1, L / TILE_PX, x, y, 2048, look.r, look.g, look.b, look.windows ? night * 1.2 : 1);
         if (shadowsOn && x >= cr.x0 && x <= cr.x1 && y >= cr.y0 && y <= cr.y1) pushCaster(ci, fm, x, y, L / TILE_PX, false);
       });
     }
     let nObj = 0;
     if (s >= 4) {
-      for (const { o, done, attach } of f.objs) {
+      for (const { o, done, attach, alpha } of f.objs) {
         const key = objectKey(o, done, this.sheet);
         if (!key) continue;
         const frm = fr.get(key)![0];
@@ -722,9 +722,9 @@ export class LitRenderer {
         const tint = o.kind === 'gate' && o.gate === 'guard' ? [0.85, 0.45, 0.2] : [1, 1, 1];
         const dy = attach && wallStyle(o, key) ? -13 : 0;
         const dx = o.kind === 'gate' && o.gate === 'guard' && done ? 9 : 0;
-        const e = (o.gate as string) === 'moon' ? 0.3 + night * 1.4 : 1;
-        if (fade > 0) { pi.push(o.x * TILE_PX - frm.ox + dx, lay.top + o.y * TILE_PX - L - frm.oy + dy, frm.w, frm.h, frm.x, frm.y, -1, -1, L / TILE_PX, o.x, o.y, 64, tint[0], tint[1], tint[2], e); nObj++; }
-        if (shadowsOn && !dy) pushCaster(ci, frm, o.x + dx / TILE_PX, o.y, L / TILE_PX, false);
+        const e = (o.gate as string) === 'moon' ? 0.3 + night * 1.4 : (o.gate as string) === 'sun' ? 0.3 + (1 - night) * 1.4 : 1;
+        if (fade > 0) { pi.push(o.x * TILE_PX - frm.ox + dx, lay.top + o.y * TILE_PX - L - frm.oy + dy, frm.w, frm.h, frm.x, frm.y, -2, alpha, L / TILE_PX, o.x, o.y, 64 | 1024, tint[0], tint[1], tint[2], e); nObj++; }
+        if (shadowsOn && !dy && alpha > 0.5) pushCaster(ci, frm, o.x + dx / TILE_PX, o.y, L / TILE_PX, false);
       }
       const ca = charAtlas();
       for (const a of f.actors) {
@@ -735,8 +735,8 @@ export class LitRenderer {
         const flip = a.dir === 'w';
         const L = lay.liftPx[a.tile] ?? 0;
         const tx = a.tile % f.dim.w, ty = (a.tile / f.dim.w) | 0;
-        if (fade > 0) ai.push(Math.round(a.x * TILE_PX) - frm.ox, lay.top + Math.round(a.y * TILE_PX) - L - frm.oy, frm.w, frm.h, frm.x, frm.y, -1, -1, L / TILE_PX, tx, ty, 64 | (flip ? 128 : 0), a.tint[0], a.tint[1], a.tint[2], a.e);
-        if (shadowsOn) pushCaster(aci, frm, a.x, a.y, L / TILE_PX, flip);
+        if (fade > 0) ai.push(Math.round(a.x * TILE_PX) - frm.ox, lay.top + Math.round(a.y * TILE_PX) - L - frm.oy, frm.w, frm.h, frm.x, frm.y, -2, a.alpha, L / TILE_PX, tx, ty, 64 | 512 | (flip ? 128 : 0), a.tint[0], a.tint[1], a.tint[2], a.e);
+        if (shadowsOn && a.alpha > 0.5) pushCaster(aci, frm, a.x, a.y, L / TILE_PX, flip);
       }
     }
     this.lastCounts = { props: pi.n - nObj, casters: ci.n + aci.n, actors: ai.n, objects: nObj };

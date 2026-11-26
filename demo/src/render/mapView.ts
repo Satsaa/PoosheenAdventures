@@ -759,7 +759,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     lit.render({
       dim: d, meta: r, cam, cssW: W, cssH: Hh, dpr, t, dt, motion: !reduced,
       ghost: gd ? { dim: gd, meta: getDr(gd) } : null,
-      objs, lights: objectLights(lz), particles: reduced ? null : particles, fresh, actors, gfx: G, sun,
+      objs, lights: objectLights(lz, sun.night), particles: reduced ? null : particles, fresh, actors, gfx: G, sun,
       rsFix: G.integerZoom && (s * dpr) / 16 >= 1 ? dpr / intDiv() : undefined,
     });
     // coastline of the layer above (underworld) as a faint dashed overlay

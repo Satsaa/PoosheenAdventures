@@ -42,7 +42,7 @@ uniform sampler2D uOcc, uLift;   // terrain tile ids of the screen (copied), per
 uniform int uOccOn;
 uniform float uFade;             // detail fade (dithered)
 uniform float uDepthOn;
-uniform float uOutline;
+uniform vec3 uOutline;          // rim strength: creatures, objects, props
 in vec2 vLocal;
 flat in vec4 vSrc;
 flat in vec4 vInst;
@@ -62,10 +62,11 @@ void main() {
   if (face && lp.y >= 48) st = ivec2(vSrc.xy) + ivec2(lp.x, 4 + (lp.y - 4) % 44);
   vec4 a = texelFetch(uA, st, 0);
   if (a.a < 0.5) discard;
-  if (uFade < 1.0) {
+  float fadeA = uFade * (vSrc.z < -1.5 ? vSrc.w : 1.0);   // per-instance fade (hidden / done changes)
+  if (fadeA < 1.0) {
     ivec2 p = ivec2(gl_FragCoord.xy);
     int m[16] = int[16](0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
-    if ((float(m[(p.y & 3) * 4 + (p.x & 3)]) + 0.5) / 16.0 >= uFade) discard;
+    if ((float(m[(p.y & 3) * 4 + (p.x & 3)]) + 0.5) / 16.0 >= fadeA) discard;
   }
   int myRow = int(vInst.z + 0.5);
   if (uOccOn == 1) {
@@ -80,7 +81,8 @@ void main() {
   vec4 e = texelFetch(uE, st, 0);
   int mat = int(e.a * 255.0 + 0.5);
   vec3 alb = a.rgb;
-  if (uOutline > 0.0 && !face && uOccOn == 1) {
+  float rimK = (flags & 512) != 0 ? uOutline.x : (flags & 1024) != 0 ? uOutline.y : (flags & 2048) != 0 ? uOutline.z : 0.0;
+  if (rimK > 0.0 && !face && uOccOn == 1) {
     // 1 px silhouette rim: a darker shade of the sprite's own edge colour
     bool rim = false;
     for (int k = 0; k < 4; k++) {
@@ -88,7 +90,7 @@ void main() {
       ivec2 q = lq + o;
       if (q.x < 0 || q.y < 0 || q.x >= int(vSize.x) || q.y >= int(vSize.y) || texelFetch(uA, ivec2(vSrc.xy) + q, 0).a < 0.5) { rim = true; break; }
     }
-    if (rim) alb *= vec3(1.0 - uOutline, 1.0 - uOutline, 1.0 - uOutline * 0.85);
+    if (rim) alb *= vec3(1.0 - rimK, 1.0 - rimK, 1.0 - rimK * 0.85);
   }
   if (mat == 6) { alb *= vTint.rgb; mat = 0; }
   else if ((flags & 32) != 0) alb *= vTint.rgb;
@@ -215,6 +217,8 @@ uniform vec2 uCastSize;
 uniform vec3 uSun;        // direction toward the sun (x east, y south, z up), normalized
 uniform float uShadowMode, uShadowStr, uShadowSoft, uTerrainSh, uContact, uAmbK, uSunK, uPointK, uSea;
 uniform float uFogDark, uFogDesat, uWaterK;
+uniform int uLSN;          // how many of the first (strongest) lights cast shadows
+uniform float uLSK, uLSSoft;
 uniform vec4 uGhost0;   // on, ghost top (dim px), ghost overview px per dim px
 uniform vec2 uGhostSize;
 out vec4 o;
@@ -240,6 +244,22 @@ float shadowRay(vec3 P, vec3 S) {
     if (H > hz + 0.03) return 1.0;
   }
   return 0.0;
+}
+// occlusion of the segment from surface point P to point light Lp over the world height map
+float lightOcc(vec3 P, vec3 Lp) {
+  vec2 dxy = Lp.xy - P.xy;
+  float len = length(dxy);
+  if (len < 0.3) return 0.0;
+  float occ = 0.0;
+  for (int k = 1; k <= 12; k++) {
+    float u = float(k) / 13.0;
+    if (len * (1.0 - u) < 0.55) break;   // the light's own fixture
+    vec2 q = P.xy + dxy * u;
+    float hz = mix(P.z, Lp.z, u);
+    float H = castH(q);
+    occ = max(occ, smoothstep(0.02, 0.05 + uLSSoft * 0.35, H - hz));
+  }
+  return occ;
 }
 float toon(float x) { return smoothstep(0.02, 0.07, x) * 0.36 + smoothstep(0.28, 0.34, x) * 0.34 + smoothstep(0.6, 0.66, x) * 0.30; }
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -373,9 +393,12 @@ void main() {
     att *= att;
     vec3 l = d / max(dist, 1e-3);
     float nd = dot(N, l);
+    // a surface above the light and facing up (wall tops, cliff tops) gets nothing from it
+    if (P.z > L.z + 0.04 && N.z > 0.6) continue;
+    float lo = (i < uLSN) ? lightOcc(vec3(P.xy, P.z + 0.03), L.xyz) * uLSK : 0.0;
     if (mat == 5 || mat == 3) nd = (nd + 0.4) / 1.4;
     float pul = uLC[i].w > 0.0 ? 0.72 + 0.28 * sin(uTime * uMotion * uLC[i].w + L.x * 3.1 + L.y) : 1.0;
-    pl += uLC[i].rgb * uPointK * toon(max(nd, 0.0) * att * 1.6) * pul;
+    pl += uLC[i].rgb * uPointK * toon(max(nd, 0.0) * att * 1.6) * pul * (1.0 - lo);
     if (shiny) {
       vec3 hv = normalize(l + V);
       spec += uLC[i].rgb * step(0.93, dot(N, hv)) * att * 0.8 * pul;

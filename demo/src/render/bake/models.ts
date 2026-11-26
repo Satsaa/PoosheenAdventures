@@ -405,6 +405,10 @@ export function objectModels(): ObjSpec[] {
     [(x, y, z) => Math.max(sph(x, y, z, 0.5, 0.9, 0.55, 0.13), -sph(x, y, z, 0.56, 0.86, 0.6, 0.11)), 2],
   ]));
   add('o:gate:moon:done', arch({ ramp: R.stone }, { ramp: ['#202a50', '#3a4a80'], emit: [40, 60, 120] }, 0.9, 0.92));
+  add('o:gate:sun', door({ ramp: ['#5a3a10', '#8a5a18', '#b07a22', '#d09a30'] }, 0.82, 0.92, [
+    [(x, y, z) => { let d = sph(x, y, z, 0.5, 0.9, 0.55, 0.09); for (let k = 0; k < 8; k++) { const a = (k / 8) * Math.PI * 2; d = Math.min(d, capsule(x, y, z, 0.5 + Math.cos(a) * 0.12, 0.9, 0.55 + Math.sin(a) * 0.12, 0.5 + Math.cos(a) * 0.19, 0.9, 0.55 + Math.sin(a) * 0.19, 0.02)); } return d; }, 2],
+  ]));
+  add('o:gate:sun:done', arch({ ramp: R.stone }, { ramp: ['#6a4a10', '#a07a20'], emit: [120, 90, 30] }, 0.9, 0.92));
   add('o:gate:foes', door(wood, 0.82, 0.92, [
     [(x, y, z) => { let d = 1e9; for (let k = 0; k < 5; k++) d = Math.min(d, box(x, y, z, 0.22 + k * 0.14, 0.92, 0.42, 0.018, 0.02, 0.42)); return d; }, 2],
     [(x, y, z) => sph(x, y, z, 0.5, 0.95, 0.68, 0.1), 3],
