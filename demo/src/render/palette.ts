@@ -43,11 +43,6 @@ export function pal(g: number): GroundPal {
   return PAL[g] || PAL[T.STONE];
 }
 
-/** Flat representative colour per ground, used for ghost/minimap renders. */
-export function flatColor(g: number): string {
-  return pal(g).top[1];
-}
-
 /** Colours used for object markers / pins. */
 export const OBJ_COL = {
   chest: '#f2b632',

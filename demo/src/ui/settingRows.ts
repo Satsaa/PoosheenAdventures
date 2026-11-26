@@ -98,6 +98,36 @@ function switchInput(id: string, onchange: (v: boolean) => void): HTMLInputEleme
 
 const notFocused = (el: Element) => document.activeElement !== el;
 
+/**
+ * Slider input that is safe to scroll past on touch screens: touching the track makes the browser
+ * jump the value at once, so for touch we hold the value until the finger clearly moves sideways
+ * (or lifts without scrolling). If the browser takes the gesture for a scroll, the value is put back.
+ */
+function onSlide(range: HTMLInputElement, apply: () => void): void {
+  let t: { x: number; y: number; start: string; decided: boolean; held: boolean } | null = null;
+  range.addEventListener('pointerdown', (e) => {
+    // pointerdown fires before the browser moves the value, so this is the value to restore
+    t = e.pointerType === 'touch' ? { x: e.clientX, y: e.clientY, start: range.value, decided: false, held: false } : null;
+  });
+  range.addEventListener('pointermove', (e) => {
+    if (!t || t.decided) return;
+    const dx = Math.abs(e.clientX - t.x), dy = Math.abs(e.clientY - t.y);
+    if (dx > 6 && dx > dy) { t.decided = true; if (t.held) { t.held = false; apply(); } }
+  });
+  range.addEventListener('pointercancel', () => {
+    if (t && !t.decided) { range.value = t.start; }
+    t = null;
+  });
+  range.addEventListener('pointerup', () => {
+    if (t?.held) apply();
+    t = null;
+  });
+  range.addEventListener('input', () => {
+    if (t && !t.decided) { t.held = true; return; }
+    apply();
+  });
+}
+
 // ---------------------------------------------------------------- generation settings
 export function settingRow(model: SettingsModel, d: SettingDef, prefix: string): Row {
   const id = uid(`${prefix}-${d.key}`);
@@ -126,7 +156,7 @@ export function settingRow(model: SettingsModel, d: SettingDef, prefix: string):
       const c = Math.max(d.min!, Math.min(d.max!, n));
       return d.type === 'int' ? Math.round(c) : c;
     };
-    range.addEventListener('input', () => {
+    onSlide(range, () => {
       const v = parse(range.value);
       if (v === null) return;
       model.set(d.key, v);
@@ -253,7 +283,7 @@ export function itemRow(model: SettingsModel, d: ItemSettingDef, prefix: string,
       const n = Number(s);
       return s.trim() === '' || !Number.isFinite(n) ? null : Math.round(Math.max(lo, Math.min(hi, n)));
     };
-    range.addEventListener('input', () => { const v = parse(range.value); if (v === null) return; model.setItem(d.id, 'cap', v); num.value = String(v); unit.textContent = `carry up to ${v}`; });
+    onSlide(range, () => { const v = parse(range.value); if (v === null) return; model.setItem(d.id, 'cap', v); num.value = String(v); unit.textContent = `carry up to ${v}`; });
     num.addEventListener('input', () => { const v = parse(num.value); if (v === null) return; model.setItem(d.id, 'cap', v); range.value = String(v); unit.textContent = `carry up to ${v}`; });
     num.addEventListener('blur', () => { num.value = String(model.getItem(d.id, 'cap')); });
     el.append(
@@ -431,7 +461,7 @@ export function graphicsRow(model: SettingsModel, d: GraphicsDef, defs: Graphics
   } else {
     const min = d.min ?? 0, max = d.max ?? 1;
     const range = h('input', { type: 'range', id, min, max, step: d.step ?? (d.type === 'int' ? 1 : 0.01), 'aria-describedby': id + '-help' });
-    range.addEventListener('input', () => {
+    onSlide(range, () => {
       const n = Number(range.value);
       if (!Number.isFinite(n)) return;
       const v = d.type === 'int' ? Math.round(n) : n;

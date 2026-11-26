@@ -1,26 +1,19 @@
-// Map renderer: camera, input, per-frame composition of the baked terrain with fog,
-// objects, particles, labels, ghost layers and a final colour grade.
+// Map view: camera, input, state (fog, fades, time of day, graphics settings) and the 2D overlay
+// (labels, pins, hover ring, tooltip, NPC bubbles, coastline ghost). The map itself is drawn by the
+// WebGL2 lit renderer (lit/renderer.ts) into its own canvas inserted beneath the given canvas.
 import type { World, Dimension, DimId, MapObject, LocId } from '../core/types';
 import { D, T } from '../core/types';
 import { hashStr } from '../core/rng';
-import {
-  buildDimRender, buildGhostFill, buildOutline, footprint, rockPattern, type DimRender,
-} from './terrain';
-import { drawObject, drawPin, npcColor, pinRank, pinColor } from './objects';
+import { buildDimRender, buildOutline, type DimRender } from './terrain';
+import { drawPin, npcColor, pinRank, pinColor } from './objects';
 import { Particles } from './particles';
-import { FLOW_VEC, WK, type WaterInfo, computeWater, isWaterfall } from './water';
-import { FlatChunks, type FChunk, type FlatOverview, buildFlatOverview, flatOverviewFog } from './flatChunks';
+import { isWaterfall } from './water';
 import { type Actor, LitRenderer, type ObjDraw } from './lit/renderer';
 import { type Gfx, type GraphicsSettings, defaultGraphics, gfx as toGfx } from './graphics';
-import { sunAt } from './lit/lights';
-import { charAtlas } from './bake/charAtlas';
+import { objectLights, sunAt } from './lit/lights';
 import { FLYERS, creatureFor } from './bake/creatures';
-import { bakeAtlas } from './bake/index';
-import { type PropGrid, buildPropGrid, forProps, propLook } from './props';
-import { atlasCanvases, atlasTinted, charCanvases, setFlatOutline } from './flatSprites';
 import { type Layout, layout } from './lit/compose';
-import { objectLights } from './lit/lights';
-import { FONT, clamp, ctx2d, hash2, hexRgb, makeCanvas, shade, smoothstep } from './util';
+import { FONT, clamp, ctx2d, hexRgb, shade, smoothstep } from './util';
 
 export interface MapState {
   /** logic zones the player can currently reach; tiles whose zone's LocId is not in here are fogged. null = no fog */
@@ -45,9 +38,6 @@ export interface MapView {
   fitAll(): void;
   resize(): void;
   destroy(): void;
-  /** 'lit' = WebGL2 normal-mapped pipeline, 'flat' = the existing Canvas 2D renderer */
-  setRenderer(mode: 'lit' | 'flat'): void;
-  readonly renderer: 'lit' | 'flat';
   /** apply graphics settings live (no regeneration); cheap enough for every slider tick */
   setGraphics(g: GraphicsSettings): void;
   /** time of day in hours (0..24): sun direction / colour, shadows, night lights */
@@ -57,19 +47,13 @@ export interface MapView {
 const MAX_ZOOM = 64;
 const SPRITE_MIN = 20; // below this px/tile objects become pins
 const FRESH_SECS = 1.2;
+const FADE_SECS = 0.6;
+const NO_GL_MSG = 'This map needs WebGL2, which this browser or device does not provide.';
 
-interface Ghost {
-  fill: HTMLCanvasElement | null;
-  fillAlpha: number;
-  outline: Path2D | null;
-}
-
-interface Hit {
-  o: MapObject;
-  x: number;
-  y: number;
-  r: number;
-}
+interface Hit { o: MapObject; x: number; y: number; r: number }
+interface Cam { x: number; y: number; s: number }
+/** fade state of an object whose hidden / done state changed recently */
+interface Fade { a: number; show: boolean; prevDone: boolean | null; mix: number }
 
 export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = {}): MapView {
   const ctx = ctx2d(canvas);
@@ -79,38 +63,30 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   let world: World | null = null;
   let dim: Dimension | null = null;
   let dr: DimRender | null = null;
+  let lay: Layout | null = null;
   const renders = new Map<DimId, DimRender>();
-  const ghosts = new Map<DimId, Ghost>();
+  const outlines = new Map<DimId, Path2D | null>();
+  /** last camera of each dimension (restored when coming back from an interior) */
+  const camMem = new Map<DimId, Cam>();
   let ghostOn = false;
   let state: MapState = { reachable: null, fresh: new Set(), hidden: new Set(), done: new Set() };
   let fogDirty = true;
-  /** per zone: 1 = fogged under the current state */
   let zoneFog: Uint8Array | null = null;
-  let fogKey = 0;
-  const flat = new FlatChunks();
-  const flatOv = new Map<DimId, FlatOverview>();
   let regionSize: Int32Array | null = null;
-  const waterCache = new Map<DimId, WaterInfo>();
   let freshT0 = -1;
-  let freshPath: Path2D | null = null;
   let sortedObjs: MapObject[] = [];
+  const fades = new Map<string, Fade>();
   let G: Gfx = toGfx(defaultGraphics());
-  let hours = 10;
-  let sun = sunAt(hours);
-  const propGrids = new Map<DimId, PropGrid>();
+  let sun = sunAt(10);
 
-  // lit (WebGL2) pipeline: draws into its own canvas inserted beneath `canvas`, which becomes the 2D overlay
-  let wantMode: 'lit' | 'flat' = 'lit';
-  let mode: 'lit' | 'flat' = 'flat';
   let lit: LitRenderer | null = null;
-  let litFailed = false;
+  let glFailed = false;
   let glCanvas: HTMLCanvasElement | null = null;
-  let litLay: Layout | null = null;
   let maskDirty = true;
 
   let W = 1, Hh = 1, dpr = 1;
-  const cam = { x: 0, y: 0, s: 16 };
-  let target: { x: number; y: number; s: number } | null = null;
+  const cam: Cam = { x: 0, y: 0, s: 16 };
+  let target: Cam | null = null;
   let minS = 4;
 
   const particles = new Particles();
@@ -118,9 +94,6 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   let reduced = !!rm?.matches;
   const onRm = () => { reduced = !!rm?.matches; if (reduced) particles.clear(); };
   rm?.addEventListener?.('change', onRm);
-
-  let rock: CanvasPattern | null = null;
-  let vignette: HTMLCanvasElement | null = null;
 
   let hover: MapObject | null = null;
   let hoverTile: { x: number; y: number } | null = null;
@@ -133,23 +106,17 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   let t = 0;
   let destroyed = false;
 
-  // ------------------------------------------------------------ geometry
-  // Tile lift (how far a tile is drawn shifted up, in tiles) depends on the active renderer:
-  // flat uses its bake's elevation step, lit rounds each level to whole 16 px-per-tile pixels.
-  const litOn = () => mode === 'lit' && !!lit && !lit.lost && !!litLay;
-  const liftT = (i: number) => (litOn() ? litLay!.liftPx[i] / 16 : dr!.ve[i] * dr!.hT);
-  const voidLiftT = () => (litOn() ? litLay!.voidLiftPx / 16 : dr!.voidElev * dr!.hT);
-  const maxLiftT = () => (litOn() ? litLay!.maxLiftPx / 16 : dr!.maxVe * dr!.hT);
+  // ------------------------------------------------------------ geometry (tile lift = whole 16 px-per-tile pixels)
+  const liftT = (i: number) => lay!.liftPx[i] / 16;
+  const voidLiftT = () => lay!.voidLiftPx / 16;
+  const maxLiftT = () => lay!.maxLiftPx / 16;
   function faceT(i: number): number {
-    if (!litOn()) return dr!.faceH[i] * dr!.hT;
-    const w = dim!.w;
-    const below = i + w < dim!.w * dim!.h ? litLay!.liftPx[i + w] : litLay!.voidLiftPx;
-    return Math.max(0, (litLay!.liftPx[i] - below) / 16);
+    const below = i + dim!.w < dim!.w * dim!.h ? lay!.liftPx[i + dim!.w] : lay!.voidLiftPx;
+    return Math.max(0, (lay!.liftPx[i] - below) / 16);
   }
   const worldBounds = () => {
-    if (!dim || !dr) return { x0: 0, x1: 1, y0: 0, y1: 1 };
-    const y0 = litOn() ? -litLay!.top / 16 + 0.4 : dr.y0 + 0.4;
-    return { x0: 0, x1: dim.w, y0, y1: dim.h + (maxLiftT() - voidLiftT()) * 0.6 + 0.2 };
+    if (!dim || !lay) return { x0: 0, x1: 1, y0: 0, y1: 1 };
+    return { x0: 0, x1: dim.w, y0: -lay.top / 16 + 0.4, y1: dim.h + (maxLiftT() - voidLiftT()) * 0.6 + 0.2 };
   };
   const fitScale = () => {
     const b = worldBounds();
@@ -161,7 +128,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   const sy = (wy: number) => (wy - cam.y) * cam.s + Hh / 2;
   const toWorld = (px: number, py: number) => ({ x: (px - W / 2) / cam.s + cam.x, y: (py - Hh / 2) / cam.s + cam.y });
 
-  function clampCam(c: { x: number; y: number; s: number }) {
+  function clampCam(c: Cam) {
     const b = worldBounds();
     c.s = clamp(c.s, minS, maxS());
     // the world may cover as little as ~10% of the view: the centre can go 80% of a half-view past each edge
@@ -171,14 +138,13 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   }
 
   function tileElevY(x: number, y: number): number {
-    if (!dim || !dr || x < 0 || y < 0 || x >= dim.w || y >= dim.h) return 0;
-    const g = dim.ground[y * dim.w + x];
-    return g === T.VOID ? 0 : liftT(y * dim.w + x);
+    if (!dim || !lay || x < 0 || y < 0 || x >= dim.w || y >= dim.h) return 0;
+    return dim.ground[y * dim.w + x] === T.VOID ? 0 : liftT(y * dim.w + x);
   }
 
   /** screen -> tile, accounting for elevation (southernmost covering tile wins). */
   function pickTile(px: number, py: number): { x: number; y: number } | null {
-    if (!dim || !dr) return null;
+    if (!dim || !lay) return null;
     const wpt = toWorld(px, py);
     const tx = Math.floor(wpt.x);
     if (tx < 0 || tx >= dim.w) return null;
@@ -188,8 +154,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       const i = y * dim.w + tx;
       if (dim.ground[i] === T.VOID) continue;
       const top = y - liftT(i);
-      const bot = top + 1 + faceT(i);
-      if (wpt.y >= top && wpt.y < bot) return { x: tx, y };
+      if (wpt.y >= top && wpt.y < top + 1 + faceT(i)) return { x: tx, y };
     }
     return null;
   }
@@ -210,52 +175,24 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     return !!zoneFog && zoneFog[z] === 1;
   }
   function objFogged(o: MapObject): boolean {
-    if (!state.reachable || !dim || !dr) return false;
-    if (o.x < 0 || o.y < 0 || o.x >= dim.w || o.y >= dim.h) return false;
+    if (!state.reachable || !dim || !dr || o.x < 0 || o.y < 0 || o.x >= dim.w || o.y >= dim.h) return false;
     return isFoggedZone(dr.owner[o.y * dim.w + o.x]);
   }
-  /** per-zone fog flags; tiles look up their owner zone (O(zones) per state change) */
   function refreshFog() {
     fogDirty = false;
-    fogKey++;
     if (!dim || !state.reachable) { zoneFog = null; return; }
     const zl = dim.zoneLoc;
     zoneFog = new Uint8Array(zl.length);
     for (let z = 0; z < zl.length; z++) zoneFog[z] = state.reachable.has(zl[z]) ? 0 : 1;
   }
-  function buildFresh() {
-    freshPath = null;
-    if (!dr || !dim || !state.fresh.size || reduced) return;
-    const p = new Path2D();
-    let any = false;
-    for (let i = 0; i < dim.w * dim.h; i++) {
-      if (dim.ground[i] === T.VOID) continue;
-      const z = dr.owner[i];
-      if (z < 0 || !state.fresh.has(dim.zoneLoc[z])) continue;
-      const [x, y, w, h] = footprint(dr, i, false);
-      p.rect(x, y, w, h);
-      any = true;
-    }
-    if (any) { freshPath = p; freshT0 = t; }
-  }
 
-  // ------------------------------------------------------------ ghost
-  function ghostFor(d: Dimension): Ghost | null {
-    if (!world || d.stack === undefined) return null;
-    let g = ghosts.get(d.id);
-    if (g) return g;
-    const stacked = world.dims.filter((x) => x.stack !== undefined && x.id !== d.id);
-    const below = stacked.find((x) => x.stack === d.stack! - 1) || (d.stack! > 0 ? stacked.find((x) => x.stack === 0) : undefined);
-    const above = stacked.find((x) => x.stack === d.stack! + 1) || (d.stack! < 0 ? stacked.find((x) => x.stack === 0) : undefined);
-    g = { fill: null, fillAlpha: 0.5, outline: null };
-    if (below) {
-      const sky = d.kind === 'sky';
-      g.fill = buildGhostFill(below, sky ? '#4a78d0' : '#6a4ab0', sky ? 0.55 : 0.6);
-      g.fillAlpha = sky ? 0.5 : 0.35;
+  function outlineFor(d: Dimension): Path2D | null {
+    if (!world || d.stack === undefined || d.stack >= 0) return null;
+    if (!outlines.has(d.id)) {
+      const above = world.dims.find((x) => x.stack === d.stack! + 1) || world.dims.find((x) => x.stack === 0);
+      outlines.set(d.id, above ? buildOutline(above) : null);
     }
-    if (d.stack! < 0 && above) g.outline = buildOutline(above);
-    ghosts.set(d.id, g);
-    return g;
+    return outlines.get(d.id)!;
   }
 
   // ------------------------------------------------------------ public API
@@ -263,28 +200,24 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     const prev = dim ? { id: dim.id, w: dim.w, h: dim.h } : null;
     world = w;
     renders.clear();
-    ghosts.clear();
+    outlines.clear();
     particles.clear();
+    fades.clear();
+    for (const [id] of camMem) if (!w.dims.some((d) => d.id === id)) camMem.delete(id);
     lit?.setWorld(w, hashStr(w.seed));
-    flat.clear();
-    flatOv.clear();
-    waterCache.clear();
-    propGrids.clear();
     dim = null;
     dr = null;
+    lay = null;
     hover = null;
     hits = [];
     const same = prev && w.dims.find((d) => d.id === prev.id && d.w === prev.w && d.h === prev.h);
     const first = same || w.dims.find((d) => d.kind === 'overworld') || w.dims[0];
-    if (first) showDim(first, !!same);
+    if (first) showDim(first, same ? 'keep' : 'fit');
   }
 
   function getDr(d: Dimension): DimRender {
     let r = renders.get(d.id);
-    if (!r) {
-      r = buildDimRender(d, hashStr(world!.seed + ':' + d.id));
-      renders.set(d.id, r);
-    }
+    if (!r) renders.set(d.id, (r = buildDimRender(d, hashStr(world!.seed + ':' + d.id))));
     return r;
   }
 
@@ -293,13 +226,16 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     const d = world.dims.find((x) => x.id === id);
     if (!d) return;
     if (d === dim) { start(); return; }
-    showDim(d, false);
+    // stacked layers share tile coordinates: keep the exact camera; otherwise restore this dimension's last camera
+    const stackedSwap = !!dim && dim.stack !== undefined && d.stack !== undefined && dim.w === d.w && dim.h === d.h;
+    showDim(d, stackedSwap ? 'keep' : camMem.has(d.id) ? 'restore' : 'fit');
   }
 
-  function showDim(d: Dimension, keepCam: boolean) {
+  function showDim(d: Dimension, how: 'keep' | 'restore' | 'fit') {
+    if (dim) camMem.set(dim.id, target ? { ...target } : { ...cam });
     dim = d;
     dr = getDr(d);
-    litLay = layout(d, dr.ve, dr.voidElev);
+    lay = layout(d, dr.ve, dr.voidElev);
     sortedObjs = d.objects.slice().sort((a, b) => a.y - b.y || a.x - b.x);
     regionSize = new Int32Array(d.regions.length);
     for (let i = 0; i < d.w * d.h; i++) { const r = d.region[i]; if (r >= 0 && r < regionSize.length) regionSize[r]++; }
@@ -308,23 +244,25 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     hits = [];
     fogDirty = true;
     maskDirty = true;
-    freshPath = null;
     minS = fitScale() * 0.3;
-    if (keepCam) clampCam(cam);
-    else {
+    if (how === 'keep') {
+      if (target) Object.assign(cam, target);
+      target = null;
+      clampCam(cam);
+    } else if (how === 'restore') {
+      Object.assign(cam, camMem.get(d.id)!);
+      target = null;
+      clampCam(cam);
+    } else {
       const b = worldBounds();
-      cam.x = (b.x0 + b.x1) / 2;
-      cam.y = (b.y0 + b.y1) / 2;
-      cam.s = fitScale();
+      Object.assign(cam, { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, s: fitScale() });
       target = null;
     }
     start();
   }
 
-  // ------------------------------------------------------------ renderer selection
-  function initLit(): boolean {
-    if (lit) return !lit.lost;
-    if (litFailed || !canvas.parentNode || typeof document === 'undefined') return false;
+  function initGL() {
+    if (lit || glFailed || !canvas.parentNode) return;
     const gc = document.createElement('canvas');
     gc.setAttribute('aria-hidden', 'true');
     gc.style.position = 'absolute';
@@ -332,14 +270,13 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     gc.style.imageRendering = 'pixelated';
     canvas.parentNode.insertBefore(gc, canvas);
     const r = LitRenderer.create(gc);
-    if (!r) { gc.remove(); litFailed = true; return false; }
+    if (!r) { gc.remove(); glFailed = true; return; }
     lit = r;
     glCanvas = gc;
-    r.onLost = () => { applyMode(); start(); };
-    r.onRestored = () => { maskDirty = true; applyMode(); start(); };
+    r.onLost = () => start();
+    r.onRestored = () => { maskDirty = true; start(); };
     if (world) r.setWorld(world, hashStr(world.seed));
     syncGlCanvas();
-    return true;
   }
 
   function syncGlCanvas() {
@@ -350,26 +287,8 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     glCanvas.style.height = canvas.offsetHeight + 'px';
   }
 
-  function applyMode() {
-    const ok = wantMode === 'lit' && initLit() && !!lit && !lit.lost;
-    mode = ok ? 'lit' : 'flat';
-    if (glCanvas) glCanvas.style.display = mode === 'lit' ? '' : 'none';
-    maskDirty = true;
-    fogDirty = true;
-    if (dim && dr) {
-      litLay = layout(dim, dr.ve, dr.voidElev);
-      const wasFit = Math.abs(cam.s - fitScale()) < 1e-3;
-      minS = fitScale() * 0.3;
-      if (wasFit) cam.s = fitScale();
-      clampCam(cam);
-      if (mode === 'flat' && state.fresh.size) buildFresh();
-    }
-    start();
-  }
-
-  /** internal-resolution divisor of the lit renderer under integer zoom (device px per internal px) */
+  /** internal-resolution divisor under integer zoom (device px per internal px) */
   function intDiv(): number {
-    if (mode !== 'lit') return 1;
     const byPx = Math.ceil(Math.sqrt((W * dpr * Hh * dpr) / (G.maxPixels * 1e6)) - 1e-6);
     return Math.max(1, byPx, Math.round(1 / G.renderScale));
   }
@@ -385,34 +304,35 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
 
   function setGraphics(g: GraphicsSettings) {
     G = toGfx(g);
-    setFlatOutline(G.outline === 'off' ? 0 : G.outline === 'strong' ? 0.6 : 0.35);
     particles.density = G.particles;
     particles.cap = Math.round(300 * Math.min(1.5, G.particles));
     start();
   }
 
   function setTime(h: number) {
-    hours = h;
     sun = sunAt(h);
     start();
   }
 
-  function setRenderer(m: 'lit' | 'flat') {
-    wantMode = m;
-    applyMode();
-  }
-
   function setState(s: MapState) {
-    state = {
-      reachable: s.reachable,
-      fresh: s.fresh || new Set(),
-      hidden: s.hidden || new Set(),
-      done: s.done || new Set(),
-    };
+    const next: MapState = { reachable: s.reachable, fresh: s.fresh || new Set(), hidden: s.hidden || new Set(), done: s.done || new Set() };
+    // objects whose visibility or done look changes fade instead of popping
+    if (world && !reduced) {
+      for (const d of world.dims)
+        for (const o of d.objects) {
+          const wasShown = !state.hidden.has(o.id), isShown = !next.hidden.has(o.id);
+          const wasDone = state.done.has(o.id), isDone = next.done.has(o.id);
+          if (wasShown === isShown && wasDone === isDone) continue;
+          const f = fades.get(o.id) ?? { a: wasShown ? 1 : 0, show: wasShown, prevDone: null, mix: 1 };
+          f.show = isShown;
+          if (wasDone !== isDone) { f.prevDone = wasDone; f.mix = 0; }
+          fades.set(o.id, f);
+        }
+    }
+    state = next;
     fogDirty = true;
     maskDirty = true;
     if (state.fresh.size) freshT0 = t;
-    if (!litOn()) buildFresh();
     start();
   }
 
@@ -445,7 +365,6 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     W = nw; Hh = nh; dpr = nd;
     canvas.width = Math.round(W * dpr);
     canvas.height = Math.round(Hh * dpr);
-    vignette = null;
     syncGlCanvas();
     if (dim) {
       minS = fitScale() * 0.3;
@@ -480,14 +399,13 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   function beginPinch() {
     const ps = [...pointers.values()];
     const d = Math.hypot(ps[0].x - ps[1].x, ps[0].y - ps[1].y) || 1;
-    const mx = (ps[0].x + ps[1].x) / 2, my = (ps[0].y + ps[1].y) / 2;
-    const wpt = toWorld(mx, my);
+    const wpt = toWorld((ps[0].x + ps[1].x) / 2, (ps[0].y + ps[1].y) / 2);
     pinch = { d, s: cam.s, wx: wpt.x, wy: wpt.y };
     drag = null;
   }
 
   function setHover(o: MapObject | null, tile: { x: number; y: number } | null) {
-    const changed = o !== hover || (tile?.x !== hoverTile?.x || tile?.y !== hoverTile?.y);
+    const changed = o !== hover || tile?.x !== hoverTile?.x || tile?.y !== hoverTile?.y;
     hover = o;
     hoverTile = tile;
     canvas.style.cursor = drag?.moved ? 'grabbing' : o ? 'pointer' : 'grab';
@@ -547,9 +465,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       return;
     }
     if (drag && !drag.moved && had && e.type === 'pointerup') {
-      const o = pickObj(p.x, p.y);
-      const tile = pickTile(p.x, p.y);
-      opts.onPick?.(o, tile);
+      opts.onPick?.(pickObj(p.x, p.y), pickTile(p.x, p.y));
       if (had.type !== 'mouse') {
         const now = performance.now();
         if (now - lastTap.t < 320 && Math.hypot(p.x - lastTap.x, p.y - lastTap.y) < 30) {
@@ -561,25 +477,15 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     if (pointers.size === 0) drag = null;
     canvas.style.cursor = hover ? 'pointer' : 'grab';
   };
-  const onLeave = () => {
-    mouse = null;
-    if (!drag) setHover(null, null);
-  };
+  const onLeave = () => { mouse = null; if (!drag) setHover(null, null); };
   const onWheel = (e: WheelEvent) => {
     e.preventDefault();
     const p = local(e);
     const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
-    const f = Math.exp(-clamp(e.deltaY * unit, -300, 300) * 0.0016);
-    zoomAt(p.x, p.y, f, false);
+    zoomAt(p.x, p.y, Math.exp(-clamp(e.deltaY * unit, -300, 300) * 0.0016), false);
   };
-  const onDbl = (e: MouseEvent) => {
-    const p = local(e);
-    zoomAt(p.x, p.y, 2, true);
-  };
-  const onVis = () => {
-    if (document.hidden) stop();
-    else start();
-  };
+  const onDbl = (e: MouseEvent) => { const p = local(e); zoomAt(p.x, p.y, 2, true); };
+  const onVis = () => { if (document.hidden) stop(); else start(); };
 
   canvas.addEventListener('pointerdown', onDown);
   canvas.addEventListener('pointermove', onMove);
@@ -621,10 +527,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     }
     if (G.integerZoom && !pinch && !target && dim) {
       const sn = snapScale(cam.s);
-      if (Math.abs(sn - cam.s) > 1e-4) {
-        // keep the screen centre fixed while snapping
-        if (reduced) cam.s = sn; else target = { x: cam.x, y: cam.y, s: sn };
-      }
+      if (Math.abs(sn - cam.s) > 1e-4) { if (reduced) cam.s = sn; else target = { x: cam.x, y: cam.y, s: sn }; }
     }
     try {
       render(dt);
@@ -634,456 +537,68 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     raf = requestAnimationFrame(frame);
   }
 
-  // ------------------------------------------------------------ render
-  function bakeTransform(): [number, number, number] {
-    // bake px -> css px : screen = b * k + (ox, oy)
-    const k = cam.s / dr!.S;
-    return [k, W / 2 - cam.x * cam.s, Hh / 2 - cam.y * cam.s - dr!.top * k];
-  }
-
-  function drawBackground() {
-    const c = ctx;
-    if (!dim) { c.fillStyle = '#0b0d14'; c.fillRect(0, 0, W, Hh); return; }
-    if (dim.kind === 'sky') {
-      const g = c.createLinearGradient(0, 0, 0, Hh);
-      g.addColorStop(0, '#071436');
-      g.addColorStop(0.55, '#16367a');
-      g.addColorStop(1, '#3a6cb8');
-      c.fillStyle = g;
-      c.fillRect(0, 0, W, Hh);
-      return;
-    }
-    if (dim.kind === 'underworld' || dim.kind === 'interior') {
-      if (!rock) rock = c.createPattern(rockPattern(), 'repeat');
-      c.save();
-      const ox = (-cam.x * cam.s * 0.6) % 160, oy = (-cam.y * cam.s * 0.6) % 160;
-      c.translate(ox - 160, oy - 160);
-      c.fillStyle = rock || '#0d0b11';
-      c.fillRect(0, 0, W + 320, Hh + 320);
-      c.restore();
-      return;
-    }
-    // open sea continues past the map edge
-    const g = c.createRadialGradient(W / 2, Hh / 2, 0, W / 2, Hh / 2, Math.max(W, Hh) * 0.8);
-    g.addColorStop(0, '#174478');
-    g.addColorStop(1, '#0d2c58');
-    c.fillStyle = g;
-    c.fillRect(0, 0, W, Hh);
-  }
-
-  /** flat terrain: low-res overview below, lazily painted 32x32-tile chunks over it */
-  function drawFlatTerrain() {
-    const r = dr!, d = dim!;
-    const [k, ox, oy] = bakeTransform();
-    const CP = flat.cpx(r);
-    const s = cam.s;
-    let fade = s <= 12 ? 0 : s >= 16 ? 1 : (s - 12) / 4;
-    const bx0 = -ox / k, bx1 = (W - ox) / k, by0 = -oy / k, by1 = (Hh - oy) / k;
-    const cx0 = Math.max(0, Math.floor(bx0 / CP)), cx1 = Math.min(flat.cols(r) - 1, Math.floor(bx1 / CP));
-    const cy0 = Math.max(0, Math.floor(by0 / CP)), cy1 = Math.min(flat.rows(r) - 1, Math.floor(by1 / CP));
-    const nVis = Math.max(0, cx1 - cx0 + 1) * Math.max(0, cy1 - cy0 + 1);
-    if (nVis > 30) fade = 0;
-    const vis: FChunk[] = [];
-    let missing: [number, number, number][] = [];
-    if (fade > 0) {
-      const now = performance.now();
-      for (let cy = cy0; cy <= cy1; cy++)
-        for (let cx = cx0; cx <= cx1; cx++) {
-          const ch = flat.get(r, cx, cy);
-          if (ch) { ch.lastUse = now; vis.push(ch); }
-          else missing.push([cx, cy, Math.hypot((cx + 0.5) * CP - (bx0 + bx1) / 2, (cy + 0.5) * CP - (by0 + by1) / 2)]);
-        }
-      missing.sort((a, b) => a[2] - b[2]);
-      const budget = vis.length === 0 && missing.length <= 6 ? missing.length : 1;
-      flat.evict(new Set(vis), Math.max(flat.budget - budget, vis.length));
-      for (const [cx, cy] of missing.slice(0, budget)) vis.push(flat.compose(r, cx, cy));
-      missing = missing.slice(budget);
-    }
-    const fogOn = !!state.reachable;
-    const fogged = (i: number) => isFoggedZone(r.owner[i]);
-    if (fade < 1 || missing.length) {
-      let fo = flatOv.get(d.id);
-      if (!fo) flatOv.set(d.id, (fo = buildFlatOverview(r)));
-      const img = fogOn ? flatOverviewFog(fo, fogKey, fogged) : fo.canvas;
-      const sc = (k * r.S) / fo.ov.opx;
-      ctx.drawImage(img, ox, oy, fo.ov.w * sc, fo.ov.h * sc);
-    }
-    if (!vis.length) return;
-    ctx.globalAlpha = fade;
-    let viewBudget = 1;
-    const snap = (v: number) => Math.round(v * dpr) / dpr;
-    for (const ch of vis) {
-      let img = ch.base;
-      if (fogOn) {
-        if (ch.viewKey === fogKey || viewBudget-- > 0) img = flat.fogView(r, ch, fogKey, fogged);
-        else if (ch.view) img = ch.view;
-      }
-      const x0 = snap(ox + ch.cx * CP * k), y0 = snap(oy + ch.cy * CP * k);
-      const x1 = snap(ox + (ch.cx + 1) * CP * k), y1 = snap(oy + (ch.cy + 1) * CP * k);
-      ctx.drawImage(img, x0, y0, x1 - x0, y1 - y0);
-    }
-    ctx.globalAlpha = 1;
-  }
-
-  function blit(src: HTMLCanvasElement) {
-    const [k, ox, oy] = bakeTransform();
-    // visible part of the bake
-    let bx0 = Math.max(0, Math.floor(-ox / k)), by0 = Math.max(0, Math.floor(-oy / k));
-    let bx1 = Math.min(src.width, Math.ceil((W - ox) / k)), by1 = Math.min(src.height, Math.ceil((Hh - oy) / k));
-    if (bx1 <= bx0 || by1 <= by0) return;
-    ctx.drawImage(src, bx0, by0, bx1 - bx0, by1 - by0, bx0 * k + ox, by0 * k + oy, (bx1 - bx0) * k, (by1 - by0) * k);
-  }
-
-  function visibleTiles() {
-    const a = toWorld(0, 0), b = toWorld(W, Hh);
-    const d = dim!;
-    return {
-      x0: Math.max(0, Math.floor(a.x) - 1),
-      x1: Math.min(d.w - 1, Math.ceil(b.x) + 1),
-      y0: Math.max(0, Math.floor(a.y + voidLiftT()) - 1),
-      y1: Math.min(d.h - 1, Math.ceil(b.y + maxLiftT()) + 2),
-      wx0: a.x, wy0: a.y, wx1: b.x, wy1: b.y,
-    };
-  }
-
-  function drawShimmer(v: ReturnType<typeof visibleTiles>) {
-    const d = dim!, r = dr!;
-    const s = cam.s;
-    if (s < 7 || reduced) return;
-    const water = new Path2D(), lava = new Path2D(), cloud = new Path2D(), foam = new Path2D(), fall = new Path2D();
-    let nw = 0, nl = 0, nc = 0, nf = 0;
-    let wi = waterCache.get(d.id);
-    if (!wi) waterCache.set(d.id, (wi = computeWater(d, r.ve)));
-    for (let y = v.y0; y <= v.y1; y++) {
-      for (let x = v.x0; x <= v.x1; x++) {
-        const i = y * d.w + x;
-        const g = d.ground[i];
-        if (g !== T.WATER && g !== T.DEEP && g !== T.LAVA && g !== T.CLOUD) continue;
-        // waterfall face below a water tile: streaks running down
-        if (g === T.WATER && y + 1 < d.h && r.ve[i + d.w] < r.ve[i] - 0.01) {
-          const ft = sy(y + 1 - r.ve[i] * r.hT), fb = sy(y + 1 - r.ve[i + d.w] * r.hT), fx0 = sx(x);
-          for (let k = 0; k < 3; k++) {
-            const hk = hash2(x, k, 31);
-            const u = (t * (0.9 + hk) + hk * 5) % 1;
-            const yy = ft + (fb - ft) * u, len = (fb - ft) * 0.25;
-            fall.rect(fx0 + s * (0.1 + 0.8 * hk), yy, Math.max(1, s * 0.05), Math.min(len, fb - yy));
-          }
-          nf++;
-        }
-        if (y + 1 < d.h && r.ve[i + d.w] > r.ve[i] + 0.01) continue; // hidden behind a cliff
-        const h = hash2(x, y, 77);
-        const px = sx(x), py = sy(y - r.ve[i] * r.hT);
-        if (g === T.WATER && wi.flow[i]) {
-          // river: short streaks drifting downstream
-          const [fdx, fdy] = FLOW_VEC[wi.flow[i]];
-          const u = (t * 0.6 + h * 3) % 1;
-          const cx = px + s * (0.5 + (fdx ? (u - 0.5) * 0.9 : (h - 0.5) * 0.6)), cy = py + s * (0.5 + (fdy ? (u - 0.5) * 0.9 : (h * 1.7 % 1 - 0.5) * 0.6));
-          water.moveTo(cx, cy);
-          water.lineTo(cx + fdx * s * 0.22, cy + fdy * s * 0.22);
-          nw++;
-          continue;
-        }
-        if (g === T.DEEP || wi.kind[i] === WK.ROUGH) {
-          // rough water: fast, frequent whitecaps
-          const k = Math.sin(t * 2.2 + h * 11);
-          if (k > 0.3) {
-            const fx = px + s * (0.15 + 0.6 * h), fy = py + s * (0.3 + 0.4 * ((h * 5.3) % 1));
-            foam.moveTo(fx + s * 0.1 * k, fy);
-            foam.arc(fx, fy, s * 0.1 * k, Math.PI, 0);
-          }
-        }
-        if (g === T.WATER || g === T.DEEP) {
-          const ph = t * (g === T.DEEP ? 0.9 : 0.35) + h * 9;
-          const k = Math.sin(ph * 2.1);
-          if (k < (g === T.DEEP ? 0 : 0.35)) continue;
-          const fx = px + s * (0.15 + 0.5 * ((h * 7.3 + t * 0.08) % 1)), fy = py + s * (0.25 + 0.5 * ((h * 3.1) % 1));
-          water.moveTo(fx, fy);
-          water.quadraticCurveTo(fx + s * 0.1, fy - s * 0.06 * k, fx + s * 0.22, fy);
-          nw++;
-        } else if (g === T.LAVA) {
-          const k = Math.sin(t * 1.3 + h * 12);
-          if (k < 0.2) continue;
-          const bx = px + s * (0.25 + 0.5 * ((h * 5.7) % 1)), by = py + s * (0.25 + 0.5 * ((h * 9.1) % 1));
-          lava.moveTo(bx + s * 0.3 * k, by);
-          lava.arc(bx, by, s * 0.3 * k, 0, Math.PI * 2);
-          nl++;
-        } else {
-          if (Math.sin(t * 0.6 + x * 0.35 + y * 0.22) < 0.55) continue;
-          cloud.moveTo(px + s * 0.8, py + s * 0.5);
-          cloud.arc(px + s * 0.5, py + s * 0.5, s * 0.3, 0, Math.PI * 2);
-          nc++;
-        }
-      }
-    }
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    if (nw) {
-      ctx.strokeStyle = 'rgba(170,225,255,0.55)';
-      ctx.lineWidth = Math.max(1, s * 0.045);
-      ctx.lineCap = 'round';
-      ctx.stroke(water);
-    }
-    if (nf) {
-      ctx.fillStyle = 'rgba(230,248,255,0.75)';
-      ctx.fill(fall);
-    }
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = 'rgba(235,248,255,0.55)';
-    ctx.fill(foam);
-    ctx.globalCompositeOperation = 'lighter';
-    if (nl) {
-      ctx.fillStyle = 'rgba(255,170,60,0.22)';
-      ctx.fill(lava);
-    }
-    if (nc) {
-      ctx.fillStyle = 'rgba(255,255,255,0.10)';
-      ctx.fill(cloud);
-    }
-    ctx.restore();
-  }
-
-  function glowAt(x: number, y: number, r: number, rgb: string, a: number) {
-    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, `rgba(${rgb},${a})`);
-    g.addColorStop(0.4, `rgba(${rgb},${a * 0.4})`);
-    g.addColorStop(1, `rgba(${rgb},0)`);
-    ctx.fillStyle = g;
-    ctx.fillRect(x - r, y - r, r * 2, r * 2);
-  }
-
-  /** door-like objects with a house or a cliff right behind them are drawn into that wall */
-  function attachUp(o: MapObject): boolean {
-    if (!dim || !dr || o.y <= 0) return false;
-    const i = o.y * dim.w + o.x, j = i - dim.w;
-    return dim.deco[j] === D.HOUSE || (dim.ground[j] !== T.VOID && liftT(j) > liftT(i) + 0.12);
-  }
-
+  // ------------------------------------------------------------ objects, actors, fades
   const isActorObj = (o: MapObject) => o.kind === 'npc' || o.kind === 'start' || (o.kind as string) === 'enemy';
 
   /** animated character for an NPC / enemy / start object; enemies wander a tile or so (visual only) */
-  function actorFor(o: MapObject): Actor {
+  function actorFor(o: MapObject, alpha: number): Actor {
     const d = dim!;
     const kind = o.kind === 'npc' ? 'npc' : o.kind === 'start' ? 'hero' : creatureFor((o as MapObject & { enemy?: string }).enemy);
-    const h = hashStr(o.id);
-    const ph = (h % 1000) / 1000 * 6.283;
+    const ph = (hashStr(o.id) % 1000) / 1000 * 6.283;
     const moving = !reduced && G.animation;
     let dx = 0, dy = 0, dir: Actor['dir'] = 's', clip: Actor['clip'] = 'idle';
     if (moving && (o.kind as string) === 'enemy') {
       const fly = FLYERS.has(kind);
-      const sp = kind === 'wisp' ? 0.25 : 0.45;
-      const T = t * sp + ph;
+      const T0 = t * (kind === 'wisp' ? 0.25 : 0.45) + ph;
       // stop-and-go path: u advances fast, then slowly (an idle pause)
-      const u = T - 0.85 * Math.sin(T);
-      const du = 1 - 0.85 * Math.cos(T);
+      const u = T0 - 0.85 * Math.sin(T0), du = 1 - 0.85 * Math.cos(T0);
       const ax = fly ? 1.1 : 0.7, ay = fly ? 0.7 : 0.45;
       dx = ax * Math.sin(u);
       dy = ay * Math.sin(u * 0.7 + 1);
       const vx = ax * Math.cos(u) * du, vy = ay * 0.7 * Math.cos(u * 0.7 + 1) * du;
-      if (du > 0.35) {
-        clip = 'walk';
-        dir = Math.abs(vx) > Math.abs(vy) ? (vx > 0 ? 'e' : 'w') : vy > 0 ? 's' : 'n';
-      }
+      if (du > 0.35) { clip = 'walk'; dir = Math.abs(vx) > Math.abs(vy) ? (vx > 0 ? 'e' : 'w') : vy > 0 ? 's' : 'n'; }
     }
     const x = o.x + dx, y = o.y + dy;
     const tx = clamp(Math.round(x), 0, d.w - 1), ty = clamp(Math.round(y), 0, d.h - 1);
     const tint = o.kind === 'npc' ? (hexRgb(npcColor(o)).map((v) => v / 255) as [number, number, number]) : [1, 1, 1] as [number, number, number];
-    return { kind, x, y, tile: ty * d.w + tx, dir, clip, at: moving ? t + ph : 0, tint, e: kind === 'wisp' ? 1 + sun.night : 1 };
+    return { kind, x, y, tile: ty * d.w + tx, dir, clip, at: moving ? t + ph : 0, tint, e: kind === 'wisp' ? 1 + sun.night : 1, alpha };
+  }
+
+  /** current fade of an object: alpha (0 = gone) and the done look it is fading from */
+  function fadeOf(o: MapObject, dt: number): { a: number; prevDone: boolean | null; mix: number } {
+    const f = fades.get(o.id);
+    if (!f) return { a: state.hidden.has(o.id) ? 0 : 1, prevDone: null, mix: 1 };
+    const step = dt / FADE_SECS;
+    f.a = f.show ? Math.min(1, f.a + step) : Math.max(0, f.a - step);
+    f.mix = Math.min(1, f.mix + step);
+    if ((f.show ? f.a >= 1 : f.a <= 0) && f.mix >= 1) fades.delete(o.id);
+    return { a: f.a, prevDone: f.mix < 1 ? f.prevDone : null, mix: f.mix };
   }
 
   function objScreen(o: MapObject): [number, number] {
     return [sx(o.x + 0.5), sy(o.y + 0.5 - tileElevY(o.x, o.y))];
   }
 
-  function drawObjects(v: ReturnType<typeof visibleTiles>, dt: number, litMode = false) {
-    const s = cam.s;
-    const sprites = s >= SPRITE_MIN;
-    hits = [];
-    const vis: { o: MapObject; x: number; y: number; fog: boolean; done: boolean; act: Actor | null }[] = [];
-    for (const o of sortedObjs) {
-      if (state.hidden.has(o.id)) continue;
-      if (o.kind === 'gate' && o.gate === 'open') continue;
-      let [x, y] = objScreen(o);
-      const m = Math.max(60, s * 2);
-      if (x < -m || y < -m || x > W + m || y > Hh + m) continue;
-      let act: Actor | null = null;
-      if (isActorObj(o)) {
-        act = actorFor(o);
-        x = sx(act.x + 0.5);
-        y = sy(act.y + 0.5 - tileElevY(o.x, o.y));
-      }
-      vis.push({ o, x, y, fog: objFogged(o), done: state.done.has(o.id), act });
-    }
-    // lights / halos (additive; the lit pipeline has real lights instead)
-    if (!litMode) ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    for (const v2 of litMode ? [] : vis) {
-      const { o, x, y, done, fog } = v2;
-      const k = fog ? 0.4 : 1;
-      if (o.kind === 'start') glowAt(x, y, Math.max(40, s * 3), '255,240,190', (0.35 + (reduced ? 0 : 0.06 * Math.sin(t * 2))) * k);
-      else if (o.kind === 'gate' && (o.gate === 'seal' || o.gate === 'portal') && !done)
-        glowAt(x, y, Math.max(22, s * 1.6), o.gate === 'seal' ? '255,80,230' : '170,90,255', (0.45 + (reduced ? 0 : 0.15 * Math.sin(t * 3))) * k);
-      else if (o.kind === 'chest' && !done) glowAt(x, y, Math.max(14, s * 0.9), '255,200,80', 0.22 * k);
-    }
-    if (!litMode) ctx.restore();
-    // emit object particles
-    if (!reduced) {
-      for (const { o, done, fog } of vis) {
-        if (fog) continue;
-        const wx = o.x + 0.5, wy = o.y + 0.5 - tileElevY(o.x, o.y);
-        if (o.kind === 'chest' && !done && Math.random() < dt * 2.2)
-          particles.add('sparkle', wx + (Math.random() - 0.5) * 0.7, wy - 0.2 - Math.random() * 0.4, { max: 0.8, size: 5, col: 'rgb(255,220,120)' });
-        else if (o.kind === 'gate' && (o.gate === 'seal' || o.gate === 'portal') && !done && Math.random() < dt * 5) {
-          const a = Math.random() * 6.283;
-          particles.add('mote', wx + Math.cos(a) * 0.45, wy + Math.sin(a) * 0.45, { vx: -Math.cos(a) * 0.3, vy: -Math.sin(a) * 0.3 - 0.2, max: 1.2, size: 4, col: o.gate === 'seal' ? 'rgb(255,110,240)' : 'rgb(190,120,255)' });
-        } else if (isWaterfall(o) && Math.random() < dt * 7)
-          particles.add('mote', wx + (Math.random() - 0.5) * 0.9, wy - 0.1 - Math.random() * 0.3, { vx: (Math.random() - 0.5) * 0.3, vy: -0.3 - Math.random() * 0.3, max: 1.4, size: 7, col: 'rgb(190,225,250)' });
-        else if (o.kind === 'start' && Math.random() < dt * 2)
-          particles.add('mote', wx + (Math.random() - 0.5) * 0.8, wy, { vy: -0.5, max: 1.6, size: 4, col: 'rgb(160,255,200)' });
-      }
-    }
-    // zoomed out: thin pins by importance and declutter in screen space (huge worlds have thousands)
-    const pinSel = new Set<MapObject>();
-    if (!sprites) {
-      const minPri = Math.max(0, (s < 3 ? 4 : s < 6 ? 3 : s < 10 ? 2 : s < 16 ? 1 : 0) + (G.pinDensity < 0.5 ? 1 : G.pinDensity > 1.5 ? -1 : 0));
-      const cand = vis.filter((q) => pinPriority(q.o) >= minPri).sort((a, b) => pinPriority(b.o) - pinPriority(a.o));
-      const occ = new Set<number>();
-      const cell = 15 * G.pinSize / Math.max(0.25, G.pinDensity);
-      for (const q of cand) {
-        const key = Math.floor(q.x / cell) * 100003 + Math.floor(q.y / cell);
-        if (occ.has(key)) continue;
-        occ.add(key);
-        pinSel.add(q.o);
-      }
-    }
-    for (const { o, x, y, fog, done, act } of vis) {
-      ctx.globalAlpha = fog ? 0.55 : 1;
-      if (sprites) {
-        if (!litMode && act) drawFlatActor(act, o);
-        else if (!litMode) drawObject(ctx, o, x, y, s, { done, t: reduced ? 0 : t, attach: attachUp(o) });
-        else if (o.kind === 'npc' && o.icon && s >= 22) drawBubble(o.icon, x, y - s * 1.15, s);
-        hits.push({ o, x, y: y - s * 0.1, r: s * 0.55 });
-      } else {
-        if (!pinSel.has(o)) continue;
-        const rank = pinRank(o);
-        const r = (rank === 2 ? 8 : rank === 1 ? 6.5 : 3.5) * G.pinSize;
-        drawPin(ctx, o, x, y, r, done);
-        hits.push({ o, x, y: rank === 0 ? y : y - r * 1.55, r: Math.max(r + 3, 8) });
-      }
-    }
-    ctx.globalAlpha = 1;
-    if (hover && !state.hidden.has(hover.id)) {
-      const h = hits.find((q) => q.o === hover);
-      if (h) {
-        const pulse = reduced ? 0 : Math.sin(t * 5) * 1.5;
-        ctx.strokeStyle = 'rgba(10,8,20,0.7)';
-        ctx.lineWidth = 4;
-        ctx.beginPath();
-        ctx.arc(h.x, h.y, h.r + 2 + pulse, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.strokeStyle = '#fff6d8';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        drawTooltip(hover, h.x, h.y - h.r - 8);
-      }
-    }
+  /** door-like objects with a house or a cliff right behind them are drawn into that wall */
+  function attachUp(o: MapObject): boolean {
+    if (!dim || !lay || o.y <= 0) return false;
+    const i = o.y * dim.w + o.x, j = i - dim.w;
+    return dim.deco[j] === D.HOUSE || (dim.ground[j] !== T.VOID && liftT(j) > liftT(i) + 0.12);
   }
 
-  function propGridFor(d: Dimension): PropGrid {
-    let g = propGrids.get(d.id);
-    if (!g) propGrids.set(d.id, (g = buildPropGrid(d)));
-    return g;
-  }
-
-  /** direction toward the light used by flat shadows (sun outdoors, a fixed high NW light indoors) */
-  function flatSunDir(): [number, number, number] {
-    const outdoor = dim && (dim.kind === 'overworld' || dim.kind === 'sky');
-    return outdoor ? sun.dir : [-0.55, -0.45, 0.7];
-  }
-
-  /** shear transform that lays a standing sprite flat on the ground away from the light (flat shadows) */
-  function shadowXform(base: number): [number, number] | null {
-    const sd = flatSunDir();
-    const lxy = Math.hypot(sd[0], sd[1]);
-    if (sd[2] < 0.05 || lxy < 1e-3) return null;
-    const tanE = Math.max(0.3, sd[2] / lxy);
-    const a = clamp(-sd[0] / lxy / tanE, -2.5, 2.5), b = clamp(-sd[1] / lxy / tanE, -2.5, 2.5);
-    ctx.setTransform(dpr, 0, -a * dpr, -b * dpr, a * base * dpr, base * (1 + b) * dpr);
-    return [a, b];
-  }
-
-  /** flat path: standing props as sprites from the same sheet as the lit renderer, with sheared shadows */
-  function drawFlatProps(v: ReturnType<typeof visibleTiles>) {
-    const d = dim!;
-    const s = cam.s;
-    if (s < G.detailDistance) return;
-    const sheet = bakeAtlas();
-    const { img, shadow } = atlasCanvases();
-    const g = propGridFor(d);
-    const k = s / 16;
-    const list: number[] = [];
-    forProps(g, d, v.x0 - 2, v.y0 - 2, v.x1 + 2, v.y1 + 3, (i) => list.push(i));
-    list.sort((p, q) => p - q); // row-major index order == painter order
-    ctx.save();
-    ctx.imageSmoothingEnabled = false;
-    const sh = G.shadows !== 'off' ? G.shadowStrength * 0.5 * (1 - sun.night * 0.4) : 0;
-    const looks = list.map((i) => propLook(d, g, i, sheet, dr!.seed));
-    if (sh > 0) {
-      ctx.globalAlpha = sh;
-      list.forEach((i, n) => {
-        const lk = looks[n];
-        if (!lk) return;
-        const x = i % d.w, y = (i / d.w) | 0, f = lk.frame;
-        const base = sy(y + 0.62 - liftT(i));
-        if (!shadowXform(base)) return;
-        ctx.drawImage(shadow, f.x, f.y, f.w, f.h, sx(x) - f.ox * k, sy(y - liftT(i)) - f.oy * k, f.w * k, f.h * k);
-      });
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // ------------------------------------------------------------ overlay
+  function pinPriority(o: MapObject): number {
+    switch (o.kind) {
+      case 'start': return 5;
+      case 'boss': return 4;
+      case 'entrance':
+      case 'stairs': return /dungeon|sanctum|shrine|beanstalk|stairs/.test(o.style || 'stairs') ? 4 : 3;
+      case 'npc': return 2;
+      case 'gate': return o.gate === 'ledge' || o.gate === 'open' ? 0 : 2;
+      case 'chest': return 1;
+      case 'enemy' as MapObject['kind']: return 1;
+      default: return 0;
     }
-    ctx.globalAlpha = 1;
-    list.forEach((i, n) => {
-      const lk = looks[n];
-      if (!lk) return;
-      const x = i % d.w, y = (i / d.w) | 0, f = lk.frame, L = liftT(i);
-      const dx = sx(x) - f.ox * k, dy = sy(y - L) - f.oy * k;
-      // crop where raised ground further south covers the sprite
-      let hSrc = f.h;
-      for (let r = 1; r <= 3 && y + r < d.h; r++) {
-        const j = i + r * d.w;
-        if (d.ground[j] !== T.VOID && liftT(j) > L + 0.01) { hSrc = Math.max(0, Math.min(f.h, Math.floor((sy(y + r - liftT(j)) - dy) / k))); break; }
-      }
-      const src = lk.r !== 1 || lk.g !== 1 || lk.b !== 1 ? atlasTinted(lk.r, lk.g, lk.b) : img;
-      if (hSrc > 0) ctx.drawImage(src, f.x, f.y, f.w, hSrc, dx, dy, f.w * k, hSrc * k);
-    });
-    ctx.restore();
-  }
-
-  /** flat path: an animated character frame */
-  function drawFlatActor(a: Actor, o: MapObject) {
-    const ca = charAtlas();
-    ca.step(4);
-    const dir = a.dir === 'w' ? 'e' : a.dir;
-    const cf = ca.get(a.kind, a.clip, dir) || ca.get(a.kind, 'idle', dir) || ca.get(a.kind, 'idle', 's');
-    if (!cf) { ca.request(a.kind); drawObject(ctx, o, sx(a.x + 0.5), sy(a.y + 0.5 - tileElevY(o.x, o.y)), cam.s, { done: false, t }); return; }
-    const f = cf.frames[Math.floor(a.at * cf.fps) % cf.frames.length];
-    const { img, shadow } = charCanvases();
-    const k = cam.s / 16, L = tileElevY(o.x, o.y);
-    const dx = sx(a.x) - f.ox * k, dy = sy(a.y - L) - f.oy * k;
-    ctx.save();
-    ctx.imageSmoothingEnabled = false;
-    const alpha = ctx.globalAlpha;
-    if (G.shadows !== 'off') {
-      ctx.globalAlpha = alpha * G.shadowStrength * 0.5;
-      if (shadowXform(sy(a.y + 0.62 - L))) {
-        if (a.dir === 'w') { ctx.translate(dx * 2 + f.w * k, 0); ctx.scale(-1, 1); }
-        ctx.drawImage(shadow, f.x, f.y, f.w, f.h, dx, dy, f.w * k, f.h * k);
-      }
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.globalAlpha = alpha;
-    }
-    if (a.dir === 'w') { ctx.translate(dx * 2 + f.w * k, 0); ctx.scale(-1, 1); }
-    ctx.drawImage(img, f.x, f.y, f.w, f.h, dx, dy, f.w * k, f.h * k);
-    ctx.restore();
-    if (o.kind === 'npc' && o.icon && cam.s >= 22) drawBubble(o.icon, sx(a.x + 0.5), sy(a.y - L) - cam.s * 0.65, cam.s);
   }
 
   function drawBubble(icon: string, x: number, y: number, s: number) {
@@ -1102,33 +617,19 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     ctx.fillText(icon, x, y + 0.5);
   }
 
-  function pinPriority(o: MapObject): number {
-    switch (o.kind) {
-      case 'start': return 5;
-      case 'boss': return 4;
-      case 'entrance':
-      case 'stairs': return /dungeon|sanctum|shrine|beanstalk|stairs/.test(o.style || 'stairs') ? 4 : 3;
-      case 'npc': return 2;
-      case 'gate': return o.gate === 'ledge' || o.gate === 'open' ? 0 : 2;
-      case 'chest': return 1;
-      case 'enemy' as MapObject['kind']: return 1;
-      default: return 0;
-    }
-  }
-
   function drawTooltip(o: MapObject, x: number, y: number) {
     const label = o.label || o.kind;
     const sub = o.kind === 'gate' ? `${o.gate}${state.done.has(o.id) ? ' · cleared' : ''}` : o.kind === 'entrance' ? o.style || 'entrance' : o.kind === 'chest' && state.done.has(o.id) ? 'opened' : o.kind;
     ctx.font = `600 12px ${FONT}`;
     const w1 = ctx.measureText(label).width;
     ctx.font = `500 10px ${FONT}`;
-    const w2 = ctx.measureText(sub).width;
-    const w = Math.max(w1, w2) + 18, h = 34;
-    let bx = clamp(x - w / 2, 6, W - w - 6), by = y - h;
+    const w = Math.max(w1, ctx.measureText(sub).width) + 18, h = 34;
+    const bx = clamp(x - w / 2, 6, W - w - 6);
+    let by = y - h;
     if (by < 6) by = y + 40;
     ctx.fillStyle = 'rgba(14,12,24,0.9)';
     ctx.beginPath();
-    ctx.roundRect ? ctx.roundRect(bx, by, w, h, 7) : ctx.rect(bx, by, w, h);
+    if (ctx.roundRect) ctx.roundRect(bx, by, w, h, 7); else ctx.rect(bx, by, w, h);
     ctx.fill();
     ctx.strokeStyle = pinColor(o);
     ctx.lineWidth = 1;
@@ -1144,15 +645,13 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
   }
 
   function drawLabels() {
-    if (!dim || !dr) return;
+    if (!dim || !G.labels) return;
     const a = 1 - smoothstep(16, 30, cam.s);
-    if (a <= 0.01 || !G.labels) return;
+    if (a <= 0.01) return;
     ctx.save();
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const fs = Math.round(clamp(cam.s * 0.95, 11, 15) * G.labelSize);
-    ctx.font = `700 ${fs}px ${FONT}`;
-    (ctx as unknown as { letterSpacing: string }).letterSpacing = '1.5px';
     ctx.lineJoin = 'round';
     // biggest regions first; small regions fade out first; no overlapping labels
     const order = dim.regions.map((r, i) => [r, regionSize?.[i] ?? 0] as const).sort((p, q) => q[1] - p[1]);
@@ -1166,8 +665,8 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       ctx.font = river ? `italic 600 ${Math.max(10, fs - 2)}px ${FONT}` : `700 ${fs}px ${FONT}`;
       (ctx as unknown as { letterSpacing: string }).letterSpacing = river ? '0.5px' : '1.5px';
       const txt = river ? r.name : r.name.toUpperCase();
-      const tw0 = ctx.measureText(txt).width;
-      const rc: [number, number, number, number] = [x - tw0 / 2 - 4, y - fs, x + tw0 / 2 + 4, y + fs];
+      const tw = ctx.measureText(txt).width;
+      const rc: [number, number, number, number] = [x - tw / 2 - 4, y - fs, x + tw / 2 + 4, y + fs];
       if (placed.some((p) => p[0] < rc[2] && rc[0] < p[2] && p[1] < rc[3] && rc[1] < p[3])) continue;
       placed.push(rc);
       ctx.globalAlpha = a * sa;
@@ -1176,52 +675,40 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       ctx.strokeText(txt, x, y);
       ctx.fillStyle = shade(r.color || '#ffffff', 0.65);
       ctx.fillText(txt, x, y);
-      const tw = ctx.measureText(txt).width;
       ctx.fillStyle = shade(r.color || '#ffffff', 0.2, 0.9);
       if (!river) ctx.fillRect(x - tw * 0.25, y + fs * 0.75, tw * 0.5, 1.5);
     }
     ctx.restore();
   }
 
-  function drawGrade() {
-    if (!vignette || vignette.width !== canvas.width || vignette.height !== canvas.height) {
-      vignette = makeCanvas(canvas.width, canvas.height);
-      const c = ctx2d(vignette);
-      const w = vignette.width, h = vignette.height;
-      const g = c.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.hypot(w, h) * 0.58);
-      g.addColorStop(0, 'rgba(0,0,0,0)');
-      g.addColorStop(1, 'rgba(4,2,12,0.55)');
-      c.fillStyle = g;
-      c.fillRect(0, 0, w, h);
-    }
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    const kind = dim?.kind;
-    ctx.globalCompositeOperation = 'soft-light';
-    ctx.fillStyle = kind === 'underworld' ? 'rgba(120,60,200,0.35)' : kind === 'sky' ? 'rgba(120,170,255,0.3)' : kind === 'interior' ? 'rgba(255,170,90,0.3)' : 'rgba(255,190,120,0.28)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.drawImage(vignette, 0, 0);
-    ctx.restore();
+  function drawMessage(msg: string) {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#0b0c12';
+    ctx.fillRect(0, 0, W, Hh);
+    ctx.fillStyle = '#c9c6d6';
+    ctx.font = `500 14px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(msg, W / 2, Hh / 2, W - 32);
   }
 
-  function ghostDimFor(d: Dimension): Dimension | null {
-    if (!world || d.stack === undefined) return null;
-    const stacked = world.dims.filter((x) => x.stack !== undefined && x.id !== d.id);
-    return stacked.find((x) => x.stack === d.stack! - 1) || (d.stack! > 0 ? stacked.find((x) => x.stack === 0) || null : null);
-  }
-
-  function renderLit(dt: number): boolean {
-    if (!lit || !dim || !dr) return false;
+  // ------------------------------------------------------------ frame
+  function render(dt: number) {
+    if (!lit && !glFailed) initGL();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!lit || lit.lost) {
+      if (glFailed || (lit && lit.lost && lit.restoreFailed)) drawMessage(NO_GL_MSG);
+      return;
+    }
+    if (!dim || !dr || !lay) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'source-over';
     const d = dim, r = dr;
-    const v = visibleTiles();
+    const a0 = toWorld(0, 0), a1 = toWorld(W, Hh);
     if (!reduced) {
-      particles.emit(r, v.wx0, v.wy0, v.wx1, v.wy1, dt);
+      particles.emit(r, a0.x, a0.y, a1.x, a1.y, dt);
       particles.update(dt, t);
     }
     if (maskDirty) {
@@ -1231,136 +718,128 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
         (i) => !!state.reachable && isFoggedZone(r.owner[i]),
         (i) => fresh.size > 0 && r.owner[i] >= 0 && fresh.has(d.zoneLoc[r.owner[i]]));
     }
+    // objects near the view, with fades; characters become actors
+    const s = cam.s;
     const objs: ObjDraw[] = [];
     const actors: Actor[] = [];
-    const lz: { o: MapObject; done: boolean; z: number }[] = [];
-    const mx = 4 * cam.s + 60;
+    const lz: { o: MapObject; done: boolean; z: number; alpha: number }[] = [];
+    const vis: { o: MapObject; x: number; y: number; fog: boolean; done: boolean; a: number; act: Actor | null }[] = [];
+    const mx = 4 * s + 60;
     for (const o of sortedObjs) {
-      if (state.hidden.has(o.id)) continue;
-      const [ox2, oy2] = objScreen(o);
-      if (ox2 < -mx || oy2 < -mx || ox2 > W + mx || oy2 > Hh + mx * 1.5) continue;
+      let [x, y] = objScreen(o);
+      if (x < -mx || y < -mx || x > W + mx || y > Hh + mx * 1.5) continue;
+      const f = fadeOf(o, dt);
+      if (f.a <= 0) continue;
       if (o.kind === 'gate' && o.gate === 'open') continue;
       const done = state.done.has(o.id);
-      if (isActorObj(o)) { actors.push(actorFor(o)); lz.push({ o, done, z: o.x >= 0 && o.y >= 0 && o.x < d.w && o.y < d.h ? liftT(o.y * d.w + o.x) : 0 }); continue; }
-      objs.push({ o, done, attach: attachUp(o) });
-      lz.push({ o, done, z: o.x >= 0 && o.y >= 0 && o.x < d.w && o.y < d.h ? liftT(o.y * d.w + o.x) : 0 });
+      const z = o.x >= 0 && o.y >= 0 && o.x < d.w && o.y < d.h ? liftT(o.y * d.w + o.x) : 0;
+      let act: Actor | null = null;
+      if (isActorObj(o)) {
+        act = actorFor(o, f.a);
+        actors.push(act);
+        x = sx(act.x + 0.5);
+        y = sy(act.y + 0.5 - z);
+      } else {
+        objs.push({ o, done, attach: attachUp(o), alpha: f.a * (f.prevDone !== null ? f.mix : 1) });
+        if (f.prevDone !== null) objs.push({ o, done: f.prevDone, attach: attachUp(o), alpha: f.a * (1 - f.mix) });
+      }
+      lz.push({ o, done, z, alpha: f.a });
+      vis.push({ o, x, y, fog: objFogged(o), done, a: f.a, act });
     }
     let fresh = 0;
     if (!reduced && freshT0 >= 0) {
       const u = (t - freshT0) / FRESH_SECS;
       if (u < 1) fresh = Math.sin(Math.PI * Math.min(1, u * 1.4)) * (1 - u * 0.5);
     }
-    const gd = ghostOn ? ghostDimFor(d) : null;
+    let gd: Dimension | null = null;
+    if (ghostOn && world && d.stack !== undefined) {
+      const stacked = world.dims.filter((x) => x.stack !== undefined && x.id !== d.id);
+      gd = stacked.find((x) => x.stack === d.stack! - 1) || (d.stack > 0 ? stacked.find((x) => x.stack === 0) || null : null);
+    }
     lit.render({
-      dim: d, meta: r, cam, cssW: W, cssH: Hh, dpr, t, motion: !reduced,
+      dim: d, meta: r, cam, cssW: W, cssH: Hh, dpr, t, dt, motion: !reduced,
       ghost: gd ? { dim: gd, meta: getDr(gd) } : null,
       objs, lights: objectLights(lz), particles: reduced ? null : particles, fresh, actors, gfx: G, sun,
-      rsFix: G.integerZoom && (cam.s * dpr) / 16 >= 1 ? dpr / intDiv() : undefined,
+      rsFix: G.integerZoom && (s * dpr) / 16 >= 1 ? dpr / intDiv() : undefined,
     });
-    const ghost = ghostOn ? ghostFor(d) : null;
-    if (ghost?.outline) {
+    // coastline of the layer above (underworld) as a faint dashed overlay
+    const outline = ghostOn ? outlineFor(d) : null;
+    if (outline) {
       ctx.save();
-      ctx.setTransform(dpr * cam.s, 0, 0, dpr * cam.s, dpr * (W / 2 - cam.x * cam.s), dpr * (Hh / 2 - cam.y * cam.s));
-      ctx.lineWidth = 1.6 / cam.s;
-      ctx.setLineDash([5 / cam.s, 4 / cam.s]);
+      ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * (W / 2 - cam.x * s), dpr * (Hh / 2 - cam.y * s));
+      ctx.lineWidth = 1.6 / s;
+      ctx.setLineDash([5 / s, 4 / s]);
       ctx.strokeStyle = 'rgba(150,215,255,0.5)';
-      ctx.stroke(ghost.outline);
+      ctx.stroke(outline);
       ctx.restore();
     }
-    drawObjects(v, dt, true);
+    drawOverlayObjects(vis, dt);
     drawLabels();
     if (mouse && !drag?.moved && !target) updateHover();
-    return true;
   }
 
-  function render(dt: number) {
-    if (litOn()) {
-      try {
-        if (renderLit(dt)) return;
-      } catch (err) {
-        console.error('lit renderer failed, falling back to flat:', err);
-        litFailed = true;
-        lit?.destroy();
-        glCanvas?.remove();
-        lit = null;
-        glCanvas = null;
-        applyMode();
-      }
-    }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = 'source-over';
-    drawBackground();
-    if (!dim || !dr) return;
-    if (fogDirty) refreshFog();
-    const ghost = ghostOn ? ghostFor(dim) : null;
-
-    // ghost of the layer below, seen through VOID
-    if (ghost?.fill) {
-      ctx.save();
-      ctx.globalAlpha = ghost.fillAlpha;
-      ctx.drawImage(ghost.fill, sx(0), sy(0), dim.w * cam.s, dim.h * cam.s);
-      ctx.restore();
-      if (dim.kind === 'sky') {
-        ctx.fillStyle = 'rgba(30,70,150,0.25)';
-        ctx.fillRect(0, 0, W, Hh);
-      }
-    }
-
-    drawFlatTerrain();
-
-    const v = visibleTiles();
-    drawShimmer(v);
-    drawFlatProps(v);
-
-    // fresh-zone pulse
-    if (freshPath && !reduced) {
-      const u = (t - freshT0) / FRESH_SECS;
-      if (u >= 1) freshPath = null;
-      else {
-        const [k, ox, oy] = bakeTransform();
-        ctx.save();
-        ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * ox, dpr * oy);
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.fillStyle = `rgba(255,180,80,${0.42 * Math.sin(Math.PI * Math.min(1, u * 1.4)) * (1 - u * 0.5)})`;
-        ctx.fill(freshPath);
-        ctx.restore();
-      }
-    }
-
-    if (ghost?.outline) {
-      ctx.save();
-      ctx.setTransform(dpr * cam.s, 0, 0, dpr * cam.s, dpr * (W / 2 - cam.x * cam.s), dpr * (Hh / 2 - cam.y * cam.s));
-      ctx.lineWidth = 1.6 / cam.s;
-      ctx.setLineDash([5 / cam.s, 4 / cam.s]);
-      ctx.strokeStyle = 'rgba(150,215,255,0.5)';
-      ctx.stroke(ghost.outline);
-      ctx.restore();
-    }
-
+  function drawOverlayObjects(vis: { o: MapObject; x: number; y: number; fog: boolean; done: boolean; a: number; act: Actor | null }[], dt: number) {
+    const s = cam.s;
+    const sprites = s >= SPRITE_MIN;
+    hits = [];
+    // object particles (sparkles, motes, mist)
     if (!reduced) {
-      particles.emit(dr, v.wx0, v.wy0, v.wx1, v.wy1, dt);
-      particles.update(dt, t);
-    }
-    drawObjects(v, dt);
-    if (!reduced) particles.draw(ctx, W / 2 - cam.x * cam.s, Hh / 2 - cam.y * cam.s, cam.s, t);
-    if (dim.kind === 'overworld' || dim.kind === 'sky') {
-      // time of day: darken and cool the flat view at night, warm it at dawn / dusk
-      const nt = sun.night;
-      if (nt > 0.01) {
-        ctx.save();
-        ctx.globalCompositeOperation = 'multiply';
-        ctx.globalAlpha = Math.min(0.85, nt * 0.85);
-        ctx.fillStyle = '#34447e';
-        ctx.fillRect(0, 0, W, Hh);
-        ctx.restore();
+      for (const { o, done, fog, act } of vis) {
+        if (fog) continue;
+        const wx = (act ? act.x : o.x) + 0.5, wy = (act ? act.y : o.y) + 0.5 - tileElevY(o.x, o.y);
+        if (o.kind === 'chest' && !done && Math.random() < dt * 2.2)
+          particles.add('sparkle', wx + (Math.random() - 0.5) * 0.7, wy - 0.2 - Math.random() * 0.4, { max: 0.8, size: 5, col: 'rgb(255,220,120)' });
+        else if (o.kind === 'gate' && (o.gate === 'seal' || o.gate === 'portal') && !done && Math.random() < dt * 5) {
+          const a = Math.random() * 6.283;
+          particles.add('mote', wx + Math.cos(a) * 0.45, wy + Math.sin(a) * 0.45, { vx: -Math.cos(a) * 0.3, vy: -Math.sin(a) * 0.3 - 0.2, max: 1.2, size: 4, col: o.gate === 'seal' ? 'rgb(255,110,240)' : 'rgb(190,120,255)' });
+        } else if (isWaterfall(o) && Math.random() < dt * 7)
+          particles.add('mote', wx + (Math.random() - 0.5) * 0.9, wy - 0.1 - Math.random() * 0.3, { vx: (Math.random() - 0.5) * 0.3, vy: -0.3 - Math.random() * 0.3, max: 1.4, size: 7, col: 'rgb(190,225,250)' });
+        else if (o.kind === 'start' && Math.random() < dt * 2)
+          particles.add('mote', wx + (Math.random() - 0.5) * 0.8, wy, { vy: -0.5, max: 1.6, size: 4, col: 'rgb(160,255,200)' });
       }
     }
-    drawLabels();
-    drawGrade();
-    if (mouse && !drag?.moved && !target) updateHover();
+    // zoomed out: thin pins by importance and declutter in screen space
+    const showPins = !sprites && G.pins && G.pinDensity > 0;
+    const pinSel = new Set<MapObject>();
+    if (showPins) {
+      const minPri = Math.max(0, (s < 3 ? 4 : s < 6 ? 3 : s < 10 ? 2 : s < 16 ? 1 : 0) + (G.pinDensity < 0.5 ? 1 : G.pinDensity > 1.5 ? -1 : 0));
+      const cell = (15 * G.pinSize) / Math.max(0.25, G.pinDensity);
+      const occ = new Set<number>();
+      for (const q of vis.filter((v) => v.a > 0.5 && pinPriority(v.o) >= minPri).sort((p, q) => pinPriority(q.o) - pinPriority(p.o))) {
+        const key = Math.floor(q.x / cell) * 100003 + Math.floor(q.y / cell);
+        if (occ.has(key)) continue;
+        occ.add(key);
+        pinSel.add(q.o);
+      }
+    }
+    for (const { o, x, y, fog, done, a } of vis) {
+      ctx.globalAlpha = (fog ? 0.55 : 1) * a;
+      if (sprites) {
+        if (o.kind === 'npc' && o.icon && s >= 22) drawBubble(o.icon, x, y - s * 1.15, s);
+        hits.push({ o, x, y: y - s * 0.1, r: s * 0.55 });
+      } else if (pinSel.has(o)) {
+        const rank = pinRank(o);
+        const r = (rank === 2 ? 8 : rank === 1 ? 6.5 : 3.5) * G.pinSize;
+        drawPin(ctx, o, x, y, r, done);
+        hits.push({ o, x, y: rank === 0 ? y : y - r * 1.55, r: Math.max(r + 3, 8) });
+      } else if (!sprites) hits.push({ o, x, y, r: 6 });
+    }
+    ctx.globalAlpha = 1;
+    if (hover && !state.hidden.has(hover.id)) {
+      const h = hits.find((q) => q.o === hover);
+      if (h && (sprites || pinSel.has(hover))) {
+        const pulse = reduced ? 0 : Math.sin(t * 5) * 1.5;
+        ctx.strokeStyle = 'rgba(10,8,20,0.7)';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, h.r + 2 + pulse, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = '#fff6d8';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      if (h) drawTooltip(hover, h.x, h.y - h.r - 8);
+    }
   }
 
   function destroy() {
@@ -1381,14 +860,10 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     lit = null;
     glCanvas = null;
     renders.clear();
-    ghosts.clear();
     particles.clear();
   }
 
   resize();
-  applyMode();
-  return {
-    setWorld, setDimension, setState, setGhost, focus, fitAll, resize, destroy, setRenderer, setGraphics, setTime,
-    get renderer() { return mode; },
-  };
+  initGL();
+  return { setWorld, setDimension, setState, setGhost, focus, fitAll, resize, destroy, setGraphics, setTime };
 }

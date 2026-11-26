@@ -15,6 +15,8 @@ export interface Light {
   c: [number, number, number];
   /** pulse speed (rad/s), 0 = steady */
   pulse: number;
+  /** stable identity for fading in / out of the active set */
+  id?: string;
 }
 
 /** Uniform grid over a dimension so huge worlds only look at the lights near the view. */
@@ -64,7 +66,8 @@ export function staticLights(dim: Dimension, lay: Layout, st: { torches: [number
       if (n >= 2) out.push(L(sx / n + 0.5, sy / n + 0.5, sz / n / TILE_PX + 0.5, 3 + n * 0.12, [1.6, 0.55, 0.15], 1.3));
     }
   for (const [x, y, z] of st.windows) out.push(L(x, y, z, 1.9, [0.95, 0.58, 0.26], 0));
-  for (const [x, y, z] of st.torches) out.push(L(x, y, z, 5, [1.7, 0.9, 0.38], 9));
+  for (const [x, y, z] of st.torches) out.push(L(x, y, z - 0.1, 5, [1.7, 0.9, 0.38], 9));
+  out.forEach((l, k) => (l.id = 's' + k));
   return out;
 }
 
@@ -82,9 +85,10 @@ const ENT_LIGHT: Record<string, [number, [number, number, number], number]> = {
 };
 
 /** lights carried by objects, depending on their done state */
-export function objectLights(objs: { o: MapObject; done: boolean; z: number }[]): Light[] {
+export function objectLights(objs: { o: MapObject; done: boolean; z: number; alpha?: number }[], night = 0): Light[] {
   const out: Light[] = [];
-  for (const { o, done, z } of objs) {
+  for (const { o, done, z, alpha } of objs) {
+    const n0 = out.length;
     const x = o.x + 0.5, y = o.y + 0.55;
     switch (o.kind) {
       case 'entrance':
@@ -117,7 +121,8 @@ export function objectLights(objs: { o: MapObject; done: boolean; z: number }[])
         if ((o.gate as string) === 'waterfall') { out.push(L(x, y - 0.3, z + 0.6, 3.0, [0.22, 0.4, 0.6], 0.7)); break; }
         if (done) break;
         const g = o.gate;
-        if ((g as string) === 'moon') out.push(L(x, y + 0.2, z + 0.6, 2.4, [0.5, 0.6, 1.3], 0.8));
+        if ((g as string) === 'moon') out.push(L(x, y + 0.2, z + 0.6, 2.4, [0.5 * night, 0.6 * night, 1.3 * night], 0.8));
+        else if ((g as string) === 'sun') out.push(L(x, y + 0.2, z + 0.6, 2.4, [1.5 * (1 - night), 1.15 * (1 - night), 0.4 * (1 - night)], 0.8));
         else if (g === 'seal') out.push(L(x, y + 0.2, z + 0.5, 3.6, [1.7, 0.35, 1.6], 2.5));
         else if (g === 'portal') out.push(L(x, y + 0.2, z + 0.5, 3.6, [0.9, 0.4, 2.0], 2));
         else if (g === 'eye') out.push(L(x, y + 0.4, z + 0.4, 2.2, [1.5, 0.6, 0.15], 1.5));
@@ -125,6 +130,10 @@ export function objectLights(objs: { o: MapObject; done: boolean; z: number }[])
         else if (g === 'water') out.push(L(x, y, z + 0.2, 1.6, [0.3, 0.8, 1.1], 1));
         break;
       }
+    }
+    for (let k = n0; k < out.length; k++) {
+      out[k].id = 'o:' + o.id;
+      if (alpha !== undefined && alpha < 1) out[k].c = [out[k].c[0] * alpha, out[k].c[1] * alpha, out[k].c[2] * alpha];
     }
   }
   return out;
@@ -206,35 +215,45 @@ export interface Sun {
   ambTint: [number, number, number];
   /** 0 = full day, 1 = deep night */
   night: number;
+  /** strength of the cast shadows (fades out at the sun/moon hand-over) */
+  shadowK: number;
 }
 
 const lerp3 = (a: number[], b: number[], t: number): [number, number, number] => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
+const sstep = (a: number, b: number, v: number) => { const t = Math.min(1, Math.max(0, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
+
 /**
- * Sun (or moon) for a time of day in hours. The sun rises in the east (6:00), passes high in the
- * north of the map at noon (shadows fall south, toward the viewer) and sets in the west (18:00);
- * at night a dim, cool moon takes the opposite arc.
+ * Sun and moon for a time of day in hours, continuous everywhere (also across 24 -> 0). The sun
+ * rises in the east (6:00), stands high in the north at noon (shadows fall south, toward the
+ * viewer) and sets in the west (18:00); the moon takes the opposite side of the same circle.
+ * Key colour, strength and direction are weighted blends of both, so twilight (about 5-7 and
+ * 17-19) cross-fades instead of switching; shadows fade out where sun and moon are equally weak.
  */
 export function sunAt(hours: number): Sun {
-  const h = ((hours % 24) + 24) % 24;
-  const dayT = (h - 6) / 12; // 0 sunrise .. 1 sunset
-  const isDay = dayT > -0.04 && dayT < 1.04;
-  const arc = isDay ? Math.min(1, Math.max(0, dayT)) : (((h + 6) % 24) / 12); // moon: 18 -> 6
-  const az = Math.PI * arc; // 0 = east, pi/2 = north, pi = west
-  const elevMax = isDay ? 1.15 : 0.75;
-  const el = Math.max(0.12, Math.sin(Math.PI * Math.min(1, Math.max(0, arc))) * elevMax);
-  const dir = [Math.cos(az) * Math.cos(el), -Math.sin(az) * Math.cos(el) * 0.8 - 0.15, Math.sin(el)];
-  const l = Math.hypot(dir[0], dir[1], dir[2]);
-  // day amount with soft dawn / dusk transitions
-  const day = Math.min(1, Math.max(0, Math.min((h - 5) / 1.5, (20 - h) / 1.5)));
-  const low = 1 - Math.min(1, Math.sin(Math.PI * Math.min(1, Math.max(0, dayT))) * 1.6); // 1 near horizon
-  const sunCol = lerp3([1.2, 1.05, 0.88], [1.45, 0.72, 0.38], low);
-  const moonCol: [number, number, number] = [0.22, 0.3, 0.52];
+  const ph = ((hours - 6) / 24) * Math.PI * 2;
+  const se = Math.sin(ph); // sun height: 1 noon, -1 midnight
+  const pos = (sign: number): [number, number, number] => {
+    const v: [number, number, number] = [Math.cos(ph) * sign, (-0.8 * Math.sin(ph) - 0.15) * sign, 1.15 * Math.sin(ph) * sign];
+    v[2] = Math.max(0.12, v[2] + 0.1);
+    const l = Math.hypot(v[0], v[1], v[2]);
+    return [v[0] / l, v[1] / l, v[2] / l];
+  };
+  const wS = sstep(-0.14, 0.3, se), wM = sstep(-0.14, 0.3, -se) * 0.85;
+  const sd = pos(1), md = pos(-1);
+  const k: [number, number, number] = [sd[0] * wS + md[0] * wM, sd[1] * wS + md[1] * wM, sd[2] * wS + md[2] * wM];
+  k[2] = Math.max(0.12, k[2]);
+  const kl = Math.hypot(k[0], k[1], k[2]);
+  const day = sstep(-0.22, 0.3, se);
+  const low = 1 - sstep(0.02, 0.55, se); // warm near the horizon
+  const sunCol = lerp3([1.2, 1.05, 0.88], [1.45, 0.66, 0.34], low);
+  const moonCol = [0.26, 0.34, 0.6];
   return {
-    dir: [dir[0] / l, dir[1] / l, dir[2] / l],
-    keyCol: isDay ? lerp3(moonCol, sunCol, day) : moonCol,
+    dir: [k[0] / kl, k[1] / kl, k[2] / kl],
+    keyCol: [sunCol[0] * wS + moonCol[0] * wM, sunCol[1] * wS + moonCol[1] * wM, sunCol[2] * wS + moonCol[2] * wM],
     amb: 0.35 + 0.75 * day,
     ambTint: lerp3([0.45, 0.6, 1.25], lerp3([1.0, 0.92, 0.95], [1.1, 0.85, 0.8], low), day),
     night: 1 - day,
+    shadowK: sstep(0.08, 0.5, Math.abs(wS - wM)) * (wS > wM ? 1 : 0.55),
   };
 }

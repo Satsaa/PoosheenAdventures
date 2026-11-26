@@ -630,3 +630,7 @@
 .pa-g-dot.is-river { stroke-width: 1.5; }
 .pa-g-threat { fill: var(--pa-bad); stroke: var(--pa-bg); stroke-width: 1; opacity: 0.9; }
 .pa-lg-threat { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--pa-bad); }
+.pa-set-bar { gap: 5px; }
+.pa-set-bar .pa-btn2 { padding: 0 8px; }
+/* vertical swipes over a slider scroll the list instead of nudging the value */
+.pa-panels input[type='range'] { touch-action: pan-y; }

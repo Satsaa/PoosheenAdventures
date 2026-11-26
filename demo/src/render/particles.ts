@@ -1,7 +1,6 @@
 // Ambient particles: per-biome emitters sampled inside the visible area only, capped pool.
 import { D, T } from '../core/types';
 import type { DimRender } from './terrain';
-import { makeCanvas, ctx2d, clamp } from './util';
 
 export type PKind = 'firefly' | 'pollen' | 'leaf' | 'snow' | 'ember' | 'dust' | 'glint' | 'wisp' | 'sparkle' | 'mote';
 
@@ -16,27 +15,6 @@ interface P {
   size: number; // px at 32 px/tile
   col: string;
   ph: number;
-}
-
-const ADDITIVE: Record<PKind, boolean> = {
-  firefly: true, pollen: true, leaf: false, snow: false, ember: true, dust: true, glint: true, wisp: false, sparkle: true, mote: true,
-};
-
-const glowCache = new Map<string, HTMLCanvasElement>();
-function glow(col: string): HTMLCanvasElement {
-  let g = glowCache.get(col);
-  if (g) return g;
-  g = makeCanvas(32, 32);
-  const c = ctx2d(g);
-  const gr = c.createRadialGradient(16, 16, 0, 16, 16, 16);
-  gr.addColorStop(0, 'rgba(255,255,255,1)');
-  gr.addColorStop(0.18, col);
-  gr.addColorStop(0.5, col.replace(/rgb\(([^)]+)\)/, 'rgba($1,0.35)'));
-  gr.addColorStop(1, col.replace(/rgb\(([^)]+)\)/, 'rgba($1,0)'));
-  c.fillStyle = gr;
-  c.fillRect(0, 0, 32, 32);
-  glowCache.set(col, g);
-  return g;
 }
 
 export class Particles {
@@ -149,63 +127,6 @@ export class Particles {
     L.length = j;
   }
 
-  draw(c: CanvasRenderingContext2D, ox: number, oy: number, scale: number, t: number) {
-    const zs = clamp(scale / 32, 0.45, 1.6);
-    // non-additive first
-    for (let pass = 0; pass < 2; pass++) {
-      c.globalCompositeOperation = pass ? 'lighter' : 'source-over';
-      for (const p of this.list) {
-        if (ADDITIVE[p.k] !== !!pass) continue;
-        const u = p.life / p.max;
-        const fade = Math.min(1, u * 5, (1 - u) * 4);
-        const sx = ox + p.x * scale, sy = oy + p.y * scale;
-        switch (p.k) {
-          case 'leaf': {
-            c.globalAlpha = fade * 0.9;
-            c.fillStyle = p.col;
-            c.save();
-            c.translate(sx, sy);
-            c.rotate(t * 2 + p.ph);
-            c.fillRect(-p.size * zs, -p.size * zs * 0.4, p.size * zs * 2, p.size * zs * 0.8);
-            c.restore();
-            break;
-          }
-          case 'snow':
-            c.globalAlpha = fade * 0.9;
-            c.fillStyle = '#ffffff';
-            c.beginPath();
-            c.arc(sx, sy, Math.max(1, p.size * zs * 0.6), 0, 6.283);
-            c.fill();
-            break;
-          case 'wisp': {
-            c.globalAlpha = fade * 0.18;
-            c.fillStyle = '#ffffff';
-            const r = p.size * zs;
-            c.beginPath();
-            c.ellipse(sx, sy, r * 1.6, r * 0.45, 0, 0, 6.283);
-            c.ellipse(sx + r * 0.6, sy - r * 0.2, r, r * 0.35, 0, 0, 6.283);
-            c.fill();
-            break;
-          }
-          default: {
-            let a = fade;
-            if (p.k === 'firefly') a *= 0.55 + 0.45 * Math.sin(t * 4 + p.ph * 5);
-            if (p.k === 'glint' || p.k === 'sparkle') a *= Math.sin(u * Math.PI);
-            const s = p.size * zs * (p.k === 'glint' || p.k === 'sparkle' ? 1 + Math.sin(u * Math.PI) : 1);
-            c.globalAlpha = clamp(a, 0, 1);
-            c.drawImage(glow(p.col), sx - s * 2, sy - s * 2, s * 4, s * 4);
-            if (p.k === 'glint' || p.k === 'sparkle') {
-              c.fillStyle = '#ffffff';
-              c.fillRect(sx - s * 1.6, sy - 0.5, s * 3.2, 1);
-              c.fillRect(sx - 0.5, sy - s * 1.6, 1, s * 3.2);
-            }
-          }
-        }
-      }
-    }
-    c.globalAlpha = 1;
-    c.globalCompositeOperation = 'source-over';
-  }
 }
 
 function hasTreeNear(dim: { w: number; h: number; deco: Uint8Array }, x: number, y: number): boolean {

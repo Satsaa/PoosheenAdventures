@@ -31,10 +31,7 @@ export interface Overview {
   nrm: Uint8Array | null;
   emi: Uint8Array | null;
   tid: Uint8Array | null;
-  /** pre-shaded colour for the flat path */
-  rgba: Uint8Array | null;
-  /** flat path: tile index per pixel (-1 none), for fogging the overview */
-  tix: Int32Array | null;
+
   ms: number;
 }
 
@@ -64,8 +61,7 @@ export function buildOverview(
   const nrm = lit ? new Uint8Array(n * 4) : null;
   const emi = lit ? new Uint8Array(n * 4) : null;
   const tid = lit ? new Uint8Array(n * 4) : null;
-  const rgba = lit ? null : new Uint8Array(n * 4);
-  const tix = lit ? null : new Int32Array(n).fill(-1);
+
   const put = (px: number, py: number, c: RGB, top: boolean, hgt: number, e: RGB | null, mat: number, tx: number, ty: number, shade: number) => {
     if (px < 0 || py < 0 || px >= OW || py >= OH) return;
     const o = (py * OW + px) * 4;
@@ -75,13 +71,6 @@ export function buildOverview(
       nrm[o + 3] = Math.max(0, Math.min(255, Math.round((hgt + 1) * 40)));
       emi![o] = e ? e[0] : 0; emi![o + 1] = e ? e[1] : 0; emi![o + 2] = e ? e[2] : 0; emi![o + 3] = mat;
       tid![o] = tx & 255; tid![o + 1] = ty & 255; tid![o + 2] = (tx >> 8) + (ty >> 8) * 16; tid![o + 3] = 0;
-    } else {
-      const k = shade;
-      rgba![o] = Math.min(255, c[0] * k + (e ? e[0] * 0.6 : 0));
-      rgba![o + 1] = Math.min(255, c[1] * k + (e ? e[1] * 0.6 : 0));
-      rgba![o + 2] = Math.min(255, c[2] * k + (e ? e[2] * 0.6 : 0));
-      rgba![o + 3] = 255;
-      tix![o >> 2] = ty * w + tx;
     }
   };
   const mix = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
@@ -125,5 +114,5 @@ export function buildOverview(
       }
     }
   }
-  return { opx, w: OW, h: OH, topT, alb, nrm, emi, tid, rgba, tix, ms: performance.now() - t0 };
+  return { opx, w: OW, h: OH, topT, alb, nrm, emi, tid, ms: performance.now() - t0 };
 }

@@ -43,6 +43,8 @@ export interface ObjDraw {
   o: MapObject;
   done: boolean;
   attach: boolean;
+  /** 0..1 fade (hidden / done changes) */
+  alpha: number;
 }
 
 export interface LitFrame {
@@ -53,6 +55,8 @@ export interface LitFrame {
   cssH: number;
   dpr: number;
   t: number;
+  /** seconds since the last frame */
+  dt: number;
   motion: boolean;
   ghost: { dim: Dimension; meta: DimMetaIn } | null;
   /** objects near the view (already culled by the caller) */
@@ -83,6 +87,8 @@ export interface Actor {
   tint: [number, number, number];
   /** emissive scale */
   e: number;
+  /** 0..1 fade */
+  alpha: number;
 }
 
 const CHUNK_TILES = 32;
@@ -126,7 +132,7 @@ interface DimGL {
 
 export const litStats = {
   atlasMs: 0, overviewMs: [] as number[], prepareMs: [] as number[], chunkMs: [] as number[], maskMs: 0, lastFrameMs: 0,
-  worstFrameMs: 0, counts: { props: 0, casters: 0, actors: 0, objects: 0 }, chunksLive: 0, chunksComposedLastFrame: 0, pendingChunks: 0,
+  worstFrameMs: 0, lightsActive: 0, counts: { props: 0, casters: 0, actors: 0, objects: 0 }, chunksLive: 0, chunksComposedLastFrame: 0, pendingChunks: 0,
 };
 
 const push = (a: number[], v: number) => { a.push(v); if (a.length > 200) a.shift(); };
@@ -185,13 +191,25 @@ export class LitRenderer {
   private depthRb: WebGLRenderbuffer | null = null;
   /** instance counts of the last frame (for tests) */
   lastCounts = { props: 0, casters: 0, actors: 0, objects: 0 };
-  private outlineK = 0.35;
+  private outlineK = [0.35, 0.35, 0];
+  private lightW = new Map<string, number>();
+  private lightDim: DimId | null = null;
+  /** set when a lost context does not come back */
+  restoreFailed = false;
+  private lostTimer = 0;
   private lp = new Float32Array(MAX_LIGHTS * 4);
   private lc = new Float32Array(MAX_LIGHTS * 4);
   private colCache = new Map<string, [number, number, number]>();
-  private onLostEv = (e: Event) => { e.preventDefault(); this.lost = true; this.dims.clear(); this.onLost?.(); };
+  private onLostEv = (e: Event) => {
+    e.preventDefault();
+    this.lost = true;
+    this.dims.clear();
+    clearTimeout(this.lostTimer);
+    this.lostTimer = window.setTimeout(() => { if (this.lost) { this.restoreFailed = true; this.onLost?.(); } }, 4000);
+    this.onLost?.();
+  };
   private onRestoredEv = () => {
-    try { this.init(); this.lost = false; this.onRestored?.(); } catch (err) { console.error(err); }
+    try { this.init(); this.lost = false; this.restoreFailed = false; clearTimeout(this.lostTimer); this.onRestored?.(); } catch (err) { console.error(err); this.restoreFailed = true; }
   };
 
   static create(canvas: HTMLCanvasElement): LitRenderer | null {
@@ -434,7 +452,7 @@ export class LitRenderer {
     gl.uniform1i(p.u.uOccOn, occ ? 1 : 0);
     gl.uniform1f(p.u.uDepthOn, occ ? 1 : 0);
     gl.uniform1f(p.u.uFade, fade);
-    gl.uniform1f(p.u.uOutline, this.outlineK);
+    gl.uniform3f(p.u.uOutline, this.outlineK[0], this.outlineK[1], this.outlineK[2]);
     if (occ) {
       gl.activeTexture(gl.TEXTURE3);
       gl.bindTexture(gl.TEXTURE_2D, this.occTex);
@@ -565,7 +583,8 @@ export class LitRenderer {
     const gl = this.gl;
     const t0 = performance.now();
     const G = f.gfx;
-    this.outlineK = G.outline === 'off' ? 0 : G.outline === 'strong' ? 0.6 : 0.35;
+    const ok = (v: string) => (v === 'off' ? 0 : v === 'strong' ? 0.6 : 0.35);
+    this.outlineK = [ok(G.outlineCreatures), ok(G.outlineObjects), ok(G.outlineProps)];
     const rs = f.rsFix ?? Math.max(0.2, Math.min(f.dpr * G.renderScale, Math.sqrt((G.maxPixels * 1e6) / Math.max(1, f.cssW * f.cssH)), 2 * G.renderScale));
     const iw = Math.max(1, Math.min(this.maxTex, Math.round(f.cssW * rs))), ih = Math.max(1, Math.min(this.maxTex, Math.round(f.cssH * rs)));
     if (this.canvas.width !== iw || this.canvas.height !== ih) { this.canvas.width = iw; this.canvas.height = ih; }
@@ -586,10 +605,13 @@ export class LitRenderer {
     const s = f.cam.s;
     const k = (s * rs) / TILE_PX;
     // pixel-snapped camera: move in whole source pixels so sprites never shimmer
-    const camX = G.pixelSnap && k >= 1 ? Math.round(f.cam.x * TILE_PX) / TILE_PX : f.cam.x;
-    const camY = G.pixelSnap && k >= 1 ? Math.round(f.cam.y * TILE_PX) / TILE_PX : f.cam.y;
-    const offX = Math.round((f.cssW / 2 - camX * s) * rs);
-    const offY = Math.round((f.cssH / 2 - camY * s) * rs - lay.top * k);
+    // camera snapping: 'world' = whole source pixels, 'screen' = whole device (internal) pixels, 'none' = sub-pixel
+    const world = G.pixelSnap === 'world' && k >= 1;
+    const camX = world ? Math.round(f.cam.x * TILE_PX) / TILE_PX : f.cam.x;
+    const camY = world ? Math.round(f.cam.y * TILE_PX) / TILE_PX : f.cam.y;
+    const rnd = G.pixelSnap === 'none' ? (v: number) => v : Math.round;
+    const offX = rnd((f.cssW / 2 - camX * s) * rs);
+    const offY = rnd((f.cssH / 2 - camY * s) * rs - lay.top * k);
     const S0 = G.detailDistance, S1 = G.detailDistance + Math.max(0.01, G.detailFade);
     const sun = mood.outdoor ? f.sun : null;
 
@@ -807,8 +829,8 @@ export class LitRenderer {
     gl.uniform3fv(pl.u.uSun, sdir);
     const shadowAny = (shadowsOn || G.terrainShadows) && s >= 3 && (mood.shadowLen > 0 || mood.outdoor);
     gl.uniform1f(pl.u.uShadowMode, shadowAny ? 1 : 0);
-    gl.uniform1f(pl.u.uShadowStr, G.shadowStrength * (sun ? 1 - sun.night * 0.45 : 1));
-    gl.uniform1f(pl.u.uShadowSoft, G.shadowSoftness + (sun ? sun.night * 0.6 : 0));
+    gl.uniform1f(pl.u.uShadowStr, G.shadowStrength * (sun ? sun.shadowK : 1));
+    gl.uniform1f(pl.u.uShadowSoft, Math.min(1, G.shadowSoftness + (sun ? sun.night * 0.6 : 0)));
     gl.uniform1f(pl.u.uTerrainSh, G.terrainShadows ? 1 : 0);
     gl.uniform1f(pl.u.uContact, G.contactShadows);
     gl.uniform1f(pl.u.uAmbK, G.ambient);
@@ -837,28 +859,52 @@ export class LitRenderer {
       gl.uniform4f(pl.u.uGhost0, 0, 0, 1, 0);
       gl.uniform2f(pl.u.uGhostSize, 1, 1);
     }
-    // lights: spatial-grid query around the view, keep the strongest MAX_LIGHTS
+    // lights: spatial-grid query around the view; the ones with the largest on-screen contribution win
+    // (with hysteresis), and lights entering / leaving the active set fade over ~0.4 s. A light that
+    // cannot reach any visible pixel (further outside the view than its radius) is dropped at once.
     let nl = 0;
+    if (this.lightDim !== d.id) { this.lightW.clear(); this.lightDim = d.id; }
     if (s >= 5) {
-      const lx0 = vx0 / TILE_PX, lx1 = vx1 / TILE_PX, ly0 = (vy0 - lay.top) / TILE_PX, ly1 = (vy1 - lay.top) / TILE_PX + 2;
-      const [wx0, wx1, wy0, wy1] = [lx0, lx1, ly0, ly1];
-      const ccx = (wx0 + wx1) / 2, ccy = (wy0 + wy1) / 2, half = Math.max(4, (wx1 - wx0) * 0.5);
-      const cand: [Light, number][] = [];
+      const wx0 = vx0 / TILE_PX, wx1 = vx1 / TILE_PX, wy0 = (vy0 - lay.top) / TILE_PX, wy1 = (vy1 - lay.top) / TILE_PX + 2;
+      const cand: { l: Light; key: string; score: number }[] = [];
+      const seen = new Set<string>();
       const consider = (l: Light) => {
-        if (l.x + l.r < wx0 || l.x - l.r > wx1 || l.y - l.z + l.r < wy0 || l.y - l.z - l.r > wy1) return;
-        const dc = Math.hypot(l.x - ccx, l.y - ccy) / half;
-        cand.push([l, (l.c[0] + l.c[1] + l.c[2]) * l.r / (1 + dc * dc)]);
+        const ly = l.y - l.z;
+        if (l.x + l.r < wx0 || l.x - l.r > wx1 || ly + l.r < wy0 || ly - l.r > wy1) return;
+        const key = l.id ?? `${l.x},${l.y},${l.z}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        const cov = ((Math.min(wx1, l.x + l.r) - Math.max(wx0, l.x - l.r)) * (Math.min(wy1, ly + l.r) - Math.max(wy0, ly - l.r))) / (4 * l.r * l.r);
+        const prev = this.lightW.get(key) ?? 0;
+        cand.push({ l, key, score: (l.c[0] + l.c[1] + l.c[2]) * l.r * l.r * Math.max(0.05, cov) * (prev > 0 ? 1.35 : 1) });
       };
       d.lights.query(wx0, wy0, wx1, wy1, consider);
       for (const l of f.lights) consider(l);
-      cand.sort((a, b) => b[1] - a[1]);
-      nl = Math.min(MAX_LIGHTS, G.maxLights, cand.length);
+      cand.sort((a, b) => b.score - a.score);
+      const maxN = Math.min(MAX_LIGHTS - 4, G.maxLights);
+      const step = f.motion ? f.dt / 0.4 : 1;
+      const act: { l: Light; w: number; score: number }[] = [];
+      cand.forEach((c, k) => {
+        const prev = this.lightW.get(c.key) ?? 0;
+        const w = k < maxN ? Math.min(1, prev + step) : Math.max(0, prev - step);
+        if (w > 0) { this.lightW.set(c.key, w); act.push({ l: c.l, w, score: c.score }); } else this.lightW.delete(c.key);
+      });
+      for (const key of [...this.lightW.keys()]) if (!seen.has(key)) this.lightW.delete(key); // off screen: gone at once
+      act.sort((a, b) => b.score * b.w - a.score * a.w);
+      nl = Math.min(MAX_LIGHTS, act.length);
       for (let i = 0; i < nl; i++) {
-        const l = cand[i][0];
+        const { l, w } = act[i];
         this.lp.set([l.x, l.y, l.z, l.r], i * 4);
-        this.lc.set([l.c[0], l.c[1], l.c[2], l.pulse], i * 4);
+        this.lc.set([l.c[0] * w, l.c[1] * w, l.c[2] * w, l.pulse], i * 4);
       }
+      litStats.lightsActive = nl;
     }
+    // point-light shadows for the strongest lights when zoomed in (faded in around the zoom threshold)
+    const lsN = G.lightShadows === 'off' ? 0 : G.lightShadows === 'all' ? nl : Math.min(nl, Number(G.lightShadows));
+    const lsK = lsN ? Math.min(1, Math.max(0, (s - G.lightShadowsZoom + 3) / 6)) : 0;
+    gl.uniform1i(pl.u.uLSN, lsK > 0 ? lsN : 0);
+    gl.uniform1f(pl.u.uLSK, lsK);
+    gl.uniform1f(pl.u.uLSSoft, G.lightShadowsSoftness);
     gl.uniform4fv(pl.u.uLP, this.lp);
     gl.uniform4fv(pl.u.uLC, this.lc);
     gl.uniform1i(pl.u.uNL, nl);

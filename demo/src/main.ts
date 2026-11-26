@@ -214,6 +214,27 @@ $('btnBack').addEventListener('click', () => {
   if (p) showDim(p.dim, p);
 });
 $('btnFit').addEventListener('click', () => map.fitAll());
+
+// fullscreen for the map: the browser's own where it is allowed, otherwise the stage fills the page
+const stage = document.querySelector('.stage') as HTMLElement;
+const isFull = () => document.fullscreenElement === stage || stage.classList.contains('max');
+function syncFull(): void {
+  $('btnFull').setAttribute('aria-pressed', String(isFull()));
+  $('btnFull').textContent = isFull() ? 'Exit fullscreen' : 'Fullscreen';
+  map.resize();
+}
+$('btnFull').addEventListener('click', async () => {
+  if (document.fullscreenElement) await document.exitFullscreen().catch(() => undefined);
+  else if (stage.classList.contains('max')) stage.classList.remove('max');
+  else {
+    try { await stage.requestFullscreen(); } catch { stage.classList.add('max'); }
+  }
+  syncFull();
+});
+document.addEventListener('fullscreenchange', syncFull);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && stage.classList.contains('max')) { stage.classList.remove('max'); syncFull(); }
+});
 $('btnGhost').addEventListener('click', (e) => {
   const b = e.currentTarget as HTMLElement;
   const on = b.getAttribute('aria-pressed') !== 'true';
