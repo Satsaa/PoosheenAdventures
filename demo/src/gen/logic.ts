@@ -9,7 +9,7 @@ import { makePlan, type Plan } from './plan';
 import { buildStack, localSource, placeItem } from './regions';
 import { singleRoom } from './dungeon';
 import { addNpcs } from './npcs';
-import { FILL, fillers, growRegions, landMask, splitByRivers, traceRivers, type Partition } from './spatial';
+import { FILL, fillers, growRegions, landMask, neighbours as neighboursOf, splitByRivers, traceRivers, type Partition } from './spatial';
 import { oneWaySafe, requiredTable } from './validate';
 import { landScreens, screensPerRegion, type GenSettings } from '../core/settings';
 
@@ -147,6 +147,19 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   ctx.start = start.id;
   const regions = ctx.stacks.flatMap((s) => s.regions);
   const roomy = regions.filter((r) => !r.barren);
+
+  // 2b. the sea: regions on a coast may get a dock. With the Boat every dock on a sea is one
+  //     hop from the others; a ferryman does the same for a fare. (Built by the tile pass, and
+  //     only where a pier fits, so these are extra routes and never part of the tree.)
+  if (plan.tools.includes('boat') || S.ferries > 0) {
+    const drng = new Rng(childSeed(seed, 'docks'));
+    for (const r of over.regions) {
+      if (r.barren) continue;
+      const seas = new Set<number>();
+      for (const s of part.regions[r.idx]) for (const t of neighboursOf(GW, GH, s)) if (fill.kind[t] === FILL.OCEAN) seas.add(fill.of[t]);
+      for (const f of seas) if (drng.chance(S.docks)) r.feats.push({ f: 'dock', filler: f });
+    }
+  }
 
   // 3. the village: spawn, shop, and a rupee source that needs nothing
   start.feats.push({ f: 'spot', obj: { id: 'o.start', kind: 'start', label: 'Home (start)' } });

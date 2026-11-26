@@ -104,7 +104,7 @@ void main() {
     float cr = vSrc.w;
     bool chamfer = cr >= 15.5;
     if (chamfer) cr -= 16.0;
-    float rw = cr > 0.0 ? 2.0 : 1.0;
+    float rw = cr > 0.0 ? (chamfer ? 3.0 : 2.0) : 1.0;
     vec2 pc = vec2(lp) + 0.5;
     float dLit = 99.0, dDark = 99.0;
     if ((flags & 2) != 0) dLit = min(dLit, pc.y);
@@ -121,10 +121,11 @@ void main() {
       if (c == 1) dDark = 99.0;
       nn = normalize(nn + vec3(c == 0 ? -0.5 : 0.5, -0.5, 0.3));
     }
-    if (dLit < rw) { alb = min(alb * 1.32 + 0.05, 1.0); nn = normalize(nn + vec3((flags & 4) != 0 && pc.x < rw ? -0.7 : 0.0, (flags & 2) != 0 && pc.y < rw ? -0.7 : 0.0, 0.3)); }
+    if (dLit >= rw && dLit < rw + 1.0 && chamfer) alb *= 0.72;   // coping groove inside the rim (walls)
+    if (dLit < rw) { alb = min(alb * 1.5 + 0.07, 1.0); nn = normalize(nn + vec3((flags & 4) != 0 && pc.x < rw ? -0.7 : 0.0, (flags & 2) != 0 && pc.y < rw ? -0.7 : 0.0, 0.3)); }
     else if (dDark < 1.0) alb *= 0.55;
     // inner corners: the rim turns the corner (diagonal neighbour lower)
-    if ((flags & 65536) != 0 && pc.x < rw && pc.y < rw) alb = min(alb * 1.32 + 0.05, 1.0);
+    if ((flags & 65536) != 0 && pc.x < rw && pc.y < rw) alb = min(alb * 1.5 + 0.07, 1.0);
     if ((flags & 131072) != 0 && pc.x > 16.0 - rw && pc.y < rw) alb = min(alb * 1.2 + 0.03, 1.0);
     // contact skirting at the foot of higher ground, with matching inner / outer corners
     float sk = 0.0;
@@ -376,10 +377,10 @@ void main() {
       vec4 em = texelFetch(uMask, ivec2(cl), 0);
       int ec = int(em.b * 255.0 + 0.5);
       float edist = (int(em.a * 255.0 + 0.5) == 2 && ec >= 16) ? float(ec - 16) : 15.0;
-      float out = length(wq - cl - 0.5);
+      float outD = length(wq - cl - 0.5);
       if (int(em.a * 255.0 + 0.5) == 2) {
         // beyond a sea edge: open sea
-        vec3 sa = seaAlbedo(wq, edist + out, tt, sn);
+        vec3 sa = seaAlbedo(wq, edist + outD, tt, sn);
         float fo = foamStreak(wq, tt) * uFoamK * 0.4 * smoothstep(0.35, 0.9, uK);
         sa = mix(sa, vec3(0.62, 0.7, 0.75), fo);
         float nlk = max(dot(sn, uKeyDir), 0.0);
@@ -394,7 +395,7 @@ void main() {
         vec3 la = ec0 * (0.7 + nb * 0.55);
         float lift = step(0.62, hash(floor(wq * 1.6) + 7.0));
         vec3 ln = normalize(vec3(hash(g2 + 1.0) - 0.5, hash(g2 + 2.0) - 0.5 - lift * 0.4, 1.0));
-        float dim2 = mix(1.0, 0.45, 1.0 - exp(-out / 14.0));
+        float dim2 = mix(1.0, 0.45, 1.0 - exp(-outD / 14.0));
         bg = la * dim2 * (mix(uAmbBot, uAmbTop, ln.z * 0.5 + 0.5) * uAmbK + uKeyCol * uSunK * toon(max(dot(ln, uKeyDir), 0.0)));
       }
       if (em.r > 0.5) {

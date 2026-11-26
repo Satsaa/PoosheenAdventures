@@ -53,6 +53,10 @@ export interface ST {
   flow: Uint8Array;
   /** filler region per tile outside the land (index into bp.fill.list), -1 on land */
   fillAt: Int16Array;
+  /** piers that were built: where they end, which sea, whether a ferryman works there */
+  docks: { region: number; filler: number; end: number; first: number; dir: 'n' | 'e' | 's' | 'w'; ferry: boolean }[];
+  /** small islands stamped into a sea: centre tile and the zone id it was given */
+  islets: { filler: number; tile: number; loc: LocId }[];
   /** every stretch of every river: a new stretch starts at each waterfall */
   segs: { river: number; seg: number; level: number }[];
   /** 1 = something was placed here or wants this tile kept clear */
@@ -78,7 +82,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
   };
   const st: ST = {
     bp, dim, rng: new Rng(childSeed(seed, 'tiles' + bp.id)), w, h, scenery, owner: new Int16Array(n).fill(-1),
-    border: new Uint8Array(n), river: new Int16Array(n), bridge: new Uint8Array(n), flow: new Uint8Array(n), fillAt: new Int16Array(n).fill(-1), segs: [], reserved: new Uint8Array(n), interior: bp.regions.map(() => []),
+    border: new Uint8Array(n), river: new Int16Array(n), bridge: new Uint8Array(n), flow: new Uint8Array(n), fillAt: new Int16Array(n).fill(-1), docks: [], islets: [], segs: [], reserved: new Uint8Array(n), interior: bp.regions.map(() => []),
     barriers: new Map(), anchors: new Map(), mouths: bp.regions.map(() => []), problems: [],
   };
   const reg = st.owner;

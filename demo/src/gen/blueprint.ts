@@ -16,6 +16,8 @@ export type Feature =
   | { f: 'pocket'; edgeId: string; gate: GateKind; req: Req; label: string; loc: LocId; obj: ObjTpl }
   /** a building / cave mouth leading to an interior dimension */
   | { f: 'entrance'; edgeId: string; style: string; label: string; req: Req; interior: InteriorBP }
+  /** a pier out into the sea this region lies on (index of the ocean filler) */
+  | { f: 'dock'; filler: number }
   /** a house nobody needs to enter: it makes the village a village */
   | { f: 'house' }
   /** stairs between stacked worlds; realised at the same tile in both */

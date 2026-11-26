@@ -37,7 +37,7 @@ function findBlock(
   return best;
 }
 
-const ORDER: Record<Feature['f'], number> = { vertical: 0, entrance: 1, house: 1.5, pocket: 2, spot: 3 };
+const ORDER: Record<Feature['f'], number> = { vertical: 0, entrance: 1, dock: 1.2, house: 1.5, pocket: 2, spot: 3 };
 
 type Shape = [number, number][];
 const rect = (x0: number, x1: number, y0: number, y1: number): Shape => {
@@ -61,7 +61,9 @@ const LOOKS: Record<string, string[]> = {
   house: ['timber-red', 'timber-blue', 'thatch', 'timber-green'], shop: ['timber-gold'], dungeon: ['stone-moss', 'stone-dark'], sanctum: ['marble'],
 };
 
-export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => void): DoorMap {
+export interface SeaOpts { boat: boolean; ferries: number; islets: number }
+
+export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => void, sea: SeaOpts = { boat: false, ferries: 0, islets: 0 }): DoorMap {
   const doors: DoorMap = new Map();
   const pts = new Map<RegionBP, { x: number; y: number }[]>();
   const ptsOf = (r: RegionBP) => pts.get(r) ?? pts.set(r, []).get(r)!;
@@ -131,6 +133,10 @@ export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => voi
           dim.objects.push(obj);
           st.mouths[r.idx].push(at.y * w + at.x);
           doors.set(f.edgeId, { dim: dim.id, x: at.x, y: at.y, obj });
+        } else if (f.f === 'dock') {
+          // a dock nobody could use is not built: it needs the Boat in the world, or a ferryman
+          const ferry = rng.chance(sea.ferries);
+          if (sea.boat || ferry) buildDock(st, r.idx, f.filler, ferry);
         } else if (f.f === 'pocket') {
           const at = findBlock(st, r.idx, P, -2, -2, 2, 2);
           if (!at) {
@@ -168,7 +174,7 @@ export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => voi
       }
     }
   }
-  for (const st of sts.values()) { paths(st); scenery(st); }
+  for (const st of sts.values()) { stampIslets(st, sea.islets); paths(st); scenery(st); }
   return doors;
 }
 
@@ -257,4 +263,82 @@ function rimAlcove(st: ST, r: number, f: Extract<Feature, { f: 'pocket' }>): boo
     }
   }
   return false;
+}
+
+/** A pier: a plank walk from open ground through the coastal rim and two tiles out over the sea. */
+function buildDock(st: ST, r: number, filler: number, ferry: boolean): boolean {
+  const { w, h, dim } = st;
+  const region = st.bp.regions[r];
+  if (region.elev > 2) return false; // no jetties off the top of a cliff
+  const dirs: [number, number, 'n' | 'e' | 's' | 'w'][] = [[0, -1, 'n'], [1, 0, 'e'], [0, 1, 's'], [-1, 0, 'w']];
+  for (const g of st.interior[r]) {
+    if (st.reserved[g] || dim.solid[g]) continue;
+    const gx = g % w, gy = (g / w) | 0;
+    for (const [dx, dy, dir] of dirs) {
+      const rim: number[] = [], pier: number[] = [];
+      let x = gx + dx, y = gy + dy, ok = true;
+      while (ok && rim.length <= 4) {
+        if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) { ok = false; break; }
+        const i = y * w + x;
+        if (st.fillAt[i] === filler) break; // reached the sea
+        if (st.owner[i] !== r || !st.border[i] || st.river[i] || !dim.solid[i]) { ok = false; break; }
+        rim.push(i);
+        x += dx; y += dy;
+      }
+      if (!ok || !rim.length || rim.length > 4) continue;
+      // three tiles of this sea straight ahead: two for the pier, one of open water beyond it
+      for (let k = 0; k < 3 && ok; k++) {
+        const i = (y + dy * k) * w + x + dx * k;
+        if (x + dx * k < 1 || y + dy * k < 1 || x + dx * k >= w - 1 || y + dy * k >= h - 1 || st.fillAt[i] !== filler || !dim.solid[i]) ok = false;
+        else if (k < 2) pier.push(i);
+      }
+      if (!ok) continue;
+      for (const i of [...rim, ...pier]) {
+        dim.solid[i] = 0;
+        dim.deco[i] = 0;
+        dim.ground[i] = T.PLANK;
+        dim.elev[i] = region.elev;
+        st.reserved[i] = 1;
+      }
+      for (let yy = gy - 1; yy <= gy + 1; yy++) for (let xx = gx - 1; xx <= gx + 1; xx++) st.reserved[yy * w + xx] = 1;
+      st.docks.push({ region: r, filler, end: pier[1], first: rim[0], dir, ferry });
+      st.mouths[r].push(g);
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Small islands out on every sea that has a dock: sand, a palm, and a tile for a chest. */
+function stampIslets(st: ST, count: number): void {
+  const { w, h, dim, rng } = st;
+  const seas = [...new Set(st.docks.map((d) => d.filler))];
+  if (!seas.length || count <= 0) return;
+  const tilesOf = new Map<number, number[]>(seas.map((f) => [f, []]));
+  for (let i = 0; i < st.fillAt.length; i++) tilesOf.get(st.fillAt[i])?.push(i);
+  for (const f of seas) {
+    const tiles = tilesOf.get(f)!;
+    for (let k = 0, tries = 0; k < count && tries < count * 40 && tiles.length; tries++) {
+      const c = tiles[rng.int(tiles.length)], cx = c % w, cy = (c / w) | 0;
+      if (cx < 4 || cy < 4 || cx >= w - 4 || cy >= h - 4) continue;
+      // open water for three tiles all around, so an islet never touches a coast, a pier or another islet
+      let clear = true;
+      for (let y = cy - 3; y <= cy + 3 && clear; y++) for (let x = cx - 3; x <= cx + 3; x++) {
+        const i = y * w + x;
+        if (st.fillAt[i] !== f || !dim.solid[i] || st.reserved[i]) { clear = false; break; }
+      }
+      if (!clear) continue;
+      for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) {
+        const i = y * w + x;
+        dim.ground[i] = T.SAND; dim.solid[i] = 0; dim.elev[i] = 0;
+      }
+      for (let y = cy - 3; y <= cy + 3; y++) for (let x = cx - 3; x <= cx + 3; x++) st.reserved[y * w + x] = 1;
+      const palm = (cy - 1) * w + cx + 1;
+      dim.solid[palm] = 1; dim.deco[palm] = D.PALM;
+      const loc = `${dim.id}.islet${st.islets.length}`;
+      st.anchors.set(c, loc);
+      st.islets.push({ filler: f, tile: c, loc });
+      k++;
+    }
+  }
 }

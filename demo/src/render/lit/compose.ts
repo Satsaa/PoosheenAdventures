@@ -131,7 +131,7 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
       }
       const f0 = gl[variant(x, y, seed + g, gl.length)];
       const flip = g !== T.FLOOR && g !== T.WALL && g !== T.PLANK && g !== T.CAVEWALL && hash2(x, y, seed + 13) < 0.5 ? 128 : 0;
-      inst.push(px, py, P, P, f0.x, f0.y, -1, (flags & (AUTO.CUT_NW | AUTO.CUT_NE)) ? cornerR(g) : 0, L / P, x, y, flags | flip);
+      inst.push(px, py, P, P, f0.x, f0.y, -1, flags & (FLAG.BEV_N | FLAG.BEV_W | FLAG.BEV_E | AUTO.IN_NW | AUTO.IN_NE) ? cornerR(g) : 0, L / P, x, y, flags | flip);
       // edge blends with higher-priority neighbours on the same level
       if (p.prio >= 0) {
         const nbs: [number, number, number][] = [[x, y - 1, 0], [x + 1, y, 1], [x, y + 1, 2], [x - 1, y, 3]];

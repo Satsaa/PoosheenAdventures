@@ -49,7 +49,7 @@ console.log('impossible price reported by the validator:', reported);
 const tiny = generateWorld('tiny', { worldW: 5, worldH: 4, regions: 3, rivers: 0, underworld: false, sky: false, dungeons: 1, favorQuest: false, tradeQuest: false, merchant: false,
   items: { ...d0.items, bow: { enabled: false }, hookshot: { enabled: false }, sword: { enabled: true, order: 'start', home: 'any' }, lantern: { enabled: true, order: 'start', home: 'any' } } });
 const got0 = tiny.solution.spheres[0].collected.map((c) => c.item);
-const effect = tiny.ok && tiny.dims[0].w === 60 && tiny.dims[0].h === 40 && tiny.dims[0].regions.length === 3 && !tiny.dims.some((d) => d.id === 'under' || d.id === 'sky')
+const effect = tiny.ok && tiny.dims[0].w === 60 && tiny.dims[0].h === 40 && tiny.dims[0].regions.filter((r) => !['ocean', 'range', 'thicket', 'wastes', 'river'].includes(r.biome)).length === 3 && !tiny.dims.some((d) => d.id === 'under' || d.id === 'sky')
   && tiny.graph.checks.filter((c) => c.item === 'medallion').length === 1 && !tiny.graph.checks.some((c) => c.item === 'bow' || c.item === 'hookshot')
   && got0.includes('sword') && got0.includes('lantern') && tiny.npcs.length === 1;
 console.log('settings take effect:', effect, effect ? '' : JSON.stringify({ ok: tiny.ok, w: tiny.dims[0].w, r: tiny.dims[0].regions.length, got0, npcs: tiny.npcs.length, lints: tiny.lints.filter((l) => !l.ok) }));

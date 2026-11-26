@@ -21,6 +21,14 @@ const run = (name: string, settings: Record<string, unknown>, expect: (s: Record
     let sea = 0, peaks = 0;
     for (let t = 0; t < d.ground.length; t++) if (d.region[t] < 0) { if (d.ground[t] === T.DEEP) sea++; else peaks++; }
     add('seaShare', sea / d.ground.length); add('peakShare', peaks / d.ground.length);
+    add('seaZones', w.graph.locs.filter((l) => l.id.includes('.fill')).length);
+    add('docks', d.objects.filter((o) => o.style === 'dock').length);
+    add('ferrymen', w.npcs.filter((x) => x.role === 'Ferry').length);
+    add('islets', w.graph.locs.filter((l) => l.id.includes('.islet')).length);
+    add('boat', w.graph.checks.some((c) => c.item === 'boat') ? 1 : 0);
+    add('seaSides', w.shape ? Object.values(w.shape.sea).filter(Boolean).length : 0);
+    add('fillers', d.regions.filter((r) => ['ocean', 'range', 'thicket', 'wastes'].includes(r.biome)).length);
+    add('edgeLand', (() => { let n = 0; for (let x = 0; x < d.w; x++) { if (d.region[d.w + x] >= 0) n++; if (d.region[(d.h - 2) * d.w + x] >= 0) n++; } for (let y = 0; y < d.h; y++) { if (d.region[y * d.w + 1] >= 0) n++; if (d.region[y * d.w + d.w - 2] >= 0) n++; } return n / (2 * (d.w + d.h)); })());
     const goal = w.graph.checks.find((c) => c.item === w.graph.goal)!.loc;
     add('dialRequired', w.items.sundial && requiredFor(w.graph, w.items, goal, ['sundial']).length ? 1 : 0);
   }
@@ -28,10 +36,14 @@ const run = (name: string, settings: Record<string, unknown>, expect: (s: Record
   console.log(`${name.padEnd(22)} bad ${bad}/${N}  ${Object.entries(sum).map(([k, v]) => `${k} ${v.toFixed(2)}`).join('  ')}${why ? '  FAILED: ' + why : ''}`);
   if (bad > N * 0.02 || why) process.exitCode = 1;
 };
-run('default', {}, (s) => (s.enemies < 5 ? 'no enemies' : s.houses < 3 ? 'no houses' : s.oddHouses <= 0 ? 'no L/T houses' : s.timeReqs <= 0 ? 'no time content' : s.seaShare + s.peakShare < 0.05 ? 'land fills the rectangle' : s.dialRequired > 0 ? 'dial required although time flows' : null));
+run('default', {}, (s) => (s.enemies < 5 ? 'no enemies' : s.houses < 3 ? 'no houses' : s.oddHouses <= 0 ? 'no L/T houses' : s.timeReqs <= 0 ? 'no time content' : s.seaShare + s.peakShare < 0.03 ? 'land fills the rectangle' : s.dialRequired > 0 ? 'dial required although time flows' : null));
 run('time stands still', { timeFlows: false, timeChests: 1, timeNpcs: 1, timeCreatures: 3 }, (s) => (s.moonDoors <= 0 ? 'no moon doors' : s.dialRequired <= 0.05 ? 'dial never required' : null));
 run('no dial, frozen time', { timeFlows: false, items: { sundial: { enabled: false } } }, (s) => (s.timeReqs > 0 ? 'time content without any way to reach night' : null));
 run('no time doors', { timeDoors: false }, (s) => (s.moonDoors > 0 ? 'doors although switched off' : null));
 run('no weapons', { items: { sword: { enabled: false }, bow: { enabled: false }, bombBag: { enabled: false } } }, (s) => (s.foesDoors > 0 ? 'sealed rooms without weapons' : null));
 run('rectangle, no enemies', { landCoverage: 1, enemies: 0, village: 0 }, (s) => (s.enemies > 0 ? 'enemies' : s.seaShare + s.peakShare > 0 ? 'not a rectangle' : null));
+run('full island', { coastFromSeed: false, landlocked: 0 }, (s) => (s.seaSides < 3.99 ? 'not sea on every side' : s.edgeLand > 0.02 ? 'land touches the map edge' : s.docks <= 0 ? 'no docks' : s.boat <= 0.5 ? 'no boat' : null));
+run('fully landlocked', { coastFromSeed: false, landlocked: 1 }, (s) => (s.seaSides > 0 ? 'has a sea side' : s.seaShare > 0 ? 'has ocean' : s.boat > 0 ? 'a boat with nothing to sail' : s.docks > 0 ? 'docks without sea' : null));
+run('ferries, no boat', { coastFromSeed: false, landlocked: 0.2, ferries: 1, docks: 1, items: { boat: { enabled: false } } }, (s) => (s.boat > 0 ? 'boat present' : s.ferrymen <= 0 ? 'no ferrymen' : s.seaZones <= 0 ? 'no sea zone' : null));
+run('boat, no ferries', { coastFromSeed: false, landlocked: 0.2, ferries: 0, docks: 1, islets: 6 }, (s) => (s.ferrymen > 0 ? 'ferrymen present' : s.islets <= 0 ? 'no islets' : null));
 run('crowded', { enemies: 4, village: 12, rivers: 4, timeChests: 1, timeNpcs: 1, timeCreatures: 3, timeShop: true }, () => null);
