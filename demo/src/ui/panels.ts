@@ -61,6 +61,15 @@ function guardHead(el: HTMLElement): void {
     if (t && t.tagName === 'TEXTAREA' && t.scrollHeight > t.clientHeight) return;
     ev.preventDefault();
   }, { passive: false });
+  // CSS touch-action should be enough, but an app that wraps the page in its own scroller can
+  // still take the gesture unless the page consumes it. Cancelling the move does that everywhere;
+  // taps are unaffected because they never move.
+  el.addEventListener('touchmove', (ev) => {
+    const t = ev.target as HTMLElement | null;
+    if (t && t.tagName === 'TEXTAREA' && t.scrollHeight > t.clientHeight) return;
+    if (ev.cancelable) ev.preventDefault();
+    ev.stopPropagation();
+  }, { passive: false });
 }
 
 export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
