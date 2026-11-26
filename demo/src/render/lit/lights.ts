@@ -86,12 +86,13 @@ const ENT_LIGHT: Record<string, [number, [number, number, number], number]> = {
 };
 
 /** lights carried by objects, depending on their done state */
-export function objectLights(objs: { o: MapObject; done: boolean; z: number; alpha?: number }[], night = 0): Light[] {
+export function objectLights(objs: { o: MapObject; done: boolean; z: number; alpha?: number; at?: { x: number; y: number } }[], night = 0): Light[] {
   const out: Light[] = [];
-  for (const { o, done, z, alpha } of objs) {
+  for (const { o, done, z, alpha, at } of objs) {
     const n0 = out.length;
     const sideOn = o.dir === 'e' || o.dir === 'w';
-    const x = o.x + 0.5, y = sideOn ? o.y + 0.3 : o.y + 0.55;
+    // whatever walks or drifts carries its light along: `at` is where it is this frame
+    const x = (at?.x ?? o.x) + 0.5, y = at ? at.y + 0.55 : sideOn ? o.y + 0.3 : o.y + 0.55;
     switch (o.kind) {
       case 'entrance':
       case 'stairs': {

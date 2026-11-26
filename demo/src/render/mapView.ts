@@ -722,7 +722,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     const s = cam.s;
     const objs: ObjDraw[] = [];
     const actors: Actor[] = [];
-    const lz: { o: MapObject; done: boolean; z: number; alpha: number }[] = [];
+    const lz: { o: MapObject; done: boolean; z: number; alpha: number; at?: { x: number; y: number } }[] = [];
     const vis: { o: MapObject; x: number; y: number; fog: boolean; done: boolean; a: number; act: Actor | null }[] = [];
     const mx = 4 * s + 60;
     for (const o of sortedObjs) {
@@ -731,18 +731,19 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       const f = fadeOf(o, dt);
       if (f.a <= 0) continue;
       const done = state.done.has(o.id);
-      const z = o.x >= 0 && o.y >= 0 && o.x < d.w && o.y < d.h ? liftT(o.y * d.w + o.x) : 0;
+      let z = o.x >= 0 && o.y >= 0 && o.x < d.w && o.y < d.h ? liftT(o.y * d.w + o.x) : 0;
       let act: Actor | null = null;
       if (isActorObj(o)) {
         act = actorFor(o, f.a);
         actors.push(act);
+        z = liftT(act.tile); // the ground it is over now, not where it started
         x = sx(act.x + 0.5);
         y = sy(act.y + 0.5 - z);
       } else {
         objs.push({ o, done, attach: attachUp(o), alpha: f.a * (f.prevDone !== null ? f.mix : 1) });
         if (f.prevDone !== null) objs.push({ o, done: f.prevDone, attach: attachUp(o), alpha: f.a * (1 - f.mix) });
       }
-      lz.push({ o, done, z, alpha: f.a });
+      lz.push({ o, done, z, alpha: f.a, at: act ? { x: act.x, y: act.y } : undefined });
       vis.push({ o, x, y, fog: objFogged(o), done, a: f.a, act });
     }
     let fresh = 0;
