@@ -88,7 +88,8 @@ void main() {
     for (int k = 0; k < 4; k++) {
       ivec2 o = k == 0 ? ivec2(1, 0) : k == 1 ? ivec2(-1, 0) : k == 2 ? ivec2(0, 1) : ivec2(0, -1);
       ivec2 q = lq + o;
-      if (q.x < 0 || q.y < 0 || q.x >= int(vSize.x) || q.y >= int(vSize.y) || texelFetch(uA, ivec2(vSrc.xy) + q, 0).a < 0.5) { rim = true; break; }
+      // only real silhouette edges: a frame border is not an edge (modular building pieces continue there)
+      if (q.x >= 0 && q.y >= 0 && q.x < int(vSize.x) && q.y < int(vSize.y) && texelFetch(uA, ivec2(vSrc.xy) + q, 0).a < 0.5) { rim = true; break; }
     }
     if (rim) alb *= vec3(1.0 - rimK, 1.0 - rimK, 1.0 - rimK * 0.85);
   }

@@ -239,9 +239,11 @@ export function sunAt(hours: number): Sun {
     const l = Math.hypot(v[0], v[1], v[2]);
     return [v[0] / l, v[1] / l, v[2] / l];
   };
-  const wS = sstep(-0.14, 0.3, se), wM = sstep(-0.14, 0.3, -se) * 0.85;
+  // the sun fades out just below the horizon before the moon fades in: at the hand-over both weights
+  // are zero, so the key light's direction can switch without any visible change
+  const wS = sstep(-0.06, 0.32, se), wM = sstep(0.06, 0.4, -se) * 0.85;
   const sd = pos(1), md = pos(-1);
-  const k: [number, number, number] = [sd[0] * wS + md[0] * wM, sd[1] * wS + md[1] * wM, sd[2] * wS + md[2] * wM];
+  const k: [number, number, number] = wS + wM > 1e-4 ? [sd[0] * wS + md[0] * wM, sd[1] * wS + md[1] * wM, sd[2] * wS + md[2] * wM] : [0, 0, 1];
   k[2] = Math.max(0.12, k[2]);
   const kl = Math.hypot(k[0], k[1], k[2]);
   const day = sstep(-0.22, 0.3, se);
@@ -254,6 +256,6 @@ export function sunAt(hours: number): Sun {
     amb: 0.35 + 0.75 * day,
     ambTint: lerp3([0.45, 0.6, 1.25], lerp3([1.0, 0.92, 0.95], [1.1, 0.85, 0.8], low), day),
     night: 1 - day,
-    shadowK: sstep(0.08, 0.5, Math.abs(wS - wM)) * (wS > wM ? 1 : 0.55),
+    shadowK: Math.max(wS, wM * 0.6),
   };
 }
