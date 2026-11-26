@@ -16,8 +16,11 @@ export type Feature =
   | { f: 'pocket'; edgeId: string; gate: GateKind; req: Req; label: string; loc: LocId; obj: ObjTpl }
   /** a building / cave mouth leading to an interior dimension */
   | { f: 'entrance'; edgeId: string; style: string; label: string; req: Req; interior: InteriorBP }
-  /** a pier out into the sea this region lies on (index of the ocean filler) */
-  | { f: 'dock'; filler: number }
+  /**
+   * a pier out into the sea this region lies on (index of the ocean filler). With an edge it is
+   * part of the graph (the way to an island) and must be built; without, it is built where it fits.
+   */
+  | { f: 'dock'; filler: number; edgeId?: string; ferry?: boolean }
   /** a house nobody needs to enter: it makes the village a village */
   | { f: 'house' }
   /** stairs between stacked worlds; realised at the same tile in both */
@@ -114,6 +117,8 @@ export class Ctx {
   shape: WorldShape = { landlocked: 0, sea: { n: true, e: true, s: true, w: true } };
   /** false when no side of this world is sea: nothing to sail, so no boat */
   hasOcean = false;
+  /** the Boat is one of this world's tools */
+  hasBoat = false;
   /** the zone the player starts in */
   start: LocId = '';
   /** what the player is guaranteed to own when the sanctum is placed */

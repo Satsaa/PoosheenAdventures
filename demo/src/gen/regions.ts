@@ -1,8 +1,8 @@
 // World level -> regions -> places. One routine for overworld, underworld and sky.
-import type { DimId, DimKind, GateKind, HNode, ItemId, Req } from '../core/types';
+import type { DimId, DimKind, Edge, GateKind, HNode, ItemId, Req } from '../core/types';
 import { Rng, childSeed } from '../core/rng';
 import { BIOMES, DUNGEON_NAMES, GATES, NPC_NAMES } from '../core/content';
-import { NONE, has } from '../core/req';
+import { NONE, any, has, use } from '../core/req';
 import { Ctx, hnode, type RegionBP, type StackBP } from './blueprint';
 import { buildLockGraph, type Payload } from './lockgraph';
 import { buildDungeon, singleRoom } from './dungeon';
@@ -22,6 +22,8 @@ export interface StackSpec {
   theme: (idx: number) => { biome: string; elev: number; name: string; color: string };
   rivers?: StackBP['rivers'];
   fill?: StackBP['fill'];
+  /** islands: region pairs that can be joined over the water, with the ocean filler they share */
+  sea?: { pairs: [number, number, number][]; needs: ItemId | null };
   /** a portal payload landed in `region`: build the sub-world and connect it */
   onPortal: (region: RegionBP, payload: Payload) => void;
 }
@@ -44,6 +46,8 @@ export function buildStack(ctx: Ctx, spec: StackSpec): StackBP {
     stack.regions.push({ id, idx, stack, hnode: node, feats: [], ...th, barren: spec.part.regions[idx].length <= 1 && spec.part.regions.length > 1 });
   });
   const byId = new Map(stack.regions.map((r) => [r.id, r]));
+  const seaOf = new Map<string, number>();
+  for (const [a, b, f] of spec.sea?.pairs ?? []) { seaOf.set(a + '|' + b, f); seaOf.set(b + '|' + a, f); }
 
   // region graph: only regions that touch may be connected
   const lg = buildLockGraph({
@@ -59,9 +63,18 @@ export function buildStack(ctx: Ctx, spec: StackSpec): StackBP {
     depthBias: ctx.settings.linearity,
     likes: (a, b) => [...likesOf(byId.get(a)!.biome), ...likesOf(byId.get(b)!.biome)],
     barren: new Set(stack.regions.filter((r) => r.barren).map((r) => r.id)),
+    seaCandidates: spec.sea?.pairs.map(([a, b]) => [stack.regions[a].id, stack.regions[b].id]),
+    seaNeeds: spec.sea?.needs,
   });
   for (const le of lg.edges) {
     const a = byId.get(le.a)!, b = byId.get(le.b)!;
+    if (le.sea) {
+      // over the water: a pier on each shore, both on the same sea
+      const f = seaOf.get(a.idx + '|' + b.idx)!;
+      seaDock(ctx, a, f, rng);
+      b.hnode.needs = seaDock(ctx, b, f, rng).req;
+      continue;
+    }
     const e = ctx.edge(a.id, b.id, le.req, le.gate);
     stack.openings.push({ edgeId: e.id, a: a.idx, b: b.idx, gate: le.gate, req: le.req, label: le.label });
     world.edges.push({ a: a.id, b: b.id, req: le.req, gate: le.gate });
@@ -84,6 +97,31 @@ export function buildStack(ctx: Ctx, spec: StackSpec): StackBP {
     for (const p of lg.assign.get(rid)!) realise(ctx, prng, region, p, spec.onPortal);
   }
   return stack;
+}
+
+/**
+ * The pier that joins `region` to the sea `filler`. Unlike a dock that is only built where it
+ * happens to fit, this one is an edge of the graph: an island hangs on it, so the map must build it.
+ * Without a Boat in the world a ferryman works every such pier.
+ */
+export function seaDock(ctx: Ctx, region: RegionBP, filler: number, rng: Rng): Edge {
+  const built = region.feats.find((f) => f.f === 'dock' && f.filler === filler && f.edgeId);
+  if (built && built.f === 'dock') return ctx.edges.find((e) => e.id === built.edgeId)!;
+  const stack = region.stack, sea = `${stack.id}.fill${filler}`;
+  const fare = use('rupees', ctx.settings.ferryFare);
+  const ferry = !ctx.hasBoat || rng.chance(ctx.settings.ferries);
+  const req = ctx.hasBoat ? (ferry ? any(has('boat'), fare) : has('boat')) : fare;
+  if (!ctx.locs.has(sea)) {
+    const name = stack.fill?.names?.[filler] ?? 'The Sea';
+    const node = hnode(sea, 'region', name, 0, { biome: 'ocean', elev: 0, dim: stack.id });
+    node.locs.push(ctx.loc(sea, name, sea, stack.id));
+    node.needs = req;
+    stack.hnode.children.push(node);
+  }
+  const e = ctx.edge(region.id, sea, req, 'dock');
+  stack.hnode.edges.push({ a: region.id, b: sea, req, gate: 'dock' });
+  region.feats.push({ f: 'dock', filler, edgeId: e.id, ferry });
+  return e;
 }
 
 /** Whatever a gate makes the player spend, the near side of the gate gives back. */

@@ -31,6 +31,8 @@ export interface LockEdge {
   lock?: string;
   spends?: ItemId;
   label: string;
+  /** not a border between neighbours but a crossing of open sea, dock to dock */
+  sea?: boolean;
 }
 
 export interface LockGraphInput {
@@ -50,6 +52,13 @@ export interface LockGraphInput {
   likes?: (a: string, b: string) => ItemId[];
   /** higher = longer chains, lower = bushier */
   depthBias?: number;
+  /**
+   * Pairs joined over water (an island and a coastal region on the same sea). They can only be
+   * used once `seaNeeds` is owned; with no such item they are open from the start (a ferry).
+   */
+  seaCandidates?: [string, string][];
+  seaNeeds?: ItemId | null;
+  seaReq?: Req;
   /** items that are placed like any other but never lock an edge */
   noGate?: Set<ItemId>;
   /** nodes too small to hold anything: attached like any other, but never given a payload */
@@ -100,10 +109,17 @@ export function buildLockGraph(inp: LockGraphInput): LockGraphOutput {
 
   const key = (a: string, b: string) => (a < b ? a + '|' + b : b + '|' + a);
   const options = () => {
-    const out: { p: string; c: string }[] = [];
+    const out: { p: string; c: string; sea?: boolean }[] = [];
     for (const [a, b] of inp.candidates) {
       if (placed.has(a) && !placed.has(b) && !sealed.has(a)) out.push({ p: a, c: b });
       else if (placed.has(b) && !placed.has(a) && !sealed.has(b)) out.push({ p: b, c: a });
+    }
+    // the sea opens up once the player can sail it
+    if (inp.seaCandidates && (!inp.seaNeeds || have.includes(inp.seaNeeds))) {
+      for (const [a, b] of inp.seaCandidates) {
+        if (placed.has(a) && !placed.has(b) && !sealed.has(a)) out.push({ p: a, c: b, sea: true });
+        else if (placed.has(b) && !placed.has(a) && !sealed.has(b)) out.push({ p: b, c: a, sea: true });
+      }
     }
     return out;
   };
@@ -114,7 +130,13 @@ export function buildLockGraph(inp: LockGraphInput): LockGraphOutput {
       // only sealed parents left: unseal rather than leave nodes detached
       sealed.clear();
       opts = options();
-      if (!opts.length) break;
+    }
+    if (!opts.length) {
+      // what is left lies across the sea and the player cannot sail yet: hand out the next
+      // payload on land instead, until the Boat turns up
+      if (!queue.length) break;
+      give([...order].reverse().find((n) => !inp.barren?.has(n)) ?? order[0], 1);
+      continue;
     }
     const barren = inp.barren;
     const roomy = barren ? opts.filter((o) => !barren.has(o.c)) : opts;
@@ -141,7 +163,11 @@ export function buildLockGraph(inp: LockGraphInput): LockGraphOutput {
     });
 
     let edge: LockEdge;
-    if (gateItem === keyItem && keyItem) {
+    if (opt.sea) {
+      // a sea crossing is its own kind of lock; whatever item was waiting to lock a border waits on
+      if (gateItem) pending.unshift(gateItem);
+      edge = { a: opt.p, b: opt.c, req: inp.seaReq ?? NONE, gate: 'dock', label: 'Sea crossing', sea: true };
+    } else if (gateItem === keyItem && keyItem) {
       edge = { a: opt.p, b: opt.c, req: NONE, gate: 'locked', lock: inp.lockScope, label: 'Locked door' };
     } else {
       if (!gateItem && !rng.chance(inp.freeChance)) {

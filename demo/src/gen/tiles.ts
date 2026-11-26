@@ -5,6 +5,7 @@ import { D } from '../core/types';
 import type { Blueprint } from './logic';
 import { finishTree } from './logic';
 import { NONE, any, has, use } from '../core/req';
+import { FERRY_NAMES } from '../core/content';
 import { FILL } from './spatial';
 import { hnode } from './blueprint';
 import { oneWaySafe, requiredTable } from './validate';
@@ -38,12 +39,12 @@ export function realiseTiles(bp: Blueprint, seed: number): TileResult {
   const sts = new Map<DimId, ST>();
   for (const s of bp.ctx.stacks) {
     const S = bp.ctx.settings;
-    const st = initStack(s, S.worldW, S.worldH, seed, S.borderWobble, S.scenery, S.riverWidth);
+    const st = initStack(s, s.part.gw, s.part.gh, seed, S.borderWobble, S.scenery, S.riverWidth);
     carveOpenings(st, drop);
     sts.set(s.id, st);
   }
   const S0 = bp.ctx.settings;
-  const doors = placeFeatures(sts, drop, { boat: bp.plan.tools.includes('boat'), ferries: S0.ferries, islets: S0.islets });
+  const doors = placeFeatures(sts, drop, { boat: bp.plan.tools.includes('boat'), ferries: S0.ferries, outcrops: S0.outcrops });
   const layers: Layer[] = [...sts.values()].map((st) => ({ dim: st.dim, barriers: st.barriers, anchors: st.anchors }));
   for (const st of sts.values()) problems.push(...st.problems);
 
@@ -276,20 +277,14 @@ function settleOneWays(bp: Blueprint, layers: Layer[]): void {
   }
 }
 
-const FILLER_NAMES: Record<number, string[]> = {
-  [FILL.OCEAN]: ['The Saucer Sea', 'Milkwater Deep', 'Tuna Reach', 'The Long Blue'],
-  [FILL.RANGE]: ['The Grumble Wall', 'Scratchpost Spires', 'The Cold Shoulders'],
-  [FILL.THICKET]: ['The Tanglewall', 'Hairball Thicket', 'Bramblehold'],
-  [FILL.WASTES]: ['The Empty Bowl', 'Litterbox Flats', 'The Dry Dish'],
-};
 const FILLER_BIOME: Record<number, string> = { [FILL.OCEAN]: 'ocean', [FILL.RANGE]: 'range', [FILL.THICKET]: 'thicket', [FILL.WASTES]: 'wastes' };
 const FILLER_COLOR: Record<number, string> = { [FILL.OCEAN]: '#3f7fd0', [FILL.RANGE]: '#9a8f86', [FILL.THICKET]: '#2f6f42', [FILL.WASTES]: '#c9a965' };
-const FERRY_NAMES = ['Salty', 'Old Barnacle', 'Captain Purr', 'Driftwood', 'Skipper Mew'];
 
 /**
  * Filler regions get names on the map, and a sea with a dock becomes a zone. A dock joins its
- * region to the sea for anyone with the Boat (or the fare, where a ferryman works); islets are
- * reached from the sea. Like rivers, these are extra routes read off the finished map.
+ * region to the sea for anyone with the Boat (or the fare, where a ferryman works). The piers
+ * that lead to islands were planned with the graph; every other dock, and every sandbar and cay,
+ * is an extra route read off the finished map, as rivers are.
  */
 function addSeas(bp: Blueprint, st: ST): Set<string> {
   const made = new Set<string>();
@@ -298,33 +293,37 @@ function addSeas(bp: Blueprint, st: ST): Set<string> {
   const { dim, w } = st, S = bp.ctx.settings;
   const world = bp.tree.children.find((c) => c.id === dim.id)!;
   const boat = bp.plan.tools.includes('boat');
-  const used = new Map<number, number>();
   const seaLoc = new Map<number, LocId>();
   const seaZone = new Map<number, number>();
   const seaWithDock = new Set(st.docks.map((d) => d.filler));
+  const gw = st.bp.part.gw;
 
   fill.list.forEach((f, fi) => {
-    const k = used.get(f.kind) ?? 0;
-    used.set(f.kind, k + 1);
-    const names = FILLER_NAMES[f.kind];
-    const name = names[k % names.length] + (k >= names.length ? ` ${1 + Math.floor(k / names.length)}` : '');
-    // label where the filler is thickest: the screen with the most filler neighbours
-    const gw = st.bp.part.gw;
+    const name = fill.names?.[fi] ?? 'The Sea';
+    // label where the filler is thickest: the screen with the most filler around it
     let best = f.screens[0], bestN = -1;
     for (const s of f.screens) {
-      const n = [s - 1, s + 1, s - gw, s + gw].filter((t) => fill.of[t] === fi).length;
+      let n = 0;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const x = (s % gw) + dx, t = s + dy * gw + dx;
+        if (x >= 0 && x < gw && fill.of[t] === fi) n++;
+      }
       if (n > bestN) { bestN = n; best = s; }
     }
     const x = (best % gw) * 12 + 6, y = ((best / gw) | 0) * 10 + 5;
     const id = `${dim.id}.fill${fi}`;
     dim.regions.push({ id, name, biome: FILLER_BIOME[f.kind], elev: 0, x, y, color: FILLER_COLOR[f.kind] });
-    if (f.kind !== FILL.OCEAN || !seaWithDock.has(fi)) return;
-    // a sea someone can sail: a zone of its own
-    const node = hnode(id, 'region', name, 0, { biome: 'ocean', elev: 0, dim: dim.id });
-    node.locs.push(bp.ctx.loc(id, name, id, dim.id));
-    node.needs = boat ? has('boat') : use('rupees', S.ferryFare);
-    world.children.push(node);
-    bp.graph.locs.push({ id, name, hnode: id, dim: dim.id, x, y });
+    const planned = bp.graph.locs.find((l) => l.id === id);
+    if (planned) Object.assign(planned, { x, y });
+    else {
+      if (f.kind !== FILL.OCEAN || !seaWithDock.has(fi)) return;
+      // a sea someone can sail: a zone of its own
+      const node = hnode(id, 'region', name, 0, { biome: 'ocean', elev: 0, dim: dim.id });
+      node.locs.push(bp.ctx.loc(id, name, id, dim.id));
+      node.needs = boat ? has('boat') : use('rupees', S.ferryFare);
+      world.children.push(node);
+      bp.graph.locs.push({ id, name, hnode: id, dim: dim.id, x, y });
+    }
     seaLoc.set(fi, id);
     seaZone.set(fi, dim.zoneLoc.push(id) - 1);
   });
@@ -334,37 +333,48 @@ function addSeas(bp: Blueprint, st: ST): Set<string> {
     if (z !== undefined && dim.solid[i]) dim.zone[i] = z;
   }
 
+  const fare = use('rupees', S.ferryFare);
   st.docks.forEach((d, n) => {
     const sea = seaLoc.get(d.filler)!, region = st.bp.regions[d.region];
-    const fare = use('rupees', S.ferryFare);
-    const req = d.ferry ? (boat ? any(has('boat'), fare) : fare) : has('boat');
-    const e = bp.ctx.edge(region.id, sea, req, 'dock');
-    world.edges.push({ a: region.id, b: sea, req, gate: 'dock' });
+    let e = d.edgeId ? bp.ctx.edges.find((x) => x.id === d.edgeId) : undefined;
+    if (!e) {
+      const req = d.ferry ? (boat ? any(has('boat'), fare) : fare) : has('boat');
+      e = bp.ctx.edge(region.id, sea, req, 'dock');
+      world.edges.push({ a: region.id, b: sea, req, gate: 'dock' });
+    }
     made.add(e.id);
-    dim.objects.push({ id: 'k.' + e.id, kind: 'entrance', style: 'dock', x: d.end % w, y: (d.end / w) | 0, label: d.ferry ? `Ferry dock (${S.ferryFare} rupees, or your own Boat)` : 'Dock', edgeId: e.id, req, dir: d.dir });
+    const label = d.ferry ? `Ferry dock (${S.ferryFare} rupees${boat ? ', or your own Boat' : ''})` : 'Dock';
+    dim.objects.push({ id: 'k.' + e.id, kind: 'entrance', style: 'dock', x: d.end % w, y: (d.end / w) | 0, label, edgeId: e.id, req: e.req, dir: d.dir });
     if (!d.ferry) return;
     const who = `${FERRY_NAMES[n % FERRY_NAMES.length]} the Ferryman`;
     const id = `ferry${n}`;
     bp.ctx.npcs.push({
       id, name: who, role: 'Ferry', icon: '⚓', color: '#8fd0ff',
-      stages: [{ when: NONE, loc: region.id, dim: dim.id, x: d.first % w, y: (d.first / w) | 0, line: `Any dock with a ferry, ${S.ferryFare} rupees a crossing. Got your own boat? Then you do not need me.`, offers: [] }],
+      stages: [{ when: NONE, loc: region.id, dim: dim.id, x: d.first % w, y: (d.first / w) | 0, line: `Any dock with a ferry, ${S.ferryFare} rupees a crossing.${boat ? ' Got your own boat? Then you do not need me.' : ''}`, offers: [] }],
     });
     dim.objects.push({ id: `o.${id}.0`, kind: 'npc', x: d.first % w, y: (d.first / w) | 0, label: `${who} (Ferry)`, npcId: id, stage: 0, icon: '⚓' });
   });
 
-  for (const it of st.islets) {
+  for (const it of st.outcrops) {
     const sea = seaLoc.get(it.filler);
     if (!sea) continue;
     const seaName = bp.ctx.locs.get(sea)!.name;
-    const node = hnode(it.loc, 'place', 'Islet', 0, { placeKind: 'islet', dim: dim.id });
-    node.locs.push(bp.ctx.loc(it.loc, `Islet in ${seaName}`, it.loc, dim.id));
-    node.provides = ['heart'];
+    const what = it.holds === 'chest' ? 'Cay' : 'Sandbar';
+    const name = `${what} in ${seaName}`;
+    const x = it.tile % w, y = (it.tile / w) | 0;
+    const node = hnode(it.loc, 'place', what, 0, { placeKind: 'outcrop', dim: dim.id });
+    node.locs.push(bp.ctx.loc(it.loc, name, it.loc, dim.id));
     world.children.find((c) => c.id === sea)!.children.push(node);
-    bp.graph.locs.push({ id: it.loc, name: `Islet in ${seaName}`, hnode: it.loc, dim: dim.id, x: it.tile % w, y: (it.tile / w) | 0 });
-    const e = bp.ctx.edge(sea, it.loc, NONE, 'shore');
-    made.add(e.id);
-    const c = bp.ctx.check(it.loc, 'heart', 'chest', `Islet chest, ${seaName}`);
-    dim.objects.push({ id: 'o.' + c.id, kind: 'chest', x: it.tile % w, y: (it.tile / w) | 0, label: c.label, checkId: c.id });
+    bp.graph.locs.push({ id: it.loc, name, hnode: it.loc, dim: dim.id, x, y });
+    made.add(bp.ctx.edge(sea, it.loc, NONE, 'shore').id);
+    if (it.holds === 'chest') {
+      node.provides = ['heart'];
+      const c = bp.ctx.check(it.loc, 'heart', 'chest', `Cay chest, ${seaName}`);
+      dim.objects.push({ id: 'o.' + c.id, kind: 'chest', x, y, label: c.label, checkId: c.id });
+    } else if (it.holds === 'pots') {
+      const s = bp.ctx.source(it.loc, 'rupees', 'Washed-up pots (rupees)');
+      dim.objects.push({ id: 'o.' + s.id, kind: 'source', x, y, label: s.label, sourceId: s.id, style: 'pot', icon: '◆' });
+    }
   }
   return made;
 }

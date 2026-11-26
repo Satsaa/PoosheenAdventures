@@ -3,6 +3,7 @@
 import { D, T, type DimId, type MapObject } from '../core/types';
 import type { Feature, RegionBP } from './blueprint';
 import { STYLES, type ST } from './stackBase';
+import { FILL } from './spatial';
 
 export type DoorMap = Map<string, { dim: DimId; x: number; y: number; obj: MapObject }>;
 
@@ -61,9 +62,9 @@ const LOOKS: Record<string, string[]> = {
   house: ['timber-red', 'timber-blue', 'thatch', 'timber-green'], shop: ['timber-gold'], dungeon: ['stone-moss', 'stone-dark'], sanctum: ['marble'],
 };
 
-export interface SeaOpts { boat: boolean; ferries: number; islets: number }
+export interface SeaOpts { boat: boolean; ferries: number; outcrops: number }
 
-export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => void, sea: SeaOpts = { boat: false, ferries: 0, islets: 0 }): DoorMap {
+export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => void, sea: SeaOpts = { boat: false, ferries: 0, outcrops: 0 }): DoorMap {
   const doors: DoorMap = new Map();
   const pts = new Map<RegionBP, { x: number; y: number }[]>();
   const ptsOf = (r: RegionBP) => pts.get(r) ?? pts.set(r, []).get(r)!;
@@ -90,7 +91,9 @@ export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => voi
     for (const r of st.bp.regions) {
       const P = ptsOf(r);
       const fail = (what: string) => st.problems.push(`no room for ${what} in ${r.name}`);
-      for (const f of r.feats.slice().sort((a, b) => ORDER[a.f] - ORDER[b.f])) {
+      // a pier that carries the way to an island goes first: it has the fewest places it can be
+      const rank = (f: Feature) => (f.f === 'dock' && f.edgeId ? 0.5 : ORDER[f.f]);
+      for (const f of r.feats.slice().sort((a, b) => rank(a) - rank(b))) {
         if (f.f === 'vertical') {
           const st2 = sts.get(f.other.stack.id)!;
           const at = findBlock(st, r.idx, P, -1, -1, 1, 1, (x, y) => freeBlock(st2, f.other.idx, x - 1, y - 1, x + 1, y + 1));
@@ -134,6 +137,10 @@ export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => voi
           st.mouths[r.idx].push(at.y * w + at.x);
           doors.set(f.edgeId, { dim: dim.id, x: at.x, y: at.y, obj });
         } else if (f.f === 'dock') {
+          if (f.edgeId) {
+            if (!buildDock(st, r.idx, f.filler, !!f.ferry, f.edgeId)) fail('a dock');
+            continue;
+          }
           // a dock nobody could use is not built: it needs the Boat in the world, or a ferryman
           const ferry = rng.chance(sea.ferries);
           if (sea.boat || ferry) buildDock(st, r.idx, f.filler, ferry);
@@ -174,7 +181,7 @@ export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => voi
       }
     }
   }
-  for (const st of sts.values()) { stampIslets(st, sea.islets); paths(st); scenery(st); }
+  for (const st of sts.values()) { stampOutcrops(st, sea.outcrops); paths(st); scenery(st); }
   return doors;
 }
 
@@ -266,7 +273,7 @@ function rimAlcove(st: ST, r: number, f: Extract<Feature, { f: 'pocket' }>): boo
 }
 
 /** A pier: a plank walk from open ground through the coastal rim and two tiles out over the sea. */
-function buildDock(st: ST, r: number, filler: number, ferry: boolean): boolean {
+function buildDock(st: ST, r: number, filler: number, ferry: boolean, edgeId?: string): boolean {
   const { w, h, dim } = st;
   const region = st.bp.regions[r];
   if (region.elev > 2) return false; // no jetties off the top of a cliff
@@ -301,7 +308,7 @@ function buildDock(st: ST, r: number, filler: number, ferry: boolean): boolean {
         st.reserved[i] = 1;
       }
       for (let yy = gy - 1; yy <= gy + 1; yy++) for (let xx = gx - 1; xx <= gx + 1; xx++) st.reserved[yy * w + xx] = 1;
-      st.docks.push({ region: r, filler, end: pier[1], first: rim[0], dir, ferry });
+      st.docks.push({ region: r, filler, end: pier[1], first: rim[0], dir, ferry, edgeId });
       st.mouths[r].push(g);
       return true;
     }
@@ -309,35 +316,74 @@ function buildDock(st: ST, r: number, filler: number, ferry: boolean): boolean {
   return false;
 }
 
-/** Small islands out on every sea that has a dock: sand, a palm, and a tile for a chest. */
-function stampIslets(st: ST, count: number): void {
+/**
+ * Outcrops: what sticks out of the open sea. Every one is grown tile by tile, so no two have the
+ * same outline: reefs of bare rock, sandbars, and cays big enough for a palm and
+ * maybe a chest. Only a sea somebody can sail gets ground to stand on; the rest get rocks.
+ * `count` is per 50 screens of water.
+ */
+function stampOutcrops(st: ST, count: number): void {
+  const fill = st.bp.fill;
+  if (st.bp.kind !== 'overworld' || !fill || count <= 0) return;
   const { w, h, dim, rng } = st;
-  const seas = [...new Set(st.docks.map((d) => d.filler))];
-  if (!seas.length || count <= 0) return;
-  const tilesOf = new Map<number, number[]>(seas.map((f) => [f, []]));
+  const tilesOf = new Map<number, number[]>();
+  fill.list.forEach((f, fi) => { if (f.kind === FILL.OCEAN) tilesOf.set(fi, []); });
   for (let i = 0; i < st.fillAt.length; i++) tilesOf.get(st.fillAt[i])?.push(i);
-  for (const f of seas) {
-    const tiles = tilesOf.get(f)!;
-    for (let k = 0, tries = 0; k < count && tries < count * 40 && tiles.length; tries++) {
-      const c = tiles[rng.int(tiles.length)], cx = c % w, cy = (c / w) | 0;
-      if (cx < 4 || cy < 4 || cx >= w - 4 || cy >= h - 4) continue;
-      // open water for three tiles all around, so an islet never touches a coast, a pier or another islet
-      let clear = true;
-      for (let y = cy - 3; y <= cy + 3 && clear; y++) for (let x = cx - 3; x <= cx + 3; x++) {
-        const i = y * w + x;
-        if (st.fillAt[i] !== f || !dim.solid[i] || st.reserved[i]) { clear = false; break; }
+  const sailable = new Set(st.docks.map((d) => d.filler));
+  const mine = new Uint8Array(w * h); // tiles of the outcrop being grown
+  for (const [f, tiles] of tilesOf) {
+    const want = Math.round((count * tiles.length) / (50 * 120));
+    for (let k = 0, tries = 0; k < want && tries < want * 30; tries++) {
+      const c = tiles[rng.int(tiles.length)];
+      const roll = rng.next();
+      const kind = !sailable.has(f) || roll < 0.45 ? 'reef' : roll < 0.75 ? 'bar' : 'cay';
+      const size = kind === 'reef' ? rng.range(3, 12) : kind === 'bar' ? rng.range(6, 22) : rng.range(12, 40);
+      // open water of this sea for two tiles around every tile, so an outcrop never touches a coast, a pier or another outcrop
+      const clear = (i: number) => {
+        const x = i % w, y = (i / w) | 0;
+        if (x < 3 || y < 3 || x >= w - 3 || y >= h - 3) return false;
+        for (let yy = y - 2; yy <= y + 2; yy++) for (let xx = x - 2; xx <= x + 2; xx++) {
+          const j = yy * w + xx;
+          if (!mine[j] && (st.fillAt[j] !== f || !dim.solid[j] || st.reserved[j])) return false;
+        }
+        return true;
+      };
+      if (!clear(c)) continue;
+      const blob = [c];
+      mine[c] = 1;
+      // long thin bars, rounder cays: a new tile likes to touch more of what is already there
+      const round = kind === 'bar' ? 1 : 2.5;
+      for (let grow = 0; grow < size * 6 && blob.length < size; grow++) {
+        const from = blob[rng.int(blob.length)];
+        const t = from + rng.pick([-1, 1, -w, w]);
+        if (mine[t] || !clear(t)) continue;
+        const touching = [t - 1, t + 1, t - w, t + w].filter((j) => mine[j]).length;
+        if (rng.next() < (touching / 2) ** round) { mine[t] = 1; blob.push(t); }
       }
-      if (!clear) continue;
-      for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) {
-        const i = y * w + x;
-        dim.ground[i] = T.SAND; dim.solid[i] = 0; dim.elev[i] = 0;
+      const min = kind === 'reef' ? 2 : kind === 'bar' ? 4 : 7;
+      if (blob.length < min) { for (const i of blob) mine[i] = 0; continue; }
+      for (const i of blob) for (let yy = -2; yy <= 2; yy++) for (let xx = -2; xx <= 2; xx++) st.reserved[i + yy * w + xx] = 1;
+      if (kind === 'reef') {
+        // rocks standing in the water, with gaps between them
+        for (const i of blob) { if (rng.chance(0.7)) dim.deco[i] = D.ROCK; mine[i] = 0; }
+        k++;
+        continue;
       }
-      for (let y = cy - 3; y <= cy + 3; y++) for (let x = cx - 3; x <= cx + 3; x++) st.reserved[y * w + x] = 1;
-      const palm = (cy - 1) * w + cx + 1;
-      dim.solid[palm] = 1; dim.deco[palm] = D.PALM;
-      const loc = `${dim.id}.islet${st.islets.length}`;
-      st.anchors.set(c, loc);
-      st.islets.push({ filler: f, tile: c, loc });
+      for (const i of blob) { dim.ground[i] = T.SAND; dim.solid[i] = 0; dim.elev[i] = 0; }
+      // where to stand (and where a chest would be): the tile deepest inside
+      const inside = (i: number) => [i - 1, i + 1, i - w, i + w, i - w - 1, i - w + 1, i + w - 1, i + w + 1].filter((j) => mine[j]).length;
+      const heart = blob.reduce((a, b) => (inside(b) > inside(a) ? b : a));
+      // a palm or a rock on tips of the outline only: taking a tip away can never cut the rest in two
+      const tips = blob.filter((i) => i !== heart && [i - 1, i + 1, i - w, i + w].filter((j) => mine[j]).length === 1);
+      for (const i of rng.shuffle(tips).slice(0, kind === 'cay' ? 2 : 1)) {
+        if (!rng.chance(0.7)) continue;
+        dim.solid[i] = 1;
+        dim.deco[i] = kind === 'cay' && rng.chance(0.7) ? D.PALM : D.ROCK;
+      }
+      for (const i of blob) mine[i] = 0;
+      const loc = `${dim.id}.outcrop${st.outcrops.length}`;
+      st.anchors.set(heart, loc);
+      st.outcrops.push({ filler: f, tile: heart, loc, holds: kind === 'cay' ? (rng.chance(0.6) ? 'chest' : 'pots') : rng.chance(0.3) ? 'pots' : 'nothing' });
       k++;
     }
   }

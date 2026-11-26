@@ -18,7 +18,7 @@ export interface ItemSetting {
 
 export interface GenSettings {
   worldW: number; worldH: number; regions: number; borderWobble: number; cliffs: boolean; scenery: number; landCoverage: number; coastFromSeed: boolean; landlocked: number;
-  docks: number; ferries: number; ferryFare: number; islets: number;
+  oceanSize: number; islands: number; islandSize: number; docks: number; ferries: number; ferryFare: number; outcrops: number;
   rivers: number; riverWidth: number; riverCaves: number;
   underworld: boolean; underworldSize: number; underworldRegions: number; sky: boolean; skySize: number;
   dungeons: number; sealMedallions: number; lockDensity: number; linearity: number; secrets: number; everyToolUsed: boolean;
@@ -69,10 +69,13 @@ export const SETTING_DEFS: SettingDef[] = [
   num('riverWidth', 'Rivers', 'River width', 'int', 1, 3, 1, 1, 'Half-width of the water band: 1 gives a river two tiles wide, 3 gives six.', 'water wide'),
   num('riverCaves', 'Rivers', 'Underground rivers', 'float', 0, 1, 0.05, 0.4, 'Chance that a cave has a river running through it, with its treasure on the far bank. Needs the Swim Gear in the world.', 'cave water place interior'),
 
+  num('oceanSize', 'Ocean', 'Sea width', 'int', 0, 16, 1, 4, 'Screens of open sea added beyond the land on every side that is sea. The map grows by this much on those sides; the land keeps the size set under World.', 'ocean amount water margin size'),
+  num('islands', 'Ocean', 'Island regions', 'int', 0, 10, 1, 2, 'Islands out at sea that are regions in their own right, with places and gates of their own. They can only be reached over the water, which makes the Boat (or a ferry) part of the progression. Needs a sea wide enough to hold them.', 'archipelago isle boat'),
+  num('islandSize', 'Ocean', 'Island size', 'int', 2, 8, 1, 3, 'Typical size of an island region, in screens.', 'archipelago isle'),
   num('docks', 'Ocean', 'Docks', 'float', 0, 1, 0.05, 0.7, 'Chance that a region on the coast gets a dock. With the Boat, every dock on the same sea is connected.', 'boat pier harbour sailing port'),
   num('ferries', 'Ocean', 'Ferrymen', 'float', 0, 1, 0.05, 0.5, 'Chance that a dock has a ferryman, who sails you to any other ferry dock on that sea for a fare, no Boat needed.', 'boat merchant travel passage npc'),
   num('ferryFare', 'Ocean', 'Ferry fare', 'int', 0, 999, 1, 30, 'Rupees per crossing.', 'boat price cost rupees'),
-  num('islets', 'Ocean', 'Islets', 'int', 0, 12, 1, 3, 'Small islands with a chest, out on each sea that has a dock.', 'island treasure secret boat'),
+  num('outcrops', 'Ocean', 'Outcrops', 'int', 0, 16, 1, 5, 'Reefs, sandbars and cays scattered over the open sea, per 50 screens of water. Each is grown tile by tile, so no two have the same outline. On a sea that can be sailed, some hold a chest or pots.', 'islet rock sandbar treasure secret boat'),
 
   flag('underworld', 'Layers', 'Underworld', true, 'A cave layer under the overworld, reached by stairs. Its caves take their theme from the land above.', 'caves subworld below'),
   num('underworldSize', 'Layers', 'Underworld size', 'int', 1, 512, 1, 12, 'How many screens of cave exist.', 'caves'),
@@ -137,7 +140,7 @@ export const ITEM_SETTING_DEFS: ItemSettingDef[] = [
   tool('flippers', 'Lets you enter rivers and swim along them, wade through deep-water gates and cross underground rivers. Without it in the world, rivers are plain barriers.'),
   tool('hookshot', 'Crosses chasms.'),
   tool('lantern', 'Lights pitch-dark passages and caves.'),
-  tool('boat', 'Sails the open sea from any dock: every dock on the same sea becomes one hop away, and islets can be reached. Left out of worlds that have no sea.'),
+  tool('boat', 'Sails the open sea from any dock: every dock on the same sea becomes one hop away. Islands and the sandbars and cays out at sea can only be reached with it (or by ferry). Left out of worlds that have no sea.'),
   { ...tool('sundial', 'Sets the time of day at will, so nothing tied to day or night means waiting. Where time stands still it is the only way to reach the night.'), default: { enabled: true, order: 'early', home: 'any' } },
   { id: 'bombs', fields: ['cap'], default: { cap: 10 }, capRange: [1, 999], help: 'Carried in the Bomb Bag. Never counted by the logic: renewable or unusable.' },
   { id: 'arrows', fields: ['cap'], default: { cap: 30 }, capRange: [1, 999], help: 'Carried with the Bow.' },

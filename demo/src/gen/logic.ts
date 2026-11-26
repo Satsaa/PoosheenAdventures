@@ -1,7 +1,7 @@
 // Seed -> blueprint (logic graph + features to realise). No tiles yet.
 import type { HNode, ItemId, LogicGraph } from '../core/types';
 import { Rng, childSeed } from '../core/rng';
-import { BASE_ITEMS, BIOMES, ENEMIES, GATES, UNDER_BIOMES, WEAPONS } from '../core/content';
+import { BASE_ITEMS, BIOMES, ENEMIES, FILLER_NAMES, GATES, ISLAND_BIOMES, ISLAND_NAMES, UNDER_BIOMES, WEAPONS } from '../core/content';
 import { NONE, all, any, at, has, reqItems, use } from '../core/req';
 import { solve } from '../core/solver';
 import { Ctx, hnode, type RegionBP, type StackBP } from './blueprint';
@@ -9,7 +9,7 @@ import { makePlan, type Plan } from './plan';
 import { buildStack, localSource, placeItem } from './regions';
 import { singleRoom } from './dungeon';
 import { addNpcs } from './npcs';
-import { FILL, fillers, growRegions, landMask, neighbours as neighboursOf, splitByRivers, traceRivers, type Partition } from './spatial';
+import { FILL, addRegions, carveIslands, fillers, growRegions, landMask, neighbours as neighboursOf, splitByRivers, traceRivers, type Partition, type Rect } from './spatial';
 import { oneWaySafe, requiredTable } from './validate';
 import { landScreens, screensPerRegion, type GenSettings } from '../core/settings';
 
@@ -34,7 +34,6 @@ function connected(p: Partition): boolean {
 
 export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   const ctx = new Ctx(S);
-  const GW = S.worldW, GH = S.worldH;
   BASE_ITEMS.forEach((d) => ctx.item({ ...d, upgrades: d.upgrades?.map((u) => ({ ...u })) }));
   // item settings: how much can be carried
   for (const id of ['bombs', 'arrows', 'rupees']) ctx.items[id].baseCap = S.items[id]?.cap ?? ctx.items[id].baseCap;
@@ -47,21 +46,33 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   const landlocked = S.coastFromSeed ? srng.next() : S.landlocked;
   const sea = { n: srng.next() >= landlocked, e: srng.next() >= landlocked, s: srng.next() >= landlocked, w: srng.next() >= landlocked };
   ctx.shape = { landlocked, sea };
-  const land = landMask(childSeed(seed, 'land'), GW, GH, landScreens(S), sea);
+  //    open sea lies beyond the land on every sea side: the map is the land's rectangle plus that margin
+  const M = Math.max(0, Math.round(S.oceanSize));
+  const x0 = sea.w ? M : 0, y0 = sea.n ? M : 0;
+  const rect: Rect = { x0, y0, x1: x0 + S.worldW - 1, y1: y0 + S.worldH - 1 };
+  const GW = rect.x1 + 1 + (sea.e ? M : 0), GH = rect.y1 + 1 + (sea.s ? M : 0);
+  const land = landMask(childSeed(seed, 'land'), GW, GH, landScreens(S), sea, rect);
   //    what is not land is a filler region: ocean toward sea sides, ranges, thicket or wastes elsewhere
-  const fill = fillers(childSeed(seed, 'fill'), GW, GH, land, sea);
+  const fill = fillers(childSeed(seed, 'fill'), GW, GH, land, sea, rect);
+  const nth = new Map<number, number>();
+  fill.names = fill.list.map((f) => {
+    const k = nth.get(f.kind) ?? 0, names = FILLER_NAMES[f.kind];
+    nth.set(f.kind, k + 1);
+    return names[k % names.length] + (k >= names.length ? ` ${1 + Math.floor(k / names.length)}` : '');
+  });
   ctx.hasOcean = fill.list.some((f) => f.kind === FILL.OCEAN);
   const plan = makePlan(new Rng(childSeed(seed, 'plan')), ctx);
+  ctx.hasBoat = plan.tools.includes('boat');
 
   // 1. worlds: partition space first
-  const isLand = (s: number) => land[s] === 1;
+  const mainland = (s: number) => land[s] === 1;
   let landCount = 0;
   for (let s = 0; s < land.length; s++) landCount += land[s];
-  const base = growRegions(new Rng(childSeed(seed, 'over')), GW, GH, Math.max(1, Math.min(S.regions, Math.floor(landCount / screensPerRegion(S)))), { allowed: isLand });
+  const base = growRegions(new Rng(childSeed(seed, 'over')), GW, GH, Math.max(1, Math.min(S.regions, Math.floor(landCount / screensPerRegion(S)))), { allowed: mainland });
   // home is the land screen nearest the bottom middle
   let startScreen = 0, startDist = Infinity;
   for (let s = 0; s < land.length; s++) {
-    const d = Math.abs((s % GW) - ((GW >> 1) - 1)) + Math.abs(((s / GW) | 0) - (GH - 2));
+    const d = Math.abs((s % GW) - (((rect.x0 + rect.x1) >> 1))) + Math.abs(((s / GW) | 0) - (rect.y1 - 1));
     if (land[s] && base.cell[s] >= 0 && d < startDist) { startDist = d; startScreen = s; }
   }
   const baseEntry = base.cell[startScreen];
@@ -82,8 +93,9 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
     return cut.part.regions.every((screens, i) => screens.length >= Math.min(minBank, base.regions[cut.origin[i]].length));
   };
   const rivers = S.rivers > 0 ? traceRivers(new Rng(childSeed(seed, 'rivers')), base, (r) => baseThemes[r].elev, S.rivers, roomyBanks, (s) => fill.kind[s] === FILL.OCEAN) : [];
-  const { part, origin } = splitByRivers(base, rivers);
-  const entryRegion = part.cell[startScreen];
+  const cut = splitByRivers(base, rivers);
+  const origin = cut.origin;
+  const entryRegion = cut.part.cell[startScreen];
   // a split region's parts are named after where they lie: "north bank", "east bank", ...
   const centre = (screens: number[]) => ({ x: screens.reduce((a, c) => a + (c % GW), 0) / screens.length, y: screens.reduce((a, c) => a + ((c / GW) | 0), 0) / screens.length });
   const taken = new Set<string>();
@@ -91,7 +103,7 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
     const t = baseThemes[o];
     const parts = origin.filter((x) => x === o).length;
     if (parts === 1 || i === entryRegion) { taken.add(t.name); return t; }
-    const whole = centre(base.regions[o]), mine = centre(part.regions[i]);
+    const whole = centre(base.regions[o]), mine = centre(cut.part.regions[i]);
     const dx = mine.x - whole.x, dy = mine.y - whole.y;
     const side = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'east' : 'west') : dy > 0 ? 'south' : 'north';
     let name = `${t.name}, ${side} bank`;
@@ -99,6 +111,41 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
     taken.add(name);
     return { ...t, name };
   });
+  // 1b. islands: regions out at sea, with water on every side. Each is tied to the mainland over
+  //     its sea, from a coastal region low enough for a pier (or from another island).
+  let part = cut.part;
+  const seaPairs: [number, number, number][] = [];
+  const seaOf = (screens: number[]) => { for (const s of screens) for (const t of neighboursOf(GW, GH, s)) if (fill.kind[t] === FILL.OCEAN) return fill.of[t]; return -1; };
+  const isIsle = new Uint8Array(GW * GH);
+  // a ferry is the only way over when the world has no Boat, so the fare must fit in the pouch
+  if (S.islands > 0 && ctx.hasOcean && (ctx.hasBoat || S.ferryFare <= (ctx.items.rupees.baseCap ?? 0))) {
+    const coast = new Map<number, number[]>();
+    part.regions.forEach((screens, r) => {
+      if (themes[r].elev > 2 || (screens.length <= 1 && part.regions.length > 1)) return;
+      const seas = new Set<number>();
+      for (const s of screens) for (const t of neighboursOf(GW, GH, s)) if (fill.kind[t] === FILL.OCEAN) seas.add(fill.of[t]);
+      for (const f of seas) (coast.get(f) ?? coast.set(f, []).get(f)!).push(r);
+    });
+    const irng = new Rng(childSeed(seed, 'isles'));
+    const isles = carveIslands(irng, GW, GH, part.cell, fill, S.islands, S.islandSize).filter((screens) => coast.has(seaOf(screens)));
+    const first = part.regions.length;
+    const names = irng.shuffle(ISLAND_NAMES);
+    isles.forEach((screens, k) => {
+      const f = seaOf(screens);
+      for (const r of coast.get(f)!) seaPairs.push([first + k, r, f]);
+      for (let j = 0; j < k; j++) if (seaOf(isles[j]) === f) seaPairs.push([first + k, first + j, f]);
+      const look = irng.pick(ISLAND_BIOMES);
+      const b = BIOMES.find((x) => x.id === look)!;
+      themes.push({ biome: b.id, elev: b.id === 'beach' || !S.cliffs ? (S.cliffs ? 0 : 1) : 1, name: names[k % names.length] + (k >= names.length ? ` ${1 + Math.floor(k / names.length)}` : ''), color: b.color });
+    });
+    for (const screens of isles) for (const s of screens) {
+      isIsle[s] = 1;
+      fill.list[fill.of[s]].screens = fill.list[fill.of[s]].screens.filter((x) => x !== s);
+      fill.kind[s] = FILL.LAND;
+      fill.of[s] = -1;
+    }
+    part = addRegions(part, isles);
+  }
   const game = hnode('game', 'game', 'Poosheen Adventures', seed);
 
   // 2. a portal payload spawns a stacked world that lines up with the region it starts from
@@ -106,6 +153,8 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
     const kind = p.data!.world as 'under' | 'sky';
     const prng = new Rng(childSeed(seed, kind));
     const seedScreen = prng.pick(part.regions[region.idx]);
+    // an island is too small to carry a whole world on its back: what starts there runs on under (or over) the sea
+    const isLand = isIsle[seedScreen] ? () => true : mainland;
     const size = kind === 'under' ? S.underworldSize : S.skySize;
     const maxRegions = Math.min(kind === 'under' ? S.underworldRegions : 2, Math.max(1, Math.floor(size / 3)));
     let sub = growRegions(prng, GW, GH, 1, { budget: size, seeds: [seedScreen], allowed: isLand });
@@ -117,7 +166,7 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
       if (kind === 'sky') return { biome: 'sky', elev: 0, name: ['Cloudnap Isle', 'Highpurr Terrace'][idx % 2], color: '#dfe9ff' };
       // what lies above decides what the cave is like: lakes flood it, mountains fill it with crystal
       const count = new Map<string, number>();
-      for (const s of sub.regions[idx]) count.set(themes[part.cell[s]].biome, (count.get(themes[part.cell[s]].biome) ?? 0) + 1);
+      for (const s of sub.regions[idx]) { const b = part.cell[s] < 0 ? 'beach' : themes[part.cell[s]].biome; count.set(b, (count.get(b) ?? 0) + 1); }
       const above = [...count].sort((a, b) => b[1] - a[1])[0][0];
       const u = UNDER_BIOMES[above];
       let name = u.name;
@@ -141,8 +190,10 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   const over = buildStack(ctx, {
     id: 'over', kind: 'overworld', name: 'Overworld', stack: 0, part, seed: childSeed(seed, 'overw'), payloads: plan.over,
     entryRegion, entryCaps: [], entryPayloads: plan.gifts, theme: (i) => themes[i], onPortal, rivers, fill,
+    sea: seaPairs.length ? { pairs: seaPairs, needs: ctx.hasBoat ? 'boat' : null } : undefined,
   });
   game.children = ctx.stacks.map((s) => s.hnode);
+  for (const r of over.regions) if (isIsle[part.regions[r.idx][0]]) r.hnode.meta.island = true;
   const start = over.regions[entryRegion];
   ctx.start = start.id;
   const regions = ctx.stacks.flatMap((s) => s.regions);
@@ -151,13 +202,14 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   // 2b. the sea: regions on a coast may get a dock. With the Boat every dock on a sea is one
   //     hop from the others; a ferryman does the same for a fare. (Built by the tile pass, and
   //     only where a pier fits, so these are extra routes and never part of the tree.)
-  if (plan.tools.includes('boat') || S.ferries > 0) {
+  if (ctx.hasBoat || S.ferries > 0) {
     const drng = new Rng(childSeed(seed, 'docks'));
     for (const r of over.regions) {
       if (r.barren) continue;
       const seas = new Set<number>();
       for (const s of part.regions[r.idx]) for (const t of neighboursOf(GW, GH, s)) if (fill.kind[t] === FILL.OCEAN) seas.add(fill.of[t]);
-      for (const f of seas) if (drng.chance(S.docks)) r.feats.push({ f: 'dock', filler: f });
+      // (a region whose pier already carries the way to an island needs no second one)
+      for (const f of seas) if (drng.chance(S.docks) && !r.feats.some((x) => x.f === 'dock' && x.filler === f)) r.feats.push({ f: 'dock', filler: f });
     }
   }
 
@@ -283,7 +335,7 @@ function addLoops(ctx: Ctx, rng: Rng, graph: LogicGraph, over: StackBP): void {
       if (!rng.chance(S.extraStairs)) continue;
       const screen = rng.pick(stack.part.regions[r.idx]);
       const top = over.regions[over.part.cell[screen]];
-      if (top.barren) continue;
+      if (!top || top.barren) continue; // nothing above but the sea
       const e = ctx.edge(top.id, r.id, NONE, 'portal');
       const down = stack.stack < 0;
       top.feats.push({ f: 'vertical', edgeId: e.id, style: down ? 'stairs-down' : 'beanstalk', label: down ? 'Stairs to the Underworld (shortcut)' : 'Beanstalk (shortcut)', req: NONE, other: r, optional: true });

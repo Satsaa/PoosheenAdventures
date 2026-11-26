@@ -71,6 +71,25 @@ Open `dist/index.html` in a browser. No server needed.
   re-checked and get a ladder or vine (two-way) if they could trap the player.
 - Caves can have an underground river across the room, with the treasure on the far bank.
 
+## Sea, islands and outcrops
+
+- Every seed has a `landlocked` value; each side of the map is sea with probability
+  `1 - landlocked`. On a sea side the map grows by `oceanSize` screens of open water beyond the
+  land's rectangle, so the ocean is a place of its own and not a border a few tiles wide.
+- What is not land is a filler region: ocean toward sea sides, mountain range, thicket or wastes
+  toward sides where the world goes on.
+- Islands are regions. `carveIslands` cuts them out of open sea (water on all eight sides) after
+  the mainland is partitioned, and `buildLockGraph` attaches them through "sea candidates":
+  pairs of regions on the same sea, usable only once the Boat is owned. That makes the Boat a
+  progression item. Without a Boat in the world, a ferryman works every island pier instead.
+- A sea crossing is two graph edges, pier to sea to pier, so both piers are required features:
+  if the tile pass cannot build one, the attempt fails and the next derived seed is tried.
+  Other docks are still optional extras, built where they fit.
+- A world that starts on an island (stairs down, beanstalk up) may run on under or over the sea.
+- Outcrops are grown tile by tile in the tile pass, so no two have the same outline: reefs of
+  rock, sandbars, and cays that may hold a chest or pots. Ground to stand on only appears on a
+  sea somebody can sail. `outcrops` is a count per 50 screens of water.
+
 ## Settings
 
 `generateWorld(seed, settings?)` takes a partial `GenSettings`; anything missing falls back to

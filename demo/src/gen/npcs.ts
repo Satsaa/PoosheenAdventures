@@ -23,7 +23,7 @@ export function addNpcs(ctx: Ctx, rng: Rng, plan: Plan, regions: RegionBP[], sta
   if (M > 0) {
     if (M > 1) elder.stages.push(stageAt(start, has('medallion'), `One medallion already! ${M - 1} more and the seal will break.`));
     // he only leaves once the player can follow: everything that could gate the way there is owned
-    elder.stages.push(stageAt(sanctum, all(has('medallion', M), ...ctx.sanctumCaps.filter((c) => gateFor(c)).map((c) => has(c))), 'The seal is broken. Baddie is inside, eating everything. Go!'));
+    elder.stages.push(stageAt(sanctum, all(has('medallion', M), ...ctx.sanctumCaps.filter((c) => gateFor(c) || c === 'boat').map((c) => has(c))), 'The seal is broken. Baddie is inside, eating everything. Go!'));
   }
   ctx.quests.unshift({
     id: 'q.main', name: 'The Sealed Sanctum', main: true, reward: 'flag:victory',

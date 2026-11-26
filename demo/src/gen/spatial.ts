@@ -63,11 +63,14 @@ export function growRegions(
   const seeds: number[] = (opts.seeds ?? []).slice(0, n);
   const dist = (a: number, b: number) => Math.abs((a % gw) - (b % gw)) + Math.abs(((a / gw) | 0) - ((b / gw) | 0));
   // remaining seeds: best of a few random candidates, far from existing ones
-  while (seeds.length < n) {
+  // (drawn from the screens that are allowed: on a map that is mostly sea, blind picks would miss the land)
+  const pool: number[] = [];
+  for (let s = 0; s < total; s++) if (allowed(s)) pool.push(s);
+  while (seeds.length < n && pool.length) {
     let best = -1, bestD = -1;
     for (let i = 0; i < 12; i++) {
-      const s = rng.int(total);
-      if (!allowed(s) || seeds.includes(s)) continue;
+      const s = pool[rng.int(pool.length)];
+      if (seeds.includes(s)) continue;
       const near = opts.budget !== undefined && seeds.length ? -Math.min(...seeds.map((t) => dist(s, t))) : 0;
       const d = opts.budget !== undefined ? near : seeds.length ? Math.min(...seeds.map((t) => dist(s, t))) : 99;
       if (d > bestD || best < 0) { best = s; bestD = d; }
@@ -127,33 +130,29 @@ export interface WorldShape {
   sea: Record<Side, boolean>;
 }
 
-const sideDist = (gw: number, gh: number, s: number): Record<Side, number> => {
-  const x = s % gw, y = (s / gw) | 0;
-  return { n: y, e: gw - 1 - x, s: gh - 1 - y, w: x };
-};
+/** The part of the grid the land may use; everything outside it on a sea side is open water. */
+export interface Rect { x0: number; y0: number; x1: number; y1: number }
 
-export function landMask(seed: number, gw: number, gh: number, count: number, sea: Record<Side, boolean>): Uint8Array {
+export function landMask(seed: number, gw: number, gh: number, count: number, sea: Record<Side, boolean>, rect: Rect): Uint8Array {
   const total = gw * gh;
   const mask = new Uint8Array(total);
-  if (count >= total) return mask.fill(1);
+  const rw = rect.x1 - rect.x0 + 1, rh = rect.y1 - rect.y0 + 1;
+  const allowed = (s: number) => { const x = s % gw, y = (s / gw) | 0; return x >= rect.x0 && x <= rect.x1 && y >= rect.y0 && y <= rect.y1; };
+  if (count >= rw * rh) { for (let s = 0; s < total; s++) if (allowed(s)) mask[s] = 1; return mask; }
   const sides: Side[] = ['n', 'e', 's', 'w'];
-  const span = (k: Side) => (k === 'n' || k === 's' ? gh : gw);
-  // a sea side keeps one screen of water between the land and the map edge, when the map has the room
-  const allowed = (s: number) => {
-    const d = sideDist(gw, gh, s);
-    return sides.every((k) => !sea[k] || span(k) < 5 || d[k] >= 1);
-  };
+  const dist = (s: number): Record<Side, number> => { const x = s % gw, y = (s / gw) | 0; return { n: y - rect.y0, e: rect.x1 - x, s: rect.y1 - y, w: x - rect.x0 }; };
+  const span = (k: Side) => (k === 'n' || k === 's' ? rh : rw);
   const score = (s: number) => {
-    const x = ((s % gw) + 0.5) / gw - 0.5, y = (((s / gw) | 0) + 0.5) / gh - 0.5;
+    const x = ((s % gw) - rect.x0 + 0.5) / rw - 0.5, y = (((s / gw) | 0) - rect.y0 + 0.5) / rh - 0.5;
     let v = Math.hypot(x, y) * 2 + (valueNoise(seed, (s % gw) * 0.37, ((s / gw) | 0) * 0.37) - 0.5) * 0.9;
     // where the world goes on beyond the map, the land is drawn toward that edge and reaches it
-    const d = sideDist(gw, gh, s);
+    const d = dist(s);
     for (const k of sides) if (!sea[k]) v -= 0.5 * Math.max(0, 1 - d[k] / (span(k) * 0.5));
     return v;
   };
   let start = -1, startScore = Infinity;
   for (let s = 0; s < total; s++) { if (!allowed(s)) continue; const v = score(s); if (v < startScore) { startScore = v; start = s; } }
-  if (start < 0) return mask.fill(1);
+  if (start < 0) return mask;
   mask[start] = 1;
   const frontier = new Set(neighbours(gw, gh, start).filter(allowed));
   for (let n = 1; n < count && frontier.size; n++) {
@@ -180,6 +179,8 @@ export interface Fill {
   /** index into list per screen, -1 on land */
   of: Int16Array;
   list: Filler[];
+  /** a name per filler, given once the world's content is known */
+  names?: string[];
 }
 
 /**
@@ -187,13 +188,16 @@ export interface Fill {
  * toward a side where the world continues it is a mountain range, an impenetrable thicket or
  * barren wastes. Connected screens of one kind form one named region.
  */
-export function fillers(seed: number, gw: number, gh: number, land: Uint8Array, sea: Record<Side, boolean>): Fill {
+export function fillers(seed: number, gw: number, gh: number, land: Uint8Array, sea: Record<Side, boolean>, rect: Rect): Fill {
   const total = gw * gh;
   const kind = new Int8Array(total), of = new Int16Array(total).fill(-1);
   const sides: Side[] = ['n', 'e', 's', 'w'];
   for (let s = 0; s < total; s++) {
     if (land[s]) continue;
-    const d = sideDist(gw, gh, s);
+    const x = s % gw, y = (s / gw) | 0;
+    // beyond the land's rectangle there is only the sea that was added on that side
+    if (x < rect.x0 || x > rect.x1 || y < rect.y0 || y > rect.y1) { kind[s] = FILL.OCEAN; continue; }
+    const d: Record<Side, number> = { n: y - rect.y0, e: rect.x1 - x, s: rect.y1 - y, w: x - rect.x0 };
     let near: Side = 'n';
     for (const k of sides) if (d[k] < d[near] || (d[k] === d[near] && sea[k] && !sea[near])) near = k;
     if (sea[near]) kind[s] = FILL.OCEAN;
@@ -216,6 +220,51 @@ export function fillers(seed: number, gw: number, gh: number, land: Uint8Array, 
     list.push(f);
   }
   return { kind, of, list };
+}
+
+/**
+ * Island regions: blobs of screens taken out of the open sea. An island never touches the
+ * mainland, another island or the map edge, not even diagonally, so there is always water to
+ * sail all the way round it. Returns the screens of each island that found room.
+ */
+export function carveIslands(rng: Rng, gw: number, gh: number, cell: Int16Array, fill: Fill, want: number, size: number): number[][] {
+  const total = gw * gh;
+  const taken = new Uint8Array(total); // screens of islands placed so far
+  const around = (s: number): number[] => {
+    const x = s % gw, y = (s / gw) | 0, out: number[] = [];
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue;
+      const nx = x + dx, ny = y + dy;
+      out.push(nx < 0 || ny < 0 || nx >= gw || ny >= gh ? -1 : ny * gw + nx);
+    }
+    return out;
+  };
+  /** open sea, with open sea (or this same island) on all eight sides */
+  const free = (s: number, own: Set<number>, sea: number) =>
+    fill.kind[s] === FILL.OCEAN && fill.of[s] === sea && cell[s] < 0 && !taken[s] &&
+    around(s).every((t) => t >= 0 && (own.has(t) || (fill.kind[t] === FILL.OCEAN && cell[t] < 0 && !taken[t])));
+  const islands: number[][] = [];
+  for (let tries = 0; tries < want * 30 && islands.length < want; tries++) {
+    const start = rng.int(total);
+    const own = new Set<number>();
+    if (!free(start, own, fill.of[start])) continue;
+    const sea = fill.of[start];
+    own.add(start);
+    const target = Math.max(2, size + rng.range(-1, 1));
+    for (let grow = 0; grow < 40 && own.size < target; grow++) {
+      const options = [...new Set([...own].flatMap((s) => neighbours(gw, gh, s)).filter((t) => !own.has(t)))];
+      if (!options.length) break;
+      // compact shapes: a screen that closes a block is far likelier than one that makes a tail
+      const t = rng.weighted(options, (o) => neighbours(gw, gh, o).filter((u) => own.has(u)).length ** 3);
+      own.add(t);
+      // every screen of the island must still have water all round after the island grew
+      if (![...own].every((s) => free(s, own, sea))) own.delete(t);
+    }
+    if (own.size < 2) continue;
+    for (const s of own) taken[s] = 1;
+    islands.push([...own]);
+  }
+  return islands;
 }
 
 // ---------------------------------------------------------------- rivers
@@ -344,4 +393,12 @@ export function splitByRivers(part: Partition, rivers: River[]): { part: Partiti
     }
   }
   return { part: finish(gw, gh, cell, origin.length), origin };
+}
+
+/** The same partition with more regions added (islands), each a list of screens. */
+export function addRegions(part: Partition, extra: number[][]): Partition {
+  const cell = part.cell.slice();
+  let n = part.regions.length;
+  for (const screens of extra) { for (const s of screens) cell[s] = n; n++; }
+  return finish(part.gw, part.gh, cell, n);
 }

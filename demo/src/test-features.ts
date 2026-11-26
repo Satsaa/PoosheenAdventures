@@ -1,8 +1,9 @@
 // Time of day, enemies, tile-built houses and irregular land: present, and worlds stay valid.
 import { generateWorld } from './gen/index';
-import { requiredFor } from './core/solver';
+import { requiredFor, solve } from './core/solver';
 import { T } from './core/types';
 const N = Number(process.argv[2] ?? 150);
+const regionTiles = (d: { region: Int16Array; regions: { id: string }[] }, id: string) => { const k = d.regions.findIndex((r) => r.id === id); let n = 0; for (let t = 0; t < d.region.length; t++) if (d.region[t] === k) n++; return n; };
 const run = (name: string, settings: Record<string, unknown>, expect: (s: Record<string, number>) => string | null) => {
   let bad = 0; const sum: Record<string, number> = {};
   const add = (k: string, v: number) => (sum[k] = (sum[k] ?? 0) + v / N);
@@ -19,12 +20,18 @@ const run = (name: string, settings: Record<string, unknown>, expect: (s: Record
     add('houses', d.structures?.length ?? 0);
     add('oddHouses', d.structures?.filter((s) => { const xs = s.tiles.map((t) => t % d.w), ys = s.tiles.map((t) => (t / d.w) | 0); return s.tiles.length !== (Math.max(...xs) - Math.min(...xs) + 1) * (Math.max(...ys) - Math.min(...ys) + 1); }).length ?? 0);
     let sea = 0, peaks = 0;
-    for (let t = 0; t < d.ground.length; t++) if (d.region[t] < 0) { if (d.ground[t] === T.DEEP) sea++; else peaks++; }
+    for (let t = 0; t < d.ground.length; t++) if (d.region[t] < 0) { if (d.ground[t] === T.DEEP || d.ground[t] === T.WATER) sea++; else peaks++; }
     add('seaShare', sea / d.ground.length); add('peakShare', peaks / d.ground.length);
     add('seaZones', w.graph.locs.filter((l) => l.id.includes('.fill')).length);
     add('docks', d.objects.filter((o) => o.style === 'dock').length);
     add('ferrymen', w.npcs.filter((x) => x.role === 'Ferry').length);
-    add('islets', w.graph.locs.filter((l) => l.id.includes('.islet')).length);
+    add('outcrops', w.graph.locs.filter((l) => l.id.includes('.outcrop')).length);
+    const isles = w.tree.children[0].children.filter((c) => c.meta.island);
+    add('islands', isles.length);
+    add('isleScreens', isles.length ? isles.reduce((a, c) => a + regionTiles(d, c.id), 0) / isles.length / 120 : 0);
+    const dry = isles.length ? solve(w.graph, w.items, { without: new Set(['boat', 'rupees']) }) : null;
+    add('isleNeedsSea', isles.filter((c) => dry!.locSphere[c.id] === undefined).length);
+    add('isleChecks', w.graph.checks.filter((c) => isles.some((n) => c.loc === n.id || c.loc.startsWith(n.id + '.'))).length);
     add('boat', w.graph.checks.some((c) => c.item === 'boat') ? 1 : 0);
     add('seaSides', w.shape ? Object.values(w.shape.sea).filter(Boolean).length : 0);
     add('fillers', d.regions.filter((r) => ['ocean', 'range', 'thicket', 'wastes'].includes(r.biome)).length);
@@ -41,9 +48,11 @@ run('time stands still', { timeFlows: false, timeChests: 1, timeNpcs: 1, timeCre
 run('no dial, frozen time', { timeFlows: false, items: { sundial: { enabled: false } } }, (s) => (s.timeReqs > 0 ? 'time content without any way to reach night' : null));
 run('no time doors', { timeDoors: false }, (s) => (s.moonDoors > 0 ? 'doors although switched off' : null));
 run('no weapons', { items: { sword: { enabled: false }, bow: { enabled: false }, bombBag: { enabled: false } } }, (s) => (s.foesDoors > 0 ? 'sealed rooms without weapons' : null));
-run('rectangle, no enemies', { landCoverage: 1, enemies: 0, village: 0 }, (s) => (s.enemies > 0 ? 'enemies' : s.seaShare + s.peakShare > 0 ? 'not a rectangle' : null));
-run('full island', { coastFromSeed: false, landlocked: 0 }, (s) => (s.seaSides < 3.99 ? 'not sea on every side' : s.edgeLand > 0.02 ? 'land touches the map edge' : s.docks <= 0 ? 'no docks' : s.boat <= 0.5 ? 'no boat' : null));
+run('rectangle, no enemies', { landCoverage: 1, oceanSize: 0, enemies: 0, village: 0 }, (s) => (s.enemies > 0 ? 'enemies' : s.seaShare + s.peakShare > 0 ? 'not a rectangle' : null));
+run('full island', { coastFromSeed: false, landlocked: 0 }, (s) => (s.seaSides < 3.99 ? 'not sea on every side' : s.edgeLand > 0.02 ? 'land touches the map edge' : s.docks <= 0 ? 'no docks' : s.boat <= 0.5 ? 'no boat' : s.seaShare < 0.5 ? 'hardly any sea' : s.islands < 1 ? 'no islands' : s.isleNeedsSea < s.islands - 0.001 ? 'an island can be walked to' : s.isleChecks < s.islands ? 'empty islands' : null));
+run('no open sea', { coastFromSeed: false, landlocked: 0, oceanSize: 0, islands: 4 }, (s) => (s.seaShare > 0.35 ? 'sea although the margin is off' : null));
+run('archipelago', { coastFromSeed: false, landlocked: 0, oceanSize: 8, islands: 8, islandSize: 5, outcrops: 12 }, (s) => (s.islands < 4 ? 'few islands' : s.outcrops < 3 ? 'few outcrops' : null));
 run('fully landlocked', { coastFromSeed: false, landlocked: 1 }, (s) => (s.seaSides > 0 ? 'has a sea side' : s.seaShare > 0 ? 'has ocean' : s.boat > 0 ? 'a boat with nothing to sail' : s.docks > 0 ? 'docks without sea' : null));
-run('ferries, no boat', { coastFromSeed: false, landlocked: 0.2, ferries: 1, docks: 1, items: { boat: { enabled: false } } }, (s) => (s.boat > 0 ? 'boat present' : s.ferrymen <= 0 ? 'no ferrymen' : s.seaZones <= 0 ? 'no sea zone' : null));
-run('boat, no ferries', { coastFromSeed: false, landlocked: 0.2, ferries: 0, docks: 1, islets: 6 }, (s) => (s.ferrymen > 0 ? 'ferrymen present' : s.islets <= 0 ? 'no islets' : null));
+run('ferries, no boat', { coastFromSeed: false, landlocked: 0.2, ferries: 1, docks: 1, items: { boat: { enabled: false } } }, (s) => (s.boat > 0 ? 'boat present' : s.ferrymen <= 0 ? 'no ferrymen' : s.seaZones <= 0 ? 'no sea zone' : s.islands <= 0 ? 'no islands by ferry' : null));
+run('boat, no ferries', { coastFromSeed: false, landlocked: 0.2, ferries: 0, docks: 1, outcrops: 10 }, (s) => (s.ferrymen > 0 ? 'ferrymen present' : s.outcrops <= 0 ? 'no outcrops' : null));
 run('crowded', { enemies: 4, village: 12, rivers: 4, timeChests: 1, timeNpcs: 1, timeCreatures: 3, timeShop: true }, () => null);

@@ -125,7 +125,7 @@ export interface HNode {
   edges: { a: string; b: string; req: Req; gate: GateKind; oneWay?: boolean }[];
   children: HNode[];
   locs: LocId[];
-  meta: { biome?: string; elev?: number; placeKind?: string; dim?: DimId; tier?: number };
+  meta: { biome?: string; elev?: number; placeKind?: string; dim?: DimId; tier?: number; /** a region out at sea, reached by boat or ferry */ island?: boolean };
 }
 
 // ---------------------------------------------------------------- tiles

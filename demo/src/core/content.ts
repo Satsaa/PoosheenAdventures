@@ -126,3 +126,15 @@ export const ENEMIES: EnemyKind[] = [
   { id: 'wisp', name: 'Wisp', plural: 'Wisps', icon: '✧', biomes: ['*'], drops: 'rupees', night: true, weight: 1.5 },
   { id: 'pinjata', name: 'Pinjata Poosheen', plural: 'Pinjata Poosheens', icon: '♛', biomes: ['*'], drops: 'rupees', weight: 0.3 },
 ];
+
+/** Islands are regions too; they take a look from this list and a name of their own. */
+export const ISLAND_BIOMES = ['beach', 'beach', 'forest', 'plains', 'desert'];
+export const ISLAND_NAMES = ['Tuna Cay', 'Sardine Isle', 'Catnip Atoll', 'Whisker Key', 'Saucer Isle', 'Kibble Rock', 'Mackerel Isle', 'Yarnball Atoll', 'Nap Island', 'Anchovy Cay', 'Purrl Island', 'Hairball Holm'];
+/** Names of what lies outside the land, by FILL kind (1 ocean, 2 range, 3 thicket, 4 wastes). */
+export const FILLER_NAMES: Record<number, string[]> = {
+  1: ['The Saucer Sea', 'Milkwater Deep', 'Tuna Reach', 'The Long Blue'],
+  2: ['The Grumble Wall', 'Scratchpost Spires', 'The Cold Shoulders'],
+  3: ['The Tanglewall', 'Hairball Thicket', 'Bramblehold'],
+  4: ['The Empty Bowl', 'Litterbox Flats', 'The Dry Dish'],
+};
+export const FERRY_NAMES = ['Salty', 'Old Barnacle', 'Captain Purr', 'Driftwood', 'Skipper Mew'];
