@@ -5,6 +5,17 @@
 //   f:<T>          cliff face strip below a tile of ground T, 16x48     (rows are used from the top)
 //   m:<dir>        edge blend mask (albedo alpha), dir 0..3 = N E S W
 //   fm:<dir>       shore foam mask (albedo = foam colour)
+//   mi:<corner>    inner-corner blend mask: fills the concave corner where two edges of one neighbour meet
+//   Raised edges (corner textures; the composer picks them from the 8 neighbours):
+//   wm:<shape>:<bits>  top silhouette mask, shape round|chamfer|rock, bits 1 NW 2 NE 4 SE 8 SW = corner cut away
+//   w:<T>:e<0-3>       rim along a straight exposed edge N E S W of a raised top of ground T
+//   w:<T>:oc<0-3>      outer-corner rim following the cut corner (0 NW 1 NE 2 SE 3 SW)
+//   w:<T>:ic<0-3>      inner-corner rim (the edge turning a concave corner)
+//   wf:<T>:<L><R>      south face, 16 x 51, pivot oy 3; ends p = continues, o = outer corner (columns recede
+//                      and rise to follow the cut top corner), i = inner corner crease
+//   wb:<bits>          wall-foot base: albedo multiplier on the ground at the foot of higher ground,
+//                      bits 1 N 2 E 4 W 8 NW 16 NE (white = unchanged)
+//   A sheet without wm: keys falls back to shader-drawn rims.
 //   mc:<corner>    corner blend mask (albedo alpha), corner 0..3 = NW NE SE SW: a diagonal neighbour of higher
 //                  priority bleeds into this corner (outer corners of grass around a path, sand around a pond...)
 //   Raised edges (wall / cave wall / cliff tops and faces) are autotiled in the sprite shader from per-instance
@@ -18,7 +29,7 @@
 //                  o:guard, o:start, o:boss, o:src:<pot|grass|flower>, o:ledge:<n|e|s|w>
 //   torch          wall torch for interiors
 import { D, T } from '../../core/types';
-import { cornerMask, edgeMask, faceStrip, groundTile } from './ground';
+import { EDGE_GROUNDS, basePiece, cornerMask, edgeMask, facePiece, faceStrip, groundTile, innerMask, rimPiece, topMask, type Shape } from './ground';
 import { DECO_VARIANTS, WALL_KINDS, decoModel, housePiece, objectModels } from './models';
 import { renderModel } from './sdf';
 import { type AssetSheet, Sprite, addToSheet, packSheet } from './sheet';
@@ -65,6 +76,13 @@ export function bakeAtlas(): AssetSheet {
       put('fm:' + dir, edgeMask(dir, v, true));
       put('mc:' + dir, cornerMask(dir, v));
     }
+  for (let c = 0; c < 4; c++) put('mi:' + c, innerMask(c));
+  for (const shape of ['round', 'chamfer', 'rock'] as Shape[]) for (let bits = 0; bits < 16; bits++) put(`wm:${shape}:${bits}`, topMask(shape, bits));
+  for (const g of EDGE_GROUNDS) {
+    for (let i = 0; i < 4; i++) { put(`w:${g}:e${i}`, rimPiece(g, 'e', i)); put(`w:${g}:oc${i}`, rimPiece(g, 'oc', i)); put(`w:${g}:ic${i}`, rimPiece(g, 'ic', i)); }
+    for (const L of ['p', 'o', 'i']) for (const R of ['p', 'o', 'i']) put(`wf:${g}:${L}${R}`, facePiece(g, 0, L, R));
+  }
+  for (let bits = 0; bits < 32; bits++) put('wb:' + bits, basePiece(bits));
   for (const [ds, n] of Object.entries(DECO_VARIANTS)) {
     const d = Number(ds);
     for (let v = 0; v < n; v++) {
@@ -78,7 +96,7 @@ export function bakeAtlas(): AssetSheet {
   const chk = new Sprite(16, 16, 0, 0);
   for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) chk.set(x, y, (x + y) & 1 ? [250, 250, 250] : [10, 10, 10], 0, 0, 1, 0, null, 0);
   put('d:255', chk);
-  cached = packSheet(sprites, 1024, 512);
+  cached = packSheet(sprites, 1024, 1024);
   // objects and building pieces are baked progressively after the first frame (bakeStep)
   for (const o of objectModels()) deferred.push([o.key, () => renderModel(o.model, o.key.length)]);
   for (const wall of WALL_KINDS) for (let floors = 1; floors <= 2; floors++) for (let mask = 0; mask < 16; mask++)

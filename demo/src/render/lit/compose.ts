@@ -9,12 +9,15 @@ import { pal } from '../palette';
 import { hash2 } from '../util';
 import { isWallG } from '../terrain';
 import { DECAL } from '../props';
+import { FACE_OFF, shapeOf } from '../bake/ground';
 
 export const FLAG = { FACE: 1, BEV_N: 2, BEV_W: 4, BEV_E: 8, TINTALL: 32 } as const;
 /** autotile flags (see SPRITE_FS): face end returns, outer corner cuts, inner corners, contact skirting */
 export const AUTO = {
   FACE_L: 4096, FACE_R: 8192, CUT_NW: 16384, CUT_NE: 32768, IN_NW: 65536, IN_NE: 131072,
   SK_N: 262144, SK_E: 524288, SK_W: 1048576, SK_NW: 2097152, SK_NE: 4194304,
+  /** ground top: multiply albedo by the wall-foot base piece whose frame x, y travel in the tint */
+  BASE: 8388608,
 } as const;
 /** outer-corner radius in px per ground (+16 = chamfer instead of round) */
 function cornerR(g: number): number {
@@ -101,6 +104,8 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
   const under = dim.kind === 'underworld' || dim.kind === 'interior';
   const get = (k: string) => fr.get(k);
   const lavaTint = [1.0, 0.55, 0.2];
+  // corner textures in the sheet win; a sheet without them falls back to shader-drawn rims
+  const art = fr.has('wm:round:0');
   for (let y = ry0; y < ry1; y++) {
     for (let x = rx0; x < rx1; x++) {
       const i = y * w + x;
@@ -130,7 +135,33 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
         if (lN <= L && lE <= L && lNE > L) flags |= AUTO.SK_NE;
       }
       const f0 = gl[variant(x, y, seed + g, gl.length)];
-      const flip = g !== T.FLOOR && g !== T.WALL && g !== T.PLANK && g !== T.CAVEWALL && hash2(x, y, seed + 13) < 0.5 ? 128 : 0;
+      let flip = g !== T.FLOOR && g !== T.WALL && g !== T.PLANK && g !== T.CAVEWALL && hash2(x, y, seed + 13) < 0.5 ? 128 : 0;
+      // corner textures from the sheet (fallback: shader rims from the flags above)
+      const lS = lAt(x, y + 1), lSW = lAt(x - 1, y + 1), lSE = lAt(x + 1, y + 1);
+      let topMaskF: Frame | null = null;
+      const rims: Frame[] = [];
+      if (art && !p.liquid) {
+        const cut = (lN < L && lW < L && lNW < L ? 1 : 0) | (lN < L && lE < L && lNE < L ? 2 : 0) |
+          (lS < L && lE < L && lSE < L ? 4 : 0) | (lS < L && lW < L && lSW < L ? 8 : 0);
+        topMaskF = cut ? get(`wm:${shapeOf(g)}:${cut}`)?.[0] ?? null : null;
+        if (topMaskF) flip = 0;
+        const r = (k: string) => { const f = get(`w:${g}:${k}`)?.[0]; if (f) rims.push(f); };
+        if (lN < L) r('e0');
+        if (lE < L) r('e1');
+        if (lS < L) r('e2');
+        if (lW < L) r('e3');
+        for (let c = 0; c < 4; c++) if (cut & (1 << c)) r('oc' + c);
+        if (lN >= L && lW >= L && lNW < L) r('ic0');
+        if (lN >= L && lE >= L && lNE < L) r('ic1');
+        if (lS >= L && lE >= L && lSE < L) r('ic2');
+        if (lS >= L && lW >= L && lSW < L) r('ic3');
+        // wall-foot base piece instead of shader skirting
+        const bb = (lN > L ? 1 : 0) | (lE > L ? 2 : 0) | (lW > L ? 4 : 0) | (lN <= L && lW <= L && lNW > L ? 8 : 0) | (lN <= L && lE <= L && lNE > L ? 16 : 0);
+        const bf = bb ? get('wb:' + bb)?.[0] : null;
+        flags &= ~(FLAG.BEV_N | FLAG.BEV_W | FLAG.BEV_E | AUTO.CUT_NW | AUTO.CUT_NE | AUTO.IN_NW | AUTO.IN_NE | AUTO.SK_N | AUTO.SK_E | AUTO.SK_W | AUTO.SK_NW | AUTO.SK_NE);
+        if (bf) inst.push(px, py, P, P, f0.x, f0.y, topMaskF ? topMaskF.x : -1, topMaskF ? topMaskF.y : 0, L / P, x, y, flags | flip | AUTO.BASE, bf.x, bf.y, 1, 1);
+        else inst.push(px, py, P, P, f0.x, f0.y, topMaskF ? topMaskF.x : -1, topMaskF ? topMaskF.y : 0, L / P, x, y, flags | flip);
+      } else
       inst.push(px, py, P, P, f0.x, f0.y, -1, flags & (FLAG.BEV_N | FLAG.BEV_W | FLAG.BEV_E | AUTO.IN_NW | AUTO.IN_NE) ? cornerR(g) : 0, L / P, x, y, flags | flip);
       // edge blends with higher-priority neighbours on the same level
       if (p.prio >= 0) {
@@ -168,6 +199,12 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
         const cns: [number, number, number][] = [[-1, -1, 0], [1, -1, 1], [1, 1, 2], [-1, 1, 3]];
         for (const [dx, dy, c] of cns) {
           const ng = gAt(x + dx, y + dy);
+          const og = gAt(x + dx, y);
+          if (og !== g && og !== T.VOID && og === gAt(x, y + dy) && pal(og).prio > p.prio && !(p.liquid && pal(og).liquid) && lAt(x + dx, y) === L && lAt(x, y + dy) === L) {
+            // inner corner: two edges of the same neighbour meet; fill the concave corner
+            const ngl = get('g:' + og), mk = get('mi:' + c);
+            if (ngl && mk) inst.push(px, py, P, P, ngl[variant(x + dx, y, seed + og, ngl.length)].x, ngl[variant(x + dx, y, seed + og, ngl.length)].y, mk[0].x, mk[0].y, L / P, x, y, 0);
+          }
           if (ng === g || ng === T.VOID || gAt(x + dx, y) === ng || gAt(x, y + dy) === ng) continue;
           const q = pal(ng);
           if (q.prio <= p.prio || (p.liquid && q.liquid) || lAt(x + dx, y + dy) !== L || lAt(x + dx, y) !== L || lAt(x, y + dy) !== L) continue;
@@ -178,6 +215,7 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
           inst.push(px, py, P, P, nf.x, nf.y, mv.x, mv.y, L / P, x, y, flags & ~(AUTO.CUT_NW | AUTO.CUT_NE));
         }
       }
+      for (const rf of rims) inst.push(px, py, P, P, rf.x, rf.y, topMaskF ? topMaskF.x : -1, topMaskF ? topMaskF.y : 0, L / P, x, y, 0);
       // foam where a waterfall lands (the water tile north of this one is higher)
       if (g === T.WATER && gAt(x, y - 1) === T.WATER && lAt(x, y - 1) > L) {
         const fm = get('fm:0');
@@ -191,7 +229,25 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
       // open sea at the map's bottom edge continues past it (no cut face)
       if (LS < L && !(dim.kind === 'overworld' && y + 1 >= h)) {
         const fl = get('f:' + g);
-        if (fl) {
+        if (art && !p.liquid && get(`wf:${g}:pp`)) {
+          const end = (side: number) => {
+            const lx = lAt(x + side, y), ld = lAt(x + side, y + 1);
+            if (lx < L && ld < L) return 'o';
+            if (lx >= L && ld >= L) return 'i';
+            return 'p';
+          };
+          const eL = end(-1), eR = end(1);
+          if (eL === 'o' || eR === 'o') {
+            // ground behind the receding corner columns: the lower ground in front of the face
+            const gs = gAt(x, y + 1) !== T.VOID ? gAt(x, y + 1) : g, gls = get('g:' + gs);
+            if (gls) {
+              const gf = gls[variant(x, y + 1, seed + gs, gls.length)];
+              for (let o = 0; o < L - LS; o += P) inst.push(px, py + P + o, P, Math.min(P, L - LS - o), gf.x, gf.y, -1, 0, LS / P, x, y + 1, 0);
+            }
+          }
+          const wf = get(`wf:${g}:${eL}${eR}`)![0];
+          inst.push(px, py + P - FACE_OFF, P, L - LS + FACE_OFF, wf.x, wf.y, -1, -1, (L + FACE_OFF) / P, x, y, FLAG.FACE);
+        } else if (fl) {
           const ff = fl[variant(x, y, seed + 11, fl.length)];
           // face end returns: lit west end, dark east end where the neighbouring face is not as tall
           const ff2 = FLAG.FACE | (lW < L && !(lAt(x - 1, y + 1) >= L) ? AUTO.FACE_L : 0) | (lE < L && !(lAt(x + 1, y + 1) >= L) ? AUTO.FACE_R : 0);

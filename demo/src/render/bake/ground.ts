@@ -333,3 +333,158 @@ export function edgeMask(dir: number, v: number, foam: boolean): Sprite {
     }
   return s;
 }
+
+// ---------------------------------------------------------------- autotile pieces for raised edges
+// Every raised edge (dungeon wall, cave wall, cliff of any ground) is drawn from sheet pieces chosen by
+// the composer from the 8 neighbours. All pieces are 16 px heightfield sprites like the ground tiles
+// (albedo, normal, height, emissive), so lighting and shadows use them; real art can replace any key.
+
+export type Shape = 'round' | 'chamfer' | 'rock';
+/** outer-corner radius in px per shape */
+export const SHAPE_R: Record<Shape, number> = { round: 3, chamfer: 3, rock: 5 };
+export function shapeOf(g: number): Shape {
+  return g === T.WALL || g === T.FLOOR || g === T.PLANK ? 'chamfer' : g === T.CAVEWALL || g === T.CAVE || g === T.CLOUD ? 'rock' : 'round';
+}
+/** grounds that get raised-edge pieces */
+export const EDGE_GROUNDS = [T.GRASS, T.SAND, T.DIRT, T.STONE, T.SNOW, T.FLOOR, T.WALL, T.CAVE, T.CAVEWALL, T.CLOUD, T.PATH, T.PLANK, T.SWAMP];
+
+/** is pixel (x, y) of a tile inside the cut-away part of corner c (0 NW, 1 NE, 2 SE, 3 SW)? */
+export function inCut(shape: Shape, c: number, x: number, y: number): boolean {
+  const r = SHAPE_R[shape];
+  const u = c === 0 || c === 3 ? x : N - x, v = c <= 1 ? y : N - y;
+  if (u >= r || v >= r) return false;
+  return shape === 'chamfer' ? u + v < r : Math.hypot(r - u, r - v) > r;
+}
+/** distance from pixel (x, y) to the cut edge of corner c (only meaningful near the corner) */
+function arcDist(shape: Shape, c: number, x: number, y: number): number {
+  const r = SHAPE_R[shape];
+  const u = c === 0 || c === 3 ? x : N - x, v = c <= 1 ? y : N - y;
+  if (u >= r + 3 || v >= r + 3) return 99;
+  return shape === 'chamfer' ? (u + v - r) * 0.7071 : r - Math.hypot(r - u, r - v);
+}
+
+/** top silhouette mask `wm:<shape>:<bits>` (bits: 1 NW, 2 NE, 4 SE, 8 SW corners cut away) */
+export function topMask(shape: Shape, bits: number): Sprite {
+  const s = new Sprite(N, N, 0, 0);
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++) {
+      let cut = false;
+      for (let c = 0; c < 4; c++) if (bits & (1 << c) && inCut(shape, c, x + 0.5, y + 0.5)) cut = true;
+      if (!cut) s.set(x, y, [255, 255, 255], 0, 0, 1, 0, null, 0);
+    }
+  return s;
+}
+
+const COPING: Record<number, string[]> = {
+  [T.WALL]: ['#4a4458', '#6a6280', '#8a83a2', '#a8a2c0'],
+  [T.FLOOR]: ['#4a4458', '#6a6280', '#8a83a2', '#a8a2c0'],
+};
+
+/**
+ * Rim piece of a raised top: `w:<g>:e<0-3>` straight edge N E S W, `w:<g>:oc<0-3>` outer corner (rim
+ * along the cut), `w:<g>:ic<0-3>` inner corner (the rim turning a concave corner). Corners 0 NW 1 NE 2 SE 3 SW.
+ */
+export function rimPiece(g: number, kind: 'e' | 'oc' | 'ic', i: number): Sprite {
+  const s = new Sprite(N, N, 0, 0);
+  const ramp = COPING[g] || GROUND_RAMP[g] || GROUND_RAMP[T.STONE];
+  const top = ramp.length - 1;
+  const shape = shapeOf(g);
+  const wall = shape === 'chamfer';
+  const rw = wall ? 3 : 2;
+  const mat = groundMat(g) === MAT.FOLIAGE ? MAT.FOLIAGE : MAT.DIFFUSE;
+  const put = (x: number, y: number, st: number, nx: number, ny: number, h: number) =>
+    s.set(x, y, rgb(ramp[Math.max(0, Math.min(top, st))]), nx, ny, 1, h, null, mat);
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++) {
+      const px = x + 0.5, py = y + 0.5;
+      const j = hashN(x, y, g * 7 + i) < 0.2 ? -1 : 0;
+      if (kind === 'e') {
+        // lit lip on north / west, a dark seam on east, a thin highlight on the south lip
+        if (i === 0 && py < rw) put(x, y, top + j, 0, -0.8, 0.04);
+        else if (i === 0 && py < rw + 1) put(x, y, 0, 0, 0.3, 0.0);
+        else if (i === 3 && px < rw) put(x, y, top - 1 + j, -0.8, 0, 0.04);
+        else if (i === 3 && px < rw + 1) put(x, y, 0, 0.3, 0, 0.0);
+        else if (i === 1 && px > N - 1.5) put(x, y, 0, 0.9, 0, 0.0);
+        else if (i === 2 && py > N - 1.5) put(x, y, top - 1, 0, 0.8, 0.02);
+      } else if (kind === 'oc') {
+        if (inCut(shape, i, px, py)) continue;
+        const d = arcDist(shape, i, px, py);
+        const north = i <= 1;
+        const nx = i === 0 || i === 3 ? -0.6 : 0.6, ny = north ? -0.6 : 0.6;
+        if (d < (north ? rw : 1.2)) put(x, y, north ? top + j : top - 2, nx, ny, 0.03);
+        else if (north && d < rw + 1) put(x, y, 0, 0, 0, 0);
+      } else {
+        const u = i === 0 || i === 3 ? px : N - px, v = i <= 1 ? py : N - py;
+        if (u < rw && v < rw) put(x, y, i <= 1 ? top + j : top - 2, i === 0 || i === 3 ? -0.5 : 0.5, i <= 1 ? -0.5 : 0.5, 0.03);
+      }
+    }
+  return s;
+}
+
+export const FACE_OFF = 3;
+/**
+ * South face piece `wf:<g>:<L><R>` with end types p (continues), o (outer corner: the face follows the
+ * rounded / chamfered top corner, columns recede and shift up), i (inner corner: a darker crease).
+ * FACE_OFF extra rows on top hold the shifted columns of 'o' ends; rows FACE_OFF.. match `f:<g>` rows.
+ */
+export function facePiece(g: number, v: number, L: string, R: string): Sprite {
+  const base = faceStrip(g, v);
+  const s = new Sprite(N, FACE_PX + FACE_OFF, 0, FACE_OFF);
+  const shape = shapeOf(g), r = SHAPE_R[shape];
+  const recede = (u: number) => (u >= r ? 0 : shape === 'chamfer' ? r - u : r - Math.sqrt(Math.max(0, r * r - (r - u) * (r - u))));
+  for (let x = 0; x < N; x++) {
+    const uL = x + 0.5, uR = N - x - 0.5;
+    const d = Math.round(Math.max(L === 'o' ? recede(uL) : 0, R === 'o' ? recede(uR) : 0));
+    const shadeL = L === 'o' && uL < r ? 1.25 : L === 'i' && x < 2 ? (x === 0 ? 0.5 : 0.72) : 1;
+    const shadeR = R === 'o' && uR < r ? 0.6 : R === 'i' && x > N - 3 ? (x === N - 1 ? 0.5 : 0.72) : 1;
+    const k = shadeL * shadeR;
+    for (let row = 0; row < FACE_PX; row++) {
+      const so = (row * N + x) * 4;
+      if (!base.alb[so + 3]) continue;
+      const dr = row + FACE_OFF - d;
+      if (dr < 0 || dr >= FACE_PX + FACE_OFF - d) continue;
+      const di = (dr * N + x) * 4;
+      s.alb[di] = Math.min(255, base.alb[so] * k); s.alb[di + 1] = Math.min(255, base.alb[so + 1] * k); s.alb[di + 2] = Math.min(255, base.alb[so + 2] * k); s.alb[di + 3] = 255;
+      let nx = base.nrm[so] / 127.5 - 1;
+      if (L === 'o' && uL < r) nx -= 0.7; if (R === 'o' && uR < r) nx += 0.7;
+      if (L === 'i' && x < 2) nx += 0.5; if (R === 'i' && x > N - 3) nx -= 0.5;
+      const ny = base.nrm[so + 1] / 127.5 - 1, nz = base.nrm[so + 2] / 127.5 - 1, l = Math.hypot(nx, ny, nz) || 1;
+      s.nrm[di] = (nx / l) * 127.5 + 127.5; s.nrm[di + 1] = (ny / l) * 127.5 + 127.5; s.nrm[di + 2] = (nz / l) * 127.5 + 127.5; s.nrm[di + 3] = base.nrm[so + 3];
+      for (let c = 0; c < 4; c++) s.emi[di + c] = base.emi[so + c];
+    }
+  }
+  return s;
+}
+
+/**
+ * Wall-foot base `wb:<bits>` (bits 1 N, 2 E, 4 W, 8 NW, 16 NE: which neighbours are higher): an albedo
+ * multiplier for the ground at the foot of a wall or cliff (white = unchanged), with matching inner and
+ * outer corners.
+ */
+export function basePiece(bits: number): Sprite {
+  const s = new Sprite(N, N, 0, 0);
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++) {
+      const px = x + 0.5, py = y + 0.5;
+      let k = 0;
+      if (bits & 1) k = Math.max(k, 1 - py / 3.5);
+      if (bits & 2) k = Math.max(k, 1 - (N - px) / 2.5);
+      if (bits & 4) k = Math.max(k, 1 - px / 2.5);
+      if (bits & 8) k = Math.max(k, 1 - Math.hypot(px, py) / 3.5);
+      if (bits & 16) k = Math.max(k, 1 - Math.hypot(N - px, py) / 3.5);
+      const m = Math.round(255 * (1 - Math.max(0, Math.min(1, k)) * 0.45));
+      s.set(x, y, [m, m, Math.min(255, m + 6)], 0, 0, 1, 0, null, 0);
+    }
+  return s;
+}
+
+/** Inner-corner blend mask `mi:<c>`: fills the concave corner where two edges of the same neighbour meet. */
+export function innerMask(c: number): Sprite {
+  const s = new Sprite(N, N, 0, 0);
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++) {
+      const u = c === 0 || c === 3 ? x + 0.5 : N - (x + 0.5), v = c <= 1 ? y + 0.5 : N - (y + 0.5);
+      if (u < 7 && v < 7 && Math.hypot(7 - u, 7 - v) > 3.5) s.set(x, y, [255, 255, 255], 0, 0, 1, 0, null, 0);
+    }
+  return s;
+}

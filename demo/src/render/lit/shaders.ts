@@ -81,6 +81,8 @@ void main() {
   vec4 e = texelFetch(uE, st, 0);
   int mat = int(e.a * 255.0 + 0.5);
   vec3 alb = a.rgb;
+  // wall-foot base piece (corner texture): an albedo multiplier whose frame travels in the tint
+  if ((flags & 8388608) != 0) alb *= texelFetch(uA, ivec2(vTint.rg) + lp, 0).rgb;
   float rimK = (flags & 512) != 0 ? uOutline.x : (flags & 1024) != 0 ? uOutline.y : (flags & 2048) != 0 ? uOutline.z : 0.0;
   if (rimK > 0.0 && !face && uOccOn == 1) {
     // 1 px silhouette rim: a darker shade of the sprite's own edge colour
@@ -193,15 +195,16 @@ void main() {
   float L = 0.0;
   if (t.x >= 0 && t.y >= 0 && t.x < uDim.x && t.y < uDim.y) {
     L = texelFetch(uLift, t, 0).r * 255.0 / 16.0;
-    // rounded outer north corners (like the drawn tops), so shadows have no square notch
+    // rounded outer corners (like the drawn tops), so shadows have no square notch
     vec2 f = fract(wt);
-    float r = 3.0 / 16.0;
-    for (int c = 0; c < 2; c++) {
-      int sx = c == 0 ? -1 : 1;
-      vec2 q = vec2(c == 0 ? f.x : 1.0 - f.x, f.y);
+    float r = 3.0 / 16.0, me = L * 16.0 / 255.0;
+    for (int c = 0; c < 4; c++) {
+      int sx = (c == 0 || c == 3) ? -1 : 1, sy = c <= 1 ? -1 : 1;
+      vec2 q = vec2(sx < 0 ? f.x : 1.0 - f.x, sy < 0 ? f.y : 1.0 - f.y);
       if (q.x >= r || q.y >= r) continue;
-      ivec2 tn = clamp(t + ivec2(0, -1), ivec2(0), uDim - 1), ts = clamp(t + ivec2(sx, 0), ivec2(0), uDim - 1), td = clamp(t + ivec2(sx, -1), ivec2(0), uDim - 1);
-      float a = texelFetch(uLift, tn, 0).r, b = texelFetch(uLift, ts, 0).r, d = texelFetch(uLift, td, 0).r, me = L * 16.0 / 255.0;
+      float a = texelFetch(uLift, clamp(t + ivec2(0, sy), ivec2(0), uDim - 1), 0).r;
+      float b = texelFetch(uLift, clamp(t + ivec2(sx, 0), ivec2(0), uDim - 1), 0).r;
+      float d = texelFetch(uLift, clamp(t + ivec2(sx, sy), ivec2(0), uDim - 1), 0).r;
       if (a < me && b < me && d < me && length(vec2(r) - q) > r) L = max(a, b) * 255.0 / 16.0;
     }
   }

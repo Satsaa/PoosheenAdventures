@@ -563,14 +563,18 @@ export function objectModels(): ObjSpec[] {
   // dock: a mooring post with a lantern and a small boat tied up, pointing out to sea (dir)
   for (const dir of ['n', 'e', 's', 'w'] as const) {
     const can = (x: number, y: number): [number, number] => dir === 's' ? [x, y] : dir === 'n' ? [1 - x, 1 - y] : dir === 'e' ? [1 - y, x] : [y, 1 - x];
-    const hullM: Mat = { ramp: ['#3a2210', '#5a3618', '#7c4e24', '#9c6a34'], bias: 0.3 };
+    // a sailing boat moored beside the pier end: warm bright hull, white sail, so it reads at any zoom
+    const hullM: Mat = { ramp: ['#2a1a40', '#3c2a6a', '#5a44a0', '#8a76d0'], bias: 0.2 };
+    const sailM: Mat = { ramp: ['#9aa0b0', '#d6dae4', '#f6f8fc'], bias: 0.8 };
     const parts: Part[] = [
-      [(x, y, z) => { const [u, v] = can(x, y); return cylZ(u, v, z, 0.25, 0.25, 0, 0.62, 0.06); }, 0],
-      [(x, y, z) => { const [u, v] = can(x, y); return Math.max(ellip(u, v, z, 0.62, 0.78, 0.0, 0.2, 0.42, 0.16), -ellip(u, v, z, 0.62, 0.78, 0.07, 0.15, 0.36, 0.12), -z - 0.04); }, 1],
-      [(x, y, z) => { const [u, v] = can(x, y); return box(u, v, z, 0.62, 0.78, 0.05, 0.14, 0.03, 0.015); }, 0],
-      [(x, y, z) => { const [u, v] = can(x, y); return sph(u, v, z, 0.25, 0.25, 0.68, 0.06); }, 2],
+      [(x, y, z) => { const [u, v] = can(x, y); return cylZ(u, v, z, 0.22, 0.2, 0, 0.6, 0.06); }, 0],
+      [(x, y, z) => { const [u, v] = can(x, y); return Math.max(ellip(u, v, z, 0.5, 1.62, 0.04, 0.46, 0.24, 0.2), -ellip(u, v, z, 0.5, 1.62, 0.13, 0.4, 0.18, 0.15), -z - 0.03); }, 1],
+      [(x, y, z) => { const [u, v] = can(x, y); return cylZ(u, v, z, 0.5, 1.6, 0, 0.95, 0.025); }, 0],
+      [(x, y, z) => { const [u, v] = can(x, y); const t = (z - 0.3) / 0.6; return Math.max(Math.abs(v - 1.64) - 0.018, Math.abs(u - 0.56) - 0.26 * (1 - t * 0.8), 0.3 - z, z - 0.9); }, 3],
+      [(x, y, z) => { const [u, v] = can(x, y); return capsule(u, v, z, 0.22, 0.2, 0.45, 0.2, 1.42, 0.12, 0.012); }, 0],
+      [(x, y, z) => { const [u, v] = can(x, y); return sph(u, v, z, 0.22, 0.2, 0.66, 0.06); }, 2],
     ];
-    add('o:ent:dock:' + dir, model([{ ramp: R.wood }, hullM, { ramp: R.ember, emit: [255, 170, 70] }], parts, { zMax: 0.78, padX: 0.35, fh: 1.3 }));
+    add('o:ent:dock:' + dir, model([{ ramp: R.wood }, hullM, { ramp: R.ember, emit: [255, 170, 70] }, sailM], parts, { zMax: 1.0, padX: 0.2, fh: 2.0, outline: 0.45 }));
   }
   // open archways in a wall line: a lintel with jambs where the wall ends (mask 1 = west end, 2 = east end)
   const lintelM: Mat = { ramp: ['#2c2838', '#3f394d', '#554e67', '#6d6582'], bias: 0.4 };
