@@ -9,10 +9,10 @@
 //     fix the table names (remove the prop, swap it for a low one, use the lip pattern).
 // The Rust port can load the same table.
 import { D, T, type Dimension, type DimKind, type MapObject } from './types';
+import { KIND, WALL_MODE, facedAt, kindAt, levelAt, liftAt, type WallMode } from './shape';
 
-/** How raised ground shows its sides: see "Walls seen from every side" in the README. */
-export type WallMode = 'room' | 'outdoor';
-export const WALL_MODE: Record<DimKind, WallMode> = { overworld: 'outdoor', sky: 'outdoor', underworld: 'room', interior: 'room' };
+export { WALL_MODE, type WallMode } from './shape';
+
 /**
  * Tiles of raised ground needed behind a face that looks north, for the face to fit. In a room
  * that face is as wide as the others, which takes a run longer than one tile; a tile without
@@ -31,7 +31,7 @@ interface NeedDef {
 }
 
 export const NEEDS: Record<NeedId, NeedDef> = {
-  level: { wants: 'level ground: it stands on the face of a height step', holds: (c, i) => !c.edge(i) },
+  level: { wants: 'level ground: it stands on the face of a height step', holds: (c, i) => c.level(i) },
   view: { wants: 'to stay clear of the wall face behind it: it is tall and hides the face', holds: (c, i) => !c.underFace(i) },
   footing: { wants: 'a tile that can be walked on', holds: (c, i) => !c.dim.solid[i] },
 };
@@ -119,10 +119,12 @@ const JOINS = new Set<MapObject['kind']>(['stairs', 'gate', 'ledge', 'entrance']
 export interface TileCtx {
   dim: Dimension;
   mode: WallMode;
-  /** ground that can be lower than something: not liquid, not nothing */
+  /** solid ground: not liquid, not nothing */
   land: (j: number) => boolean;
-  /** stands above land beside it (so it shows a face) */
+  /** something beside it is lower, so it shows a face */
   edge: (i: number) => boolean;
+  /** level where a thing would stand on it: no face under its middle or its sides */
+  level: (i: number) => boolean;
   /** directly below a face that looks at the camera */
   underFace: (i: number) => boolean;
   /** tiles of ground at least this high, counted southward from i (i included) */
@@ -130,36 +132,26 @@ export interface TileCtx {
   joins: Set<number>;
 }
 
-const isLand = (dim: Dimension, j: number) => j >= 0 && j < dim.w * dim.h && GROUNDS[dim.ground[j]]?.is !== 'liquid' && dim.ground[j] !== T.VOID;
-
-/** Would ground of height `e` on tile i stand above land beside it? (Asked while a map is still being built.) */
-export function standsAbove(dim: Dimension, i: number, e: number = dim.elev[i]): boolean {
-  const { w } = dim, x = i % w;
-  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-    if ((!dx && !dy) || x + dx < 0 || x + dx >= w) continue;
-    const j = i + dy * w + dx;
-    if (isLand(dim, j) && dim.elev[j] < e) return true;
-  }
-  return false;
-}
-
-/** Can something of this kind be put on tile i, as far as the table's needs go? (Footing is the placer's own business.) */
+/**
+ * Can something of this kind be put on tile i, as far as the table's needs go? Asked by the
+ * generator while it places things. (Footing is the placer's own business: it knows what is free.)
+ */
 export function canHold(dim: Dimension, i: number, kind: MapObject['kind']): boolean {
-  return !(OBJECTS[kind]?.needs.includes('level') && isLand(dim, i) && standsAbove(dim, i));
+  return !OBJECTS[kind]?.needs.includes('level') || levelAt(dim, i);
 }
 
 export function tileCtx(dim: Dimension): TileCtx {
-  const { w, elev } = dim, n = w * dim.h;
-  const land = (j: number) => isLand(dim, j);
-  const edgeMemo = new Int8Array(n).fill(-1);
-  const edge = (i: number) => {
-    if (edgeMemo[i] < 0) edgeMemo[i] = land(i) && standsAbove(dim, i) ? 1 : 0;
-    return edgeMemo[i] === 1;
-  };
+  const { w } = dim, n = w * dim.h;
+  // where faces are and how high things stand comes from the one terrain model (core/shape.ts),
+  // the same one the renderer draws: water below a bank makes a face just as land does
+  const solidGround = (j: number) => j >= 0 && j < n && !(kindAt(dim, j) & 3);
+  const memo = (f: (i: number) => boolean) => { const m = new Int8Array(n).fill(-1); return (i: number) => (m[i] < 0 ? (m[i] = f(i) ? 1 : 0) : m[i]) === 1; };
   return {
-    dim, mode: WALL_MODE[dim.kind], land, edge,
-    underFace: (i) => i - w >= 0 && land(i - w) && elev[i - w] > elev[i],
-    depthSouth: (i) => { let d = 0; for (let j = i; j < n && land(j) && elev[j] >= elev[i]; j += w) d++; return d; },
+    dim, mode: WALL_MODE[dim.kind], land: solidGround,
+    edge: memo((i) => facedAt(dim, i)),
+    level: memo((i) => levelAt(dim, i)),
+    underFace: (i) => solidGround(i) && solidGround(i - w) && liftAt(dim, i - w) > liftAt(dim, i),
+    depthSouth: (i) => { let d = 0; for (let j = i; j < n && solidGround(j) && liftAt(dim, j) >= liftAt(dim, i); j += w) d++; return d; },
     joins: new Set(dim.objects.filter((o) => JOINS.has(o.kind)).map((o) => o.y * w + o.x)),
   };
 }
@@ -167,7 +159,7 @@ export function tileCtx(dim: Dimension): TileCtx {
 /** A raised tile whose face looks north but has too little raised ground behind it for that face. */
 export const lacksDepth = (c: TileCtx, i: number): boolean => {
   const { dim } = c, north = i - dim.w;
-  return c.land(i) && north >= 0 && c.land(north) && dim.elev[north] < dim.elev[i] && c.depthSouth(i) < FACE_DEPTH[c.mode];
+  return c.land(i) && north >= 0 && c.land(north) && liftAt(dim, north) < liftAt(dim, i) && c.depthSouth(i) < FACE_DEPTH[c.mode];
 };
 
 // ---------------------------------------------------------------- the checker

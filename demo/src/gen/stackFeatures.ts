@@ -4,7 +4,8 @@ import { D, T, type DimId, type MapObject } from '../core/types';
 import type { Feature, RegionBP } from './blueprint';
 import { STYLES, type ST } from './stackBase';
 import { FILL } from './spatial';
-import { canHold, standsAbove } from '../core/tileset';
+import { canHold } from '../core/tileset';
+import { levelAt } from '../core/shape';
 
 export type DoorMap = Map<string, { dim: DimId; x: number; y: number; obj: MapObject }>;
 
@@ -319,8 +320,12 @@ function rimAlcove(st: ST, r: number, f: Extract<Feature, { f: 'pocket' }>): boo
       // the chest tile: this region's rim, walled on its three other sides
       if (st.owner[c] !== r || !st.border[c] || !wall(c) || st.reserved[c]) continue;
       if (!wall(c + d) || !wall(c + side) || !wall(c - side)) continue;
-      // the chest stands on level ground: the alcove may not open onto lower land behind the rim
-      if (standsAbove(dim, c, dim.elev[g])) continue;
+      // the chest stands on level ground: try the alcove's floor, and leave it if a face would run under the chest
+      const was = [dim.solid[c], dim.ground[c], dim.elev[c]];
+      dim.solid[c] = 0; dim.ground[c] = dim.ground[g]; dim.elev[c] = dim.elev[g];
+      const level = levelAt(dim, c);
+      [dim.solid[c], dim.ground[c], dim.elev[c]] = was;
+      if (!level) continue;
       // the gate tile must sit on a straight edge of open ground, so taking it cuts nothing off
       if (st.reserved[g - d] || ![g - d, g + side, g - side, g - d + side, g - d - side].every(open)) continue;
       dim.solid[c] = 0;

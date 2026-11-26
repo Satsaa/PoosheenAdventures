@@ -2,7 +2,8 @@
 // Each case plants one violation in a fresh world and expects the checker to name it; where the
 // generator has a fix for it, the tidy-up must make the report go away again.
 import { generateWorld } from './gen/index';
-import { checkTiles, standsAbove, summariseIssues, tileCtx } from './core/tileset';
+import { checkTiles, summariseIssues, tileCtx } from './core/tileset';
+import { facedAt, liftAt } from './core/shape';
 import { settleTiles } from './gen/settle';
 import { D, T, type Dimension } from './core/types';
 
@@ -42,6 +43,14 @@ const expect = (name: string, d: Dimension, wants: RegExp, fixable: boolean) => 
   expect('a pine on a cliff edge', d, /^Pine needs level ground/, true);
 }
 {
+  // the case a screenshot caught: water below a bank makes a face just as lower land does
+  const d = over(fresh());
+  const wet = (k: number) => d.ground[k] === T.WATER || d.ground[k] === T.DEEP;
+  const i = find(d, (k) => d.solid[k] === 1 && !wet(k) && d.ground[k] !== T.VOID && wet(k + d.w) && liftAt(d, k + d.w) < liftAt(d, k) && !d.deco[k]);
+  d.deco[i] = D.TREE;
+  expect('a tree on a bank above water', d, /^Tree needs level ground/, true);
+}
+{
   const d = over(fresh()), c = tileCtx(d);
   const i = find(d, (k) => d.solid[k] === 1 && c.underFace(k) && !c.edge(k) && d.ground[k] === T.GRASS);
   d.deco[i] = D.TREE;
@@ -50,7 +59,7 @@ const expect = (name: string, d: Dimension, wants: RegExp, fixable: boolean) => 
 }
 {
   const d = over(fresh());
-  const i = find(d, (k) => !d.solid[k] && !d.solid[k + 1] && d.ground[k] === T.GRASS && d.ground[k + 1] === T.GRASS && !standsAbove(d, k) && !d.objects.some((o) => Math.abs(o.x - (k % d.w)) < 2 && Math.abs(o.y - ((k / d.w) | 0)) < 2));
+  const i = find(d, (k) => !d.solid[k] && !d.solid[k + 1] && d.ground[k] === T.GRASS && d.ground[k + 1] === T.GRASS && !facedAt(d, k) && !facedAt(d, k + 1) && !d.objects.some((o) => Math.abs(o.x - (k % d.w)) < 2 && Math.abs(o.y - ((k / d.w) | 0)) < 2));
   d.elev[i]++;
   expect('a step between walkable tiles', d, /needs stairs/, false);
 }

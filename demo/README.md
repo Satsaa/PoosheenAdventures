@@ -128,8 +128,11 @@ Open `dist/index.html` in a browser. No server needed.
 
 The renderer draws a point at height z that much further up the screen. A box-shaped wall on
 the near side of a room therefore hides its own face and covers the floor behind it. So raised
-ground is not a box: toward lower ground it slopes, with a run that depends on the side
-(`TERRAIN_SHAPE` in `render/lit/shaders.ts`, `surfacePx` in `render/terrain.ts`).
+ground is not a box: toward lower ground it slopes, with a run that depends on the side.
+The model is `core/shape.ts`, and it is the only one: the renderer draws it (with a GLSL twin,
+`TERRAIN_SHAPE` in `render/lit/shaders.ts`), and the tile checker, the generator's placement
+and its tidy-up ask it where the faces are. Water below a bank makes a face just as lower land
+does.
 
 - Pattern 1, rooms (interiors and the underworld): runs chosen so all four faces are about
   equally wide on screen.
@@ -152,6 +155,8 @@ except at a stairs object (a ledge inside a room has a solid edge row with a gap
 `core/tileset.ts` is the one place that says what every ground, prop and object is: where it
 belongs (overworld, underworld, sky, interior), which wall patterns it has when it is raised,
 and what it needs around it (level ground, a clear view of the wall face behind it, footing).
+"Level" is not a rule of thumb about neighbours: it asks `core/shape.ts` whether the surface
+under the thing's footprint is at the top of its tile, which is exactly what gets drawn.
 
 - `checkTiles` walks every tile of every map and reports each unmet need, wording the report
   from the table: "Pine needs level ground: it stands on the face of a height step". A new tile

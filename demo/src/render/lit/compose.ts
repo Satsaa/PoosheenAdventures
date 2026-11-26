@@ -78,7 +78,8 @@ export function shapeLayout(dim: Dimension, lay: Layout, kind: Uint8Array, walls
   lay.standPx = stand;
 }
 
-export const liftOf = (ve: number) => Math.round(ve * TILE_PX * 0.4);
+export { liftOf } from '../../core/shape';
+import { liftOf } from '../../core/shape';
 
 export function layout(dim: Dimension, ve: Float32Array, voidElev: number): Layout {
   const n = dim.w * dim.h;
