@@ -77,8 +77,16 @@ body { background: var(--bg); color: var(--fg); font-family: var(--font-body); f
 .card .go { margin-top: 8px; }
 .card q { color: var(--muted); font-style: italic; quotes: '“' '”'; }
 
+/* the two sliders live under an expandable; its summary line shows where they stand */
+.scrubs { background: var(--surface); border-top: 1px solid var(--line); }
+.scrubs > summary { display: flex; align-items: baseline; gap: 10px; padding: 7px 10px; cursor: pointer; list-style: none; font: 600 12px var(--font-display); }
+.scrubs > summary::-webkit-details-marker { display: none; }
+.scrubs > summary::before { content: '▸'; color: var(--muted); }
+.scrubs[open] > summary::before { content: '▾'; }
+.scrubs > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.scrubs-now { color: var(--muted); font: 400 12px var(--font-body); font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scrub {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 8px 10px; background: var(--surface); border-top: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 2px 10px 8px;
 }
 .scrub-group { flex: 3 1 260px; min-width: 0; display: flex; align-items: center; gap: 10px; }
 .scrub-group.time { flex: 1 1 170px; }

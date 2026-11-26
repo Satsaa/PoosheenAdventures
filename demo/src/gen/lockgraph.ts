@@ -7,7 +7,7 @@
 import type { GateKind, ItemId, Req } from '../core/types';
 import type { Rng } from '../core/rng';
 import { gateFor } from '../core/content';
-import { NONE } from '../core/req';
+import { NONE, at } from '../core/req';
 
 export interface Payload {
   id: string;
@@ -50,6 +50,8 @@ export interface LockGraphInput {
   likes?: (a: string, b: string) => ItemId[];
   /** higher = longer chains, lower = bushier */
   depthBias?: number;
+  /** items that are placed like any other but never lock an edge */
+  noGate?: Set<ItemId>;
   /** nodes too small to hold anything: attached like any other, but never given a payload */
   barren?: Set<string>;
 }
@@ -90,7 +92,7 @@ export function buildLockGraph(inp: LockGraphInput): LockGraphOutput {
       if (p.terminal) sealed.add(node);
       for (const it of p.provides) {
         have.push(it);
-        if (it === keyItem || gateFor(it)) pending.push(it);
+        if (it === keyItem || (gateFor(it) && !inp.noGate?.has(it))) pending.push(it);
       }
     }
   };
@@ -143,13 +145,15 @@ export function buildLockGraph(inp: LockGraphInput): LockGraphOutput {
       edge = { a: opt.p, b: opt.c, req: NONE, gate: 'locked', lock: inp.lockScope, label: 'Locked door' };
     } else {
       if (!gateItem && !rng.chance(inp.freeChance)) {
-        const pool = have.filter((it) => it !== keyItem && gateFor(it));
+        const pool = have.filter((it) => it !== keyItem && gateFor(it) && !inp.noGate?.has(it));
         if (pool.length) {
           const likes = inp.likes?.(opt.p, opt.c) ?? [];
           gateItem = rng.weighted(pool, (it) => (1 + pool.indexOf(it)) * (likes.includes(it) ? 3 : 1));
         }
       }
-      const g = gateItem ? gateFor(gateItem) : null;
+      let g = gateItem ? gateFor(gateItem) : null;
+      // the Sun Dial's doors come in two kinds: some wait for the moon, some for the sun
+      if (g?.gate === 'moon' && rng.chance(0.35)) g = { gate: 'sun', req: at('day'), label: 'Sun door' };
       edge = g
         ? { a: opt.p, b: opt.c, req: g.req, gate: g.gate, spends: g.spends, label: g.label }
         : { a: opt.p, b: opt.c, req: NONE, gate: 'open', label: 'Open path' };

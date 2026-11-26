@@ -139,6 +139,7 @@ function setSphere(k: number): void {
   $('gained').innerHTML = names.length ? 'Found: ' + names.join(', ') : 'Nothing new to pick up';
   pushState();
   panels.setState(state);
+  summarise();
 }
 
 function pushState(): void {
@@ -219,14 +220,6 @@ $('btnGhost').addEventListener('click', (e) => {
   b.setAttribute('aria-pressed', String(on));
   map.setGhost(on);
 });
-// the lit renderer is optional: without WebGL2 (or before it exists) the button simply is not offered
-const look = map as unknown as { setRenderer?: (mode: 'lit' | 'flat') => void; renderer?: 'lit' | 'flat' };
-$('btnLook').hidden = typeof look.setRenderer !== 'function';
-$('btnLook').addEventListener('click', (e) => {
-  const b = e.currentTarget as HTMLElement;
-  look.setRenderer?.(b.getAttribute('aria-pressed') !== 'true' ? 'lit' : 'flat');
-  b.setAttribute('aria-pressed', String(look.renderer === 'lit'));
-});
 $('btnFog').addEventListener('click', (e) => {
   const b = e.currentTarget as HTMLElement;
   fog = b.getAttribute('aria-pressed') !== 'true';
@@ -257,25 +250,35 @@ view.setGraphics?.(graphics);
 side.setGraphics?.(graphics);
 
 // ------------------------------------------------------------------ time of day
+function summarise(): void {
+  if (!world || !state) return;
+  $('scrubsNow').textContent = `Sphere ${state.sphere} of ${world.solution.spheres.length - 1} · ${$('hoursLabel').textContent} ${phaseAt(hours)}`;
+}
 function setHours(h: number): void {
   const flipped = phaseAt(h) !== phaseAt(hours);
   hours = h;
-  const hh = Math.floor(h) % 24, mm = Math.round((h - Math.floor(h)) * 60);
+  const hh = Math.floor(h) % 24, mm = Math.floor((h - Math.floor(h)) * 60);
   $('hoursLabel').textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
   $('phaseLabel').textContent = phaseAt(h);
   $<HTMLInputElement>('hours').value = String(h);
   view.setTime?.(h);
+  summarise();
   // what is out and about only changes at dawn and dusk
   if (flipped && world) setSphere(state.sphere);
 }
 $('hours').addEventListener('input', (e) => setHours(Number((e.currentTarget as HTMLInputElement).value)));
 $('btnClock').addEventListener('click', () => {
-  if (clock) { clearInterval(clock); clock = 0; $('btnClock').textContent = '▶'; return; }
+  if (clock) { cancelAnimationFrame(clock); clock = 0; $('btnClock').textContent = '▶'; return; }
   $('btnClock').textContent = '❚❚';
-  // a full day in about a minute
-  clock = window.setInterval(() => setHours((hours + 0.1) % 24), 250);
+  // a full day in about a minute, advanced every frame so light and shadows glide
+  let last = performance.now();
+  const tick = (now: number) => {
+    setHours((hours + ((now - last) / 1000) * 0.4) % 24);
+    last = now;
+    clock = requestAnimationFrame(tick);
+  };
+  clock = requestAnimationFrame(tick);
 });
-$('btnLook').setAttribute('aria-pressed', String(look.renderer === 'lit'));
 const fromHash = cleanSeed(decodeURIComponent(location.hash.slice(1)));
 if (location.hash.length > 1) $<HTMLInputElement>('seed').value = fromHash;
 generate($<HTMLInputElement>('seed').value);

@@ -12,7 +12,7 @@ const run = (name: string, settings: Record<string, unknown>, expect: (s: Record
     const d = w.dims[0];
     const reqs = [...w.graph.edges.map((e) => e.req), ...w.graph.checks.map((c) => c.req), ...w.graph.sources.map((s) => s.req)];
     add('timeReqs', reqs.filter((r) => JSON.stringify(r).includes('"time"')).length);
-    add('moonDoors', w.graph.edges.filter((e) => e.gate === 'moon').length);
+    add('moonDoors', w.graph.edges.filter((e) => e.gate === 'moon' || e.gate === 'sun').length);
     add('foesDoors', w.graph.edges.filter((e) => e.gate === 'foes').length);
     add('enemies', w.dims.reduce((a, x) => a + x.objects.filter((o) => o.kind === 'enemy').length, 0));
     add('nightThings', w.dims.reduce((a, x) => a + x.objects.filter((o) => o.phase === 'night').length, 0));
@@ -29,8 +29,9 @@ const run = (name: string, settings: Record<string, unknown>, expect: (s: Record
   if (bad > N * 0.02 || why) process.exitCode = 1;
 };
 run('default', {}, (s) => (s.enemies < 5 ? 'no enemies' : s.houses < 3 ? 'no houses' : s.oddHouses <= 0 ? 'no L/T houses' : s.timeReqs <= 0 ? 'no time content' : s.seaShare + s.peakShare < 0.05 ? 'land fills the rectangle' : s.dialRequired > 0 ? 'dial required although time flows' : null));
-run('time stands still', { timeFlows: false, timeGates: 1 }, (s) => (s.moonDoors <= 0 ? 'no moon doors' : s.dialRequired <= 0.05 ? 'dial never required' : null));
+run('time stands still', { timeFlows: false, timeChests: 1, timeNpcs: 1, timeCreatures: 3 }, (s) => (s.moonDoors <= 0 ? 'no moon doors' : s.dialRequired <= 0.05 ? 'dial never required' : null));
 run('no dial, frozen time', { timeFlows: false, items: { sundial: { enabled: false } } }, (s) => (s.timeReqs > 0 ? 'time content without any way to reach night' : null));
+run('no time doors', { timeDoors: false }, (s) => (s.moonDoors > 0 ? 'doors although switched off' : null));
 run('no weapons', { items: { sword: { enabled: false }, bow: { enabled: false }, bombBag: { enabled: false } } }, (s) => (s.foesDoors > 0 ? 'sealed rooms without weapons' : null));
 run('rectangle, no enemies', { landCoverage: 1, enemies: 0, village: 0 }, (s) => (s.enemies > 0 ? 'enemies' : s.seaShare + s.peakShare > 0 ? 'not a rectangle' : null));
-run('crowded', { enemies: 4, village: 12, rivers: 4, timeGates: 1 }, () => null);
+run('crowded', { enemies: 4, village: 12, rivers: 4, timeChests: 1, timeNpcs: 1, timeCreatures: 3, timeShop: true }, () => null);

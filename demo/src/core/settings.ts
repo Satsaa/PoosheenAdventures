@@ -24,7 +24,8 @@ export interface GenSettings {
   dungeonRooms: number; smallKeys: number; dungeonLoops: number;
   shortcuts: number; ledges: boolean; extraStairs: number;
   favorQuest: boolean; tradeQuest: boolean; merchant: boolean;
-  timeFlows: boolean; timeGates: number; enemies: number; village: number;
+  timeFlows: boolean; timeDoors: boolean; timeChests: number; timeCreatures: number; timeNpcs: number; timeShop: boolean;
+  enemies: number; village: number;
   priceBombs: number; priceArrows: number; priceHeart: number; pricePeddlerHeart: number;
   maxAttempts: number;
   items: Record<ItemId, ItemSetting>;
@@ -92,7 +93,11 @@ export const SETTING_DEFS: SettingDef[] = [
   flag('merchant', 'Quests & NPCs', 'Travelling peddler', true, 'An NPC that follows the player\'s progress and is a moving ammo source. Needs at least one tool in the world to follow.', 'npc dynamic shop moving'),
 
   flag('timeFlows', 'Time', 'Time passes on its own', true, 'On: day and night alternate, so anything tied to the time of day only means waiting, and the Sun Dial just skips the wait. Off: it stays day until the Sun Dial is found, which makes night doors and night-only things real locks.', 'day night clock sundial'),
-  num('timeGates', 'Time', 'Time-of-day content', 'float', 0, 1, 0.05, 0.5, 'How much is tied to the time of day: moonlit chests, night creatures, NPCs that keep hours. Needs time to pass or the Sun Dial in the world.', 'day night schedule moon'),
+  flag('timeDoors', 'Time', 'Sun and moon doors', true, 'The Sun Dial can lock borders and dungeon rooms with doors that only open at night (moon doors) or only by day (sun doors).', 'day night gate lock'),
+  num('timeChests', 'Time', 'Moonlit and sunlit chests', 'float', 0, 1, 0.05, 0.3, 'Chance that a secret chest only shows itself at night, or only by day.', 'day night secret treasure'),
+  num('timeCreatures', 'Time', 'Day and night creatures', 'float', 0, 3, 0.25, 1, 'How common creatures are that only come out at night (wisps, frostmites) or only by day (dustlings). 0 removes them.', 'day night enemies wisps'),
+  num('timeNpcs', 'Time', 'NPCs that keep hours', 'float', 0, 1, 0.05, 0.5, 'Chance that each NPC who can keep hours does: the peddler packs up at dusk, traders may be early birds or night owls.', 'day night schedule shop'),
+  flag('timeShop', 'Time', 'Village shop closes at night', false, 'The shop only sells by day. Free refills elsewhere keep every ammo gate passable.', 'day night store hours'),
 
   num('enemies', 'Enemies', 'Enemy density', 'float', 0, 4, 0.25, 1, 'How many enemies roam regions and dungeon rooms. Beating them is a renewable source of rupees and ammo, and some dungeon doors stay sealed until their room is cleared.', 'monsters creatures foes combat'),
 

@@ -30,6 +30,21 @@ export const DEPENDS: Partial<Record<SettingKey, SettingKey[]>> = {
   pricePeddlerHeart: ['merchant'],
 };
 
+/** Search text of each kind of row (also used to count matches in the other tab). */
+export function settingText(d: SettingDef): string {
+  return `${d.label} ${d.group} ${d.help} ${d.keywords ?? ''} ${d.key}`.toLowerCase();
+}
+export function itemText(d: ItemSettingDef, world: World | null): string {
+  const def = world?.items[d.id];
+  const fieldWords = d.fields.map((f) => ({ enabled: 'enabled on off', order: 'order when start early late', home: 'home where dungeon loose overworld', cap: 'capacity cap carry limit' })[f]).join(' ');
+  return `${def?.name ?? d.id} ${d.id} ${def?.kind ?? ''} ${d.help} items item ${fieldWords}`.toLowerCase();
+}
+export function graphicsText(d: GraphicsDef): string {
+  return `${d.label} ${d.group} ${d.help} ${d.keywords ?? ''} ${d.key} graphics ${(d.options ?? []).map((o) => o.label).join(' ')}`.toLowerCase();
+}
+export const searchWords = (q: string) => q.toLowerCase().split(/\s+/).filter(Boolean);
+export const matches = (text: string, words: string[]) => words.length > 0 && words.every((w) => text.includes(w));
+
 let seq = 0;
 const uid = (p: string) => `${p}-${(seq++).toString(36)}`;
 
@@ -147,7 +162,7 @@ export function settingRow(model: SettingsModel, d: SettingDef, prefix: string):
   const depLabel = deps?.map((k) => labelOf(k)).join(' or ');
   return {
     el, group: d.group,
-    text: `${d.label} ${d.group} ${d.help} ${d.keywords ?? ''} ${d.key}`.toLowerCase(),
+    text: settingText(d),
     sync() {
       sync();
       const mod = model.modified(d.key);
@@ -255,10 +270,9 @@ export function itemRow(model: SettingsModel, d: ItemSettingDef, prefix: string,
   }
   el.append(note);
 
-  const fieldWords = d.fields.map((f) => ({ enabled: 'enabled on off', order: 'order when start early late', home: 'home where dungeon loose overworld', cap: 'capacity cap carry limit' })[f]).join(' ');
   return {
     el, group: 'Items',
-    text: `${name} ${d.id} ${def?.kind ?? ''} ${d.help} items item ${fieldWords}`.toLowerCase(),
+    text: itemText(d, world),
     sync(w, ix) {
       for (const s of syncers) s();
       const mod = d.fields.some((f) => model.modifiedItem(d.id, f));
@@ -434,7 +448,7 @@ export function graphicsRow(model: SettingsModel, d: GraphicsDef, defs: Graphics
 
   return {
     el, group: d.group,
-    text: `${d.label} ${d.group} ${d.help} ${d.keywords ?? ''} ${d.key} graphics ${(d.options ?? []).map((o) => o.label).join(' ')}`.toLowerCase(),
+    text: graphicsText(d),
     sync() {
       sync();
       const mod = model.modifiedG(d.key);

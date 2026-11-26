@@ -11,7 +11,9 @@ import { createTreeTab } from './tree';
 import { createPlaythroughTab } from './playthrough';
 import { createQuestsTab } from './quests';
 import { createChecksTab } from './checks';
-import { createSettingsTab, type SettingsTab } from './settingsTab';
+import { createSettingsTab } from './settingsTab';
+import { createGraphicsTab } from './graphicsTab';
+import type { ConfigTab } from './configTab';
 import { createItemsTab } from './itemsTab';
 import { SettingsModel } from './settingsModel';
 
@@ -37,7 +39,7 @@ export interface Panels {
   destroy(): void;
 }
 
-type TabId = 'graph' | 'tree' | 'play' | 'quests' | 'checks' | 'settings' | 'items';
+type TabId = 'graph' | 'tree' | 'play' | 'quests' | 'checks' | 'settings' | 'graphics' | 'items';
 const TAB_DEFS: { id: TabId; label: string }[] = [
   { id: 'graph', label: 'Graph' },
   { id: 'tree', label: 'Hierarchy' },
@@ -45,10 +47,21 @@ const TAB_DEFS: { id: TabId; label: string }[] = [
   { id: 'quests', label: 'Quests' },
   { id: 'checks', label: 'Checks' },
   { id: 'settings', label: 'Settings' },
+  { id: 'graphics', label: 'Graphics' },
   { id: 'items', label: 'Items' },
 ];
 const STORE_KEY = 'pa-panels-tab';
 let instance = 0;
+
+/** Fixed strips must not scroll anything: no touch panning starting there, no wheel scrolling through. */
+function guardHead(el: HTMLElement): void {
+  el.addEventListener('wheel', (ev) => {
+    const t = ev.target as HTMLElement | null;
+    // a textarea inside the header may scroll itself
+    if (t && t.tagName === 'TEXTAREA' && t.scrollHeight > t.clientHeight) return;
+    ev.preventDefault();
+  }, { passive: false });
+}
 
 export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
   const pid = `pa${instance++}`;
@@ -64,15 +77,17 @@ export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
   } catch { /* storage unavailable */ }
 
   const model = new SettingsModel((next) => cb.changeSettings(next), (next) => cb.changeGraphics(next));
-  const settingsTab: SettingsTab = createSettingsTab(model);
+  const jump = (to: TabId) => (q: string) => { activate(to, true); (to === 'graphics' ? graphicsTab : settingsTab).focusSearch(q); };
+  const settingsTab: ConfigTab = createSettingsTab(model, jump('graphics'));
+  const graphicsTab: ConfigTab = createGraphicsTab(model, jump('settings'));
   const makers: Record<TabId, () => TabView> = {
     graph: createGraphTab, tree: createTreeTab, play: createPlaythroughTab, quests: createQuestsTab, checks: createChecksTab,
-    settings: () => settingsTab, items: () => createItemsTab(model),
+    settings: () => settingsTab, graphics: () => graphicsTab, items: () => createItemsTab(model),
   };
 
   const wrap = h('div', { class: 'pa-panels' });
   const bar = h('div', { class: 'pa-tabs', role: 'tablist', 'aria-label': 'World panels' });
-  const views = new Map<TabId, { view: TabView; btn: HTMLButtonElement; body: HTMLElement; dirty: boolean }>();
+  const views = new Map<TabId, { view: TabView; btn: HTMLButtonElement; pane: HTMLElement; body: HTMLElement; dirty: boolean }>();
 
   for (const t of TAB_DEFS) {
     const view = makers[t.id]();
@@ -80,18 +95,26 @@ export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
       class: 'pa-tab', type: 'button', role: 'tab', id: `${pid}-t-${t.id}`, 'aria-controls': `${pid}-p-${t.id}`,
       onclick: () => activate(t.id, true),
     }, t.label);
-    const body = h('div', { class: 'pa-body', role: 'tabpanel', id: `${pid}-p-${t.id}`, 'aria-labelledby': `${pid}-t-${t.id}`, tabindex: '-1' }, view.el);
-    views.set(t.id, { view, btn, body, dirty: true });
+    const body = h('div', { class: 'pa-body', tabindex: '-1' }, view.el);
+    // a tab's header (if any) sits outside the scrolling body, so dragging it never scrolls the list
+    if (view.head) guardHead(view.head);
+    const pane = h('div', { class: 'pa-pane', role: 'tabpanel', id: `${pid}-p-${t.id}`, 'aria-labelledby': `${pid}-t-${t.id}` },
+      view.head ? h('div', { class: 'pa-pane-head' }, view.head) : null, body);
+    views.set(t.id, { view, btn, pane, body, dirty: true });
     bar.append(btn);
   }
-  const setBtn = views.get('settings')!.btn;
-  const dot = h('span', { class: 'pa-tab-dot', hidden: true });
-  setBtn.append(dot);
-  model.onChange(() => {
-    const n = model.changes();
-    dot.hidden = n === 0;
-    setBtn.setAttribute('aria-label', n ? `Settings (${n} changed)` : 'Settings');
-  });
+  const badge = (id: TabId, label: string, count: () => number) => {
+    const btn = views.get(id)!.btn;
+    const dot = h('span', { class: 'pa-tab-dot', hidden: true });
+    btn.append(dot);
+    model.onChange(() => {
+      const n = count();
+      dot.hidden = n === 0;
+      btn.setAttribute('aria-label', n ? `${label} (${n} changed)` : label);
+    });
+  };
+  badge('settings', 'Settings', () => model.genChanges());
+  badge('graphics', 'Graphics', () => model.graphicsChanges());
 
   bar.addEventListener('keydown', (ev) => {
     const ids = TAB_DEFS.map((t) => t.id);
@@ -114,12 +137,24 @@ export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
       if (t.tagName !== 'INPUT' || !/^(range|checkbox|radio|button)$/.test(type)) return;
     }
     ev.preventDefault();
-    activate('settings', true);
-    settingsTab.focusSearch();
+    const to: TabId = active === 'graphics' ? 'graphics' : 'settings';
+    activate(to, true);
+    (to === 'graphics' ? graphicsTab : settingsTab).focusSearch();
   });
 
   const empty = h('div', { class: 'pa-empty' }, 'Generating world…');
-  wrap.append(bar, ...[...views.values()].map((v) => v.body), empty);
+  // more-tabs hint for narrow panels: a fade + chevron at the edge that still has tabs behind it
+  const moreR = h('button', { class: 'pa-tabs-more is-right', type: 'button', tabindex: '-1', 'aria-hidden': 'true', title: 'More tabs', onclick: () => bar.scrollBy({ left: bar.clientWidth * 0.6, behavior: 'smooth' }) }, '›');
+  const moreL = h('button', { class: 'pa-tabs-more is-left', type: 'button', tabindex: '-1', 'aria-hidden': 'true', title: 'More tabs', onclick: () => bar.scrollBy({ left: -bar.clientWidth * 0.6, behavior: 'smooth' }) }, '‹');
+  const barWrap = h('div', { class: 'pa-tabs-wrap' }, bar, moreL, moreR);
+  const hint = () => {
+    moreR.hidden = bar.scrollLeft + bar.clientWidth >= bar.scrollWidth - 2;
+    moreL.hidden = bar.scrollLeft <= 2;
+  };
+  bar.addEventListener('scroll', hint, { passive: true });
+  let ro: ResizeObserver | null = null;
+  try { ro = new ResizeObserver(hint); ro.observe(bar); } catch { /* fine */ }
+  wrap.append(barWrap, ...[...views.values()].map((v) => v.pane), empty);
   root.append(wrap);
 
   const ctxFor = (id: TabId): TabCtx | null => {
@@ -171,7 +206,7 @@ export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
       const on = tid === id;
       v.btn.setAttribute('aria-selected', String(on));
       v.btn.tabIndex = on ? 0 : -1;
-      v.body.hidden = !on || !world;
+      v.pane.hidden = !on || !world;
     }
     if (user) { try { localStorage.setItem(STORE_KEY, id); } catch { /* ignore */ } }
     const v = views.get(id)!;
@@ -189,6 +224,7 @@ export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
     if (b.offsetLeft < bar.scrollLeft + 8 || b.offsetLeft + b.offsetWidth > bar.scrollLeft + bar.clientWidth - 8) {
       bar.scrollLeft = Math.max(0, b.offsetLeft - (bar.clientWidth - b.offsetWidth) / 2);
     }
+    hint();
   }
 
   activate(active, false);
@@ -208,7 +244,7 @@ export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
       model.setWorld(w);
       if (state) {
         syncPersistent();
-        if (views.get(active)!.body.hidden) activate(active, false);
+        if (views.get(active)!.pane.hidden) activate(active, false);
         else refresh(false);
       }
     },
@@ -217,7 +253,7 @@ export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
       state = st;
       if (!world) return;
       // time scrubbing: same world and sphere, only hours/phase moved. Never rebuild for that.
-      if (prev && stateWorld === world && prev.sphere === st.sphere && !views.get(active)!.body.hidden) {
+      if (prev && stateWorld === world && prev.sphere === st.sphere && !views.get(active)!.pane.hidden) {
         const phaseChanged = phaseOf(prev) !== phaseOf(st);
         for (const [id, v] of views) {
           if (v.view.keepScroll) continue;
@@ -230,7 +266,7 @@ export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
       empty.hidden = true;
       for (const v of views.values()) if (!v.view.keepScroll) v.dirty = true;
       syncPersistent();
-      const first = views.get(active)!.body.hidden;
+      const first = views.get(active)!.pane.hidden;
       if (first) activate(active, false);
       else refresh(false);
       const v = views.get(active)!;
@@ -256,6 +292,7 @@ export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
     destroy() {
       for (const v of views.values()) v.view.destroy?.();
       model.destroy();
+      ro?.disconnect();
       wrap.remove();
       world = null; state = null; ix = null;
     },

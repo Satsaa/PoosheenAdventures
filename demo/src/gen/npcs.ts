@@ -42,9 +42,9 @@ export function addNpcs(ctx: Ctx, rng: Rng, plan: Plan, regions: RegionBP[], sta
   const picks = T.length >= 6 ? [1, 3, 5] : [Math.min(1, T.length - 1), T.length >> 1, T.length - 1];
   const stops = S.merchant && T.length ? [...new Set(picks)].sort((a, b) => a - b).map((i) => T[i]) : [];
   const timeOk = S.timeFlows || plan.tools.includes('sundial');
-  // the peddler packs up at dusk; one of the traders is a night owl
-  const dayOnly = timeOk && rng.chance(S.timeGates);
-  const owl = timeOk && rng.chance(S.timeGates) ? 1 : -1;
+  // the peddler packs up at dusk; traders may be early birds or night owls
+  const dayOnly = timeOk && rng.chance(S.timeNpcs);
+  const hours = [0, 1, 2].map(() => (timeOk && rng.chance(S.timeNpcs * 0.6) ? (rng.chance(0.5) ? 'night' : 'day') : undefined));
   if (stops.length) {
   const merchant = { id: 'merchant', name: 'Pawdrick the Peddler', role: 'Travelling shop', icon: '$', color: '#ff9f6b', stages: [] as NpcStage[] };
   const heart = ctx.check(regionOf(ctx.itemHome.get(stops[0])!).id, 'heart', 'shop', "Peddler's heart piece", all(has(stops[0]), dayOnly ? at('day') : NONE, use('rupees', S.pricePeddlerHeart)));
@@ -71,11 +71,11 @@ export function addNpcs(ctx: Ctx, rng: Rng, plan: Plan, regions: RegionBP[], sta
   ];
   const steps = gives.map(([item, req, before, after], i) => {
     const r = spots[i % spots.length];
-    const night = i === owl;
-    const c = ctx.check(r.id, item, 'npc', `${names[i]}'s trade`, night ? all(req, at('night')) : req);
+    const keeps = hours[i] as 'day' | 'night' | undefined;
+    const c = ctx.check(r.id, item, 'npc', `${names[i]}'s trade`, keeps ? all(req, at(keeps)) : req);
     ctx.npcs.push({
       id: 'trade' + i, name: names[i], role: 'Trade chain', icon: '☻', color: '#ff9fd0',
-      stages: [stageAt(r, NONE, before, [c.id]), stageAt(r, has(item), after)].map((st) => ({ ...st, phase: night ? ('night' as const) : undefined })),
+      stages: [stageAt(r, NONE, before, [c.id]), stageAt(r, has(item), after)].map((st) => ({ ...st, phase: keeps })),
     });
     return { text: `${names[i]} in ${r.name} gives the ${ctx.items[item].name}`, req, check: c.id };
   });

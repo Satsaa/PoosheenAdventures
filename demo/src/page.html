@@ -22,7 +22,6 @@
         </div>
         <div class="tool-group">
         <button type="button" class="btn small" id="btnFit" title="Zoom out to see the whole map">Whole map</button>
-        <button type="button" class="btn small toggle" id="btnLook" aria-pressed="true" title="Lit: 3D-modelled sprites with normal maps and dynamic lights. Off: flat painted tiles.">Lighting</button>
         <button type="button" class="btn small toggle" id="btnGhost" aria-pressed="true" title="Show how the stacked worlds line up">Layers</button>
         <button type="button" class="btn small toggle" id="btnFog" aria-pressed="true" title="Dim what the player cannot reach yet">Fog</button>
         </div>
@@ -34,6 +33,8 @@
       <aside class="card" id="info" hidden aria-live="polite"></aside>
       </div>
 
+      <details class="scrubs" id="scrubs">
+        <summary><span class="scrubs-title">Playthrough and time</span><span class="scrubs-now" id="scrubsNow"></span></summary>
       <div class="scrub">
         <div class="scrub-group">
         <button type="button" class="btn small" id="btnPlay" aria-label="Play the playthrough">▶</button>
@@ -52,10 +53,11 @@
             <label for="hours" id="hoursLabel">10:00</label>
             <span class="gained" id="phaseLabel">day</span>
           </div>
-          <input id="hours" type="range" min="0" max="24" step="0.25" value="10">
+          <input id="hours" type="range" min="0" max="24" step="0.01" value="10">
         </div>
         </div>
       </div>
+      </details>
     </section>
 
     <section class="side" id="panels" aria-label="Generator details"></section>

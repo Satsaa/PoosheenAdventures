@@ -40,7 +40,15 @@
 .pa-panels [hidden] { display: none !important; }
 
 /* ------------------------------------------------------------ tab bar */
+.pa-tabs-wrap { position: relative; flex: none; }
+.pa-tabs-more {
+  position: absolute; top: 0; bottom: 1px; width: 30px; border: 0; padding: 0; cursor: pointer;
+  color: var(--pa-fg); font-size: 18px; line-height: 1; z-index: 2;
+}
+.pa-tabs-more.is-right { right: 0; text-align: right; padding-right: 6px; background: linear-gradient(to right, transparent, var(--pa-surface) 55%); }
+.pa-tabs-more.is-left { left: 0; text-align: left; padding-left: 6px; background: linear-gradient(to left, transparent, var(--pa-surface) 55%); }
 .pa-tabs {
+  touch-action: pan-x; overscroll-behavior-x: contain;
   display: flex;
   gap: 2px;
   flex: none;
@@ -444,11 +452,18 @@
 .pa-grow { flex: 1 1 auto; }
 .pa-row-btns { display: flex; gap: 6px; margin-top: 6px; }
 
-.pa-set-head {
-  position: sticky; top: -12px; z-index: 3;
-  margin: -12px calc(-1 * var(--pa-pad-x)) 0; padding: 10px var(--pa-pad-x) 10px;
+.pa-pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.pa-pane-head {
+  flex: none; position: relative; z-index: 3;
   background: var(--pa-surface); border-bottom: 1px solid var(--pa-line);
+  /* a fixed strip: dragging or wheeling here never scrolls the list or the page */
+  touch-action: none; overscroll-behavior: none;
 }
+.pa-pane-head textarea { touch-action: pan-y; overscroll-behavior: contain; }
+.pa-set-head { padding: 10px var(--pa-pad-x, 14px) 10px; max-height: 60vh; overflow: hidden; }
+.pa-other-row { margin: 8px 0 0; font-size: 12px; }
+.pa-other { color: var(--pa-accent-2); text-decoration-color: color-mix(in srgb, var(--pa-accent-2) 50%, transparent); }
+.pa-intro { margin-top: 2px; }
 .pa-set-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
 .pa-changed { font-size: 12px; color: var(--pa-muted); margin-right: 2px; }
 .pa-changed.is-mod { color: var(--pa-accent); font-weight: 600; }
@@ -489,7 +504,7 @@
 .pa-groups { margin-top: 8px; }
 .pa-grp { margin-bottom: 4px; }
 .pa-grp-h {
-  position: sticky; top: var(--pa-head-h, 92px); z-index: 2;
+  position: sticky; top: -12px; z-index: 2; margin-top: -1px;
   appearance: none; width: 100%; display: flex; align-items: center; gap: 8px;
   padding: 8px 2px; border: 0; border-bottom: 1px solid var(--pa-line);
   background: var(--pa-surface); cursor: pointer; text-align: left;
@@ -582,19 +597,11 @@
   border-radius: 6px; background: var(--pa-accent-soft); border: 1px solid color-mix(in srgb, var(--pa-accent) 40%, transparent); font-size: 12.5px;
 }
 
-/* settings: generation vs graphics divisions */
-.pa-div { scroll-margin-top: calc(var(--pa-head-h, 92px) + 12px); }
-.pa-div:not(.is-first) { margin-top: 22px; padding-top: 14px; border-top: 2px solid var(--pa-line); }
-.pa-div-h { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin: 6px 0 4px; }
-.pa-div-t { margin: 0; font-family: var(--pa-font-display); font-size: 15px; font-weight: 600; }
-.pa-div.is-gfx .pa-div-t { color: var(--pa-accent-2); }
-.pa-div.is-gen .pa-div-t { color: var(--pa-accent); }
-.pa-div-s { margin: 1px 0 0; font-size: 12px; color: var(--pa-muted); }
-.pa-div.is-gfx .pa-set.is-mod { border-left-color: var(--pa-accent-2); background: color-mix(in srgb, var(--pa-accent-2) 5%, transparent); }
-.pa-div.is-gfx .pa-grp-n { color: var(--pa-accent-2); background: var(--pa-accent2-soft); }
-.pa-div.is-gfx input[type='range'] { accent-color: var(--pa-accent-2); }
-.pa-div.is-gfx .pa-switch:checked { background: var(--pa-accent-2); border-color: var(--pa-accent-2); }
-.pa-div.is-gfx .pa-seg-in:checked + .pa-seg-l { background: var(--pa-accent2-soft); color: var(--pa-accent-2); }
+/* graphics tab accents */
+.pa-set.is-gfx.is-mod { border-left-color: var(--pa-accent-2); background: color-mix(in srgb, var(--pa-accent-2) 5%, transparent); }
+.pa-set.is-gfx input[type='range'] { accent-color: var(--pa-accent-2); }
+.pa-set.is-gfx .pa-switch:checked { background: var(--pa-accent-2); border-color: var(--pa-accent-2); }
+.pa-set.is-gfx .pa-seg-in:checked + .pa-seg-l { background: var(--pa-accent2-soft); color: var(--pa-accent-2); }
 .pa-select {
   flex: 1 1 auto; min-width: 0; height: 28px; padding: 0 8px; border-radius: 6px;
   border: 1px solid var(--pa-line); background: var(--pa-bg); color: var(--pa-fg); font: inherit; font-size: 12.5px;

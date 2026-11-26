@@ -167,6 +167,7 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   for (const e of ctx.edges) reqItems(e.req, asked);
   const drng = new Rng(childSeed(seed, 'dead'));
   for (const t of S.everyToolUsed ? plan.tools : []) {
+    if (t === 'sundial' && !S.timeDoors) continue;
     const spent = GATES[t].spends;
     if (asked.has(t) || (spent && asked.has(spent))) continue;
     placeItem(ctx, drng, drng.pick(roomy), 'heart', [t], false, true);
@@ -175,15 +176,21 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   const timeOk = S.timeFlows || plan.tools.includes('sundial');
   const trng = new Rng(childSeed(seed, 'time'));
   if (timeOk) {
-    // moonlit chests: some secrets only show themselves at night
+    // moonlit and sunlit chests: some secrets only show themselves at one time of day
     for (const r of roomy) for (const f of r.feats) {
       const obj = f.f === 'spot' || f.f === 'pocket' ? f.obj : null;
       const c = obj?.checkId ? ctx.checks.find((k) => k.id === obj.checkId) : undefined;
-      if (!obj || !c || c.item !== 'heart' || c.kind !== 'chest' || !trng.chance(S.timeGates * 0.4)) continue;
-      c.req = all(c.req, at('night'));
-      c.label = `Moonlit ${c.label.charAt(0).toLowerCase()}${c.label.slice(1)}`;
+      if (!obj || !c || c.item !== 'heart' || c.kind !== 'chest' || !trng.chance(S.timeChests)) continue;
+      const phase = trng.chance(0.7) ? 'night' : 'day';
+      c.req = all(c.req, at(phase));
+      c.label = `${phase === 'night' ? 'Moonlit' : 'Sunlit'} ${c.label.charAt(0).toLowerCase()}${c.label.slice(1)}`;
       obj.label = c.label;
-      obj.phase = 'night';
+      obj.phase = phase;
+    }
+    if (S.timeShop) {
+      for (const src of ctx.sources) if (src.loc === shop.entryLoc) src.req = all(at('day'), src.req);
+      pricey.req = all(at('day'), pricey.req);
+      shop.interior.name = 'Village Shop (open by day)';
     }
   }
   // enemies: they roam regions, and beating them is a renewable source of what they drop
@@ -191,15 +198,16 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   const fight = weapon === 'sword' ? has('sword') : weapon === 'bow' ? use('arrows') : weapon === 'bombBag' ? use('bombs') : null;
   for (const r of roomy) {
     const erng = new Rng(childSeed(r.hnode.seed, 'enemies'));
-    const pool = ENEMIES.filter((e) => (e.biomes.includes(r.biome) || e.biomes.includes('*')) && (!e.night || timeOk));
+    const pool = ENEMIES.filter((e) => (e.biomes.includes(r.biome) || e.biomes.includes('*')) && (!(e.night || e.day) || (timeOk && S.timeCreatures > 0)));
     const count = Math.min(16, Math.round(r.stack.part.regions[r.idx].length * 0.7 * S.enemies * (r === start ? 0.4 : 1)));
     const seen = new Set<string>();
     for (let k = 0; k < count && pool.length; k++) {
-      const e = erng.weighted(pool, (x) => x.weight);
-      r.feats.push({ f: 'spot', obj: { id: `o.en.${r.id}.${k}`, kind: 'enemy', enemy: e.id, label: e.name, icon: e.icon, phase: e.night ? 'night' : undefined } });
-      if (!fight || seen.has(e.drops + (e.night ? 'n' : ''))) continue;
-      seen.add(e.drops + (e.night ? 'n' : ''));
-      ctx.source(r.id, e.drops, `${e.plural} (${ctx.items[e.drops].name.toLowerCase()})`, e.night ? all(fight, at('night')) : fight).enemy = e.id;
+      const e = erng.weighted(pool, (x) => x.weight * (x.night || x.day ? S.timeCreatures : 1));
+      const phase = e.night ? 'night' : e.day ? 'day' : undefined;
+      r.feats.push({ f: 'spot', obj: { id: `o.en.${r.id}.${k}`, kind: 'enemy', enemy: e.id, label: e.name, icon: e.icon, phase } });
+      if (!fight || seen.has(e.drops + (phase ?? ''))) continue;
+      seen.add(e.drops + (phase ?? ''));
+      ctx.source(r.id, e.drops, `${e.plural} (${ctx.items[e.drops].name.toLowerCase()})`, phase ? all(fight, at(phase)) : fight).enemy = e.id;
     }
   }
   // home should look like a village
@@ -224,7 +232,7 @@ function addLoops(ctx: Ctx, rng: Rng, graph: LogicGraph, over: StackBP): void {
   const S = ctx.settings;
   const tools = (r: RegionBP, s: RegionBP): ItemId[] => {
     const late = (r.hnode.meta.tier ?? 0) >= (s.hnode.meta.tier ?? 0) ? r : s;
-    return late.hnode.entryCaps.filter((c) => GATES[c]);
+    return late.hnode.entryCaps.filter((c) => GATES[c] && (c !== 'sundial' || S.timeDoors));
   };
   for (const stack of ctx.stacks) {
     const byId = new Map(stack.regions.map((r) => [r.id, r]));

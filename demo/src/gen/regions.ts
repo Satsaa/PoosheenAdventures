@@ -52,6 +52,7 @@ export function buildStack(ctx: Ctx, spec: StackSpec): StackBP {
     entryCaps: spec.entryCaps,
     payloads: spec.payloads,
     entryPayloads: spec.entryPayloads,
+    noGate: ctx.settings.timeDoors ? undefined : new Set(['sundial']),
     freeChance: 1 - ctx.settings.lockDensity,
     depthBias: ctx.settings.linearity,
     likes: (a, b) => [...likesOf(byId.get(a)!.biome), ...likesOf(byId.get(b)!.biome)],
@@ -176,7 +177,7 @@ function elderGift(ctx: Ctx, region: RegionBP, p: Payload): void {
 
 /** A loose item: cave, gated alcove, or chest in the open. `main` items never hide behind later tools. */
 export function placeItem(ctx: Ctx, rng: Rng, region: RegionBP, item: ItemId, caps: ItemId[], main: boolean, forceAlcove = false): void {
-  const gateable = caps.filter((c) => GATES[c]);
+  const gateable = caps.filter((c) => GATES[c] && (c !== 'sundial' || ctx.settings.timeDoors));
   const roll = forceAlcove ? 0.5 : rng.next();
   const what = ctx.items[item].name;
   if (roll < 0.34) {

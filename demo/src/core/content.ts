@@ -106,6 +106,8 @@ export interface EnemyKind {
   drops: ItemId;
   /** only out at night */
   night?: boolean;
+  /** only out by day */
+  day?: boolean;
   /** how common, relative to the others in its biome */
   weight: number;
 }
@@ -113,8 +115,10 @@ export interface EnemyKind {
 export const ENEMIES: EnemyKind[] = [
   { id: 'knoblin', name: 'Knoblin', plural: 'Knoblins', icon: '♞', biomes: ['plains', 'forest', 'badlands', 'dungeon'], drops: 'rupees', weight: 5 },
   { id: 'snapjaw', name: 'Snapjaw', plural: 'Snapjaws', icon: '≋', biomes: ['lake', 'beach', 'flooded'], drops: 'rupees', weight: 4 },
-  { id: 'frostmite', name: 'Frostmite', plural: 'Frostmites', icon: '❄', biomes: ['snow'], drops: 'arrows', weight: 4 },
-  { id: 'dustling', name: 'Dustling', plural: 'Dustlings', icon: '☼', biomes: ['desert', 'badlands'], drops: 'bombs', weight: 4 },
+  { id: 'frostmite', name: 'Frostmite', plural: 'Frostmites', icon: '❄', biomes: ['snow'], drops: 'arrows', night: true, weight: 2 },
+  { id: 'knoblin', name: 'Snow Knoblin', plural: 'Snow Knoblins', icon: '♞', biomes: ['snow'], drops: 'rupees', weight: 3 },
+  { id: 'dustling', name: 'Dustling', plural: 'Dustlings', icon: '☼', biomes: ['desert', 'badlands'], drops: 'bombs', day: true, weight: 3 },
+  { id: 'rockback', name: 'Sand Rockback', plural: 'Sand Rockbacks', icon: '◭', biomes: ['desert'], drops: 'bombs', weight: 2 },
   { id: 'rockback', name: 'Rockback', plural: 'Rockbacks', icon: '◭', biomes: ['mountain', 'crystal', 'magma'], drops: 'bombs', weight: 4 },
   { id: 'bat', name: 'Cave Bat', plural: 'Cave Bats', icon: '⌄', biomes: ['cavern', 'flooded', 'crystal', 'magma', 'cave', 'dungeon'], drops: 'rupees', weight: 4 },
   { id: 'puff', name: 'Cloud Puff', plural: 'Cloud Puffs', icon: '☁', biomes: ['sky'], drops: 'arrows', weight: 4 },

@@ -123,6 +123,25 @@ export class SettingsModel {
     return JSON.stringify(out, null, 2);
   }
 
+  /** JSON with only the non-default graphics values, as a plain object */
+  graphicsJson(): string {
+    const g: Record<string, unknown> = {};
+    for (const d of GRAPHICS_DEFS) if (this.effG(d.key) !== this.defG(d.key)) g[d.key] = this.effG(d.key);
+    return JSON.stringify(g, null, 2);
+  }
+  /** accepts a plain graphics object or the combined format with a top-level "graphics" key */
+  parseGraphics(text: string): GraphicsSettings {
+    let raw: unknown;
+    try { raw = JSON.parse(text); } catch { throw new Error('That is not valid JSON.'); }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Expected an object like {"exposure": 0.8}.');
+    let r = raw as Record<string, unknown>;
+    if (r.graphics && typeof r.graphics === 'object' && !Array.isArray(r.graphics)) r = r.graphics as Record<string, unknown>;
+    const known = new Set(GRAPHICS_DEFS.map((d) => d.key));
+    const keys = Object.keys(r);
+    if (keys.length && !keys.some((k) => known.has(k))) throw new Error(`No graphics settings in it (${keys.slice(0, 3).join(', ')}).`);
+    return normalizeGraphics({ ...this.gDefaults, ...r });
+  }
+
   /** parse pasted JSON on top of the defaults; throws with a readable message */
   parse(text: string): { gen: GenSettings; graphics: GraphicsSettings | null } {
     let raw: unknown;

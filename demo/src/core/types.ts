@@ -45,7 +45,7 @@ export type GateKind =
   /** river logic: wading in or out at a level bank, and going over a fall */
   | 'shore' | 'waterfall'
   /** a door that only opens at night; a room that opens once its enemies are beaten */
-  | 'moon' | 'foes';
+  | 'moon' | 'sun' | 'foes';
 
 export interface Loc {
   id: LocId;

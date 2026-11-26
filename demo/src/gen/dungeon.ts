@@ -58,6 +58,7 @@ export function buildDungeon(ctx: Ctx, id: string, name: string, seed: number, p
   const lg = buildLockGraph({
     rng, nodes: cells.map(rid), entry: rid(entryCell), candidates, entryCaps: caps, payloads,
     entryPayloads: 0, freeChance: 0.65, lockScope: scope, depthBias: 1.6,
+    noGate: S.timeDoors ? undefined : new Set(['sundial']),
   });
 
   // some open doorways are sealed until the room behind them is cleared: a lock made of enemies

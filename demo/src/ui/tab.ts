@@ -17,6 +17,8 @@ export interface TabCtx {
 export interface TabView {
   /** content root, mounted into the scrolling tab body */
   el: HTMLElement;
+  /** fixed header shown above the scrolling body (never scrolls) */
+  head?: HTMLElement;
   /** built once and synced in place: rendered on every world/state even when hidden, scroll never reset */
   keepScroll?: boolean;
   render(ctx: TabCtx): void;
