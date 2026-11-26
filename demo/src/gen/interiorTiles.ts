@@ -5,6 +5,7 @@
 import { D, T, type Dimension, type LocId, type MapObject } from '../core/types';
 import { Rng, childSeed } from '../core/rng';
 import type { InteriorBP, ObjTpl } from './blueprint';
+import { canHold } from '../core/tileset';
 
 const STYLE: Record<string, { floor: number; wall: number }> = {
   dungeon: { floor: T.FLOOR, wall: T.WALL },
@@ -228,7 +229,7 @@ export function realiseInterior(bp: InteriorBP, seed: number): InteriorTiles {
         let placed = false;
         for (let tries = 0; tries < 200 && !placed; tries++) {
           const x = rng.range(R.x0 + (rw > 4 ? 1 : 0), R.x1 - (rw > 4 ? 1 : 0)), y = rng.range(y0, y1), i = at(x, y);
-          if (!free(i) || (!small && (taken.has(i - 1) || taken.has(i + 1)))) continue;
+          if (!free(i) || !canHold(dim, i, tpl.kind) || (!small && (taken.has(i - 1) || taken.has(i + 1)))) continue;
           taken.add(i);
           dim.objects.push({ ...tpl, x, y } as MapObject);
           placed = true;
@@ -236,7 +237,7 @@ export function realiseInterior(bp: InteriorBP, seed: number): InteriorTiles {
         if (!placed && !small) {
           // crowded room: take any free tile rather than lose a chest
           for (let y = y0; y <= y1 && !placed; y++) for (let x = R.x0; x <= R.x1 && !placed; x++) {
-            if (!free(at(x, y))) continue;
+            if (!free(at(x, y)) || !canHold(dim, at(x, y), tpl.kind)) continue;
             taken.add(at(x, y));
             dim.objects.push({ ...tpl, x, y } as MapObject);
             placed = true;

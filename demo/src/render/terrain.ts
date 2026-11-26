@@ -2,6 +2,7 @@
 // above their floor), cliff face heights, the zone that owns each tile (for fog) and the coastline
 // outline used by the stacked-world ghost overlay.
 import { T, type Dimension } from '../core/types';
+import { WALL_MODE } from '../core/tileset';
 
 export interface DimRender {
   dim: Dimension;
@@ -204,7 +205,7 @@ export interface WallPatterns { main: WallPattern; lip: WallPattern }
  * Every dimension has pattern 1 or 2, and any tile can ask for the lip variant instead.
  */
 export function wallPatterns(dim: Dimension): WallPatterns {
-  const room = dim.kind === 'interior' || dim.kind === 'underworld';
+  const room = WALL_MODE[dim.kind] === 'room'; // which pattern a kind of map uses is the tile table's call
   const s = wallShape;
   const main: WallPattern = room ? [s.room, 1, s.room, s.room] : [s.south, 0, s.north, s.side];
   return { main, lip: [main[0], main[1], s.lip, s.lip] };

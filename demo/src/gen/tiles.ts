@@ -12,6 +12,7 @@ import { oneWaySafe, requiredTable } from './validate';
 import { realiseInterior } from './interiorTiles';
 import { carveOpenings, initStack, type ST } from './stackBase';
 import { placeFeatures } from './stackFeatures';
+import { settleTiles } from './settle';
 
 export interface TileResult {
   dims: Dimension[];
@@ -72,6 +73,8 @@ export function realiseTiles(bp: Blueprint, seed: number): TileResult {
     settleOneWays(bp, layers);
     finishTree(bp.tree, bp.ctx);
   }
+  // props and walls get what the tile table says they need (the checker then confirms it)
+  for (const l of layers) settleTiles(l.dim);
   verify(layers, bp.graph, problems, wet);
 
   // coordinates the rest of the app wants

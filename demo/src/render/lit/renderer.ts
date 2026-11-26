@@ -396,7 +396,7 @@ export class LitRenderer {
     const under = dim.kind === 'underworld' || dim.kind === 'interior';
     const opx = overviewPx(dim.w, Math.ceil(lay.H / TILE_PX), this.maxTex);
     const ov = buildOverview(dim, lift, lay.voidLiftPx / TILE_PX, lay.top / TILE_PX, (lay.H - lay.top) / TILE_PX - dim.h, opx,
-      under ? this.colorsUnder : this.colors, true);
+      under ? this.colorsUnder : this.colors, true, { liftPx: lay.liftPx, kind: lay.kind!, walls: lay.walls! });
     push(litStats.overviewMs, ov.ms);
     const tex = (data: Uint8Array, mip: boolean, nearest = false) => {
       const t = texture(gl, ov.w, ov.h, { data, min: nearest ? gl.NEAREST : mip ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR, mag: gl.NEAREST });

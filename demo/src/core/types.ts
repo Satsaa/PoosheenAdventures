@@ -294,6 +294,8 @@ export interface Lint {
   label: string;
   ok: boolean;
   detail: string;
+  /** not ok, but only a warning: the world is still valid and is not generated again */
+  warn?: boolean;
 }
 
 export interface World {

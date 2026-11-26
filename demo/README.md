@@ -136,8 +136,8 @@ ground is not a box: toward lower ground it slopes, with a run that depends on t
 - Pattern 2, outdoors (overworld, sky, castle walls): the face that looks south is tall, the
   other three are narrow.
 - Pattern 3, lip: the south face as in the dimension's own pattern, the others a thin bevel.
-  `Dimension.lip` marks tiles that use it (rims of trees and rocks, so their props stand on
-  level ground); steps down to water use it too.
+  `Dimension.lip` marks tiles that use it (raised ground too thin for a full north face);
+  steps down to water use it too.
 
 Nothing is flat: the slope is real geometry in the G-buffer (height and normal per pixel), and
 the height map that sun and lamp shadows are cast over is built from the same function, so
@@ -146,6 +146,26 @@ lighting and picture agree. The face sizes are graphics settings ("Graphics: wal
 What the generator guarantees for this: interior walls are two tiles thick, the way out of a
 room is a real gap in its south wall, and a height step never lies between two walkable tiles
 except at a stairs object (a ledge inside a room has a solid edge row with a gap for the stairs).
+
+## The tile table
+
+`core/tileset.ts` is the one place that says what every ground, prop and object is: where it
+belongs (overworld, underworld, sky, interior), which wall patterns it has when it is raised,
+and what it needs around it (level ground, a clear view of the wall face behind it, footing).
+
+- `checkTiles` walks every tile of every map and reports each unmet need, wording the report
+  from the table: "Pine needs level ground: it stands on the face of a height step". A new tile
+  or a new need is checked without writing a new warning. It also checks the rules that hold
+  for all tiles: a raised tile has its map's wall pattern and the depth for its north face (or
+  the lip), and a height step between two walkable tiles has stairs.
+- The result is the "tile table" line in the Checks tab. It is a warning, not a failure: the
+  world is still valid and is not generated again.
+- `gen/settle.ts` is the generator's tidy-up. It asks the same questions and applies the fix
+  the table names: the prop goes, or becomes the low one the table gives (a tree at the foot of
+  a cliff becomes a rock), and raised ground without depth takes the lip pattern. Placement of
+  chests, creatures and the like asks the table too (`canHold`).
+- `test-tiles.ts` plants one violation of each kind and expects it to be named, and expects
+  generated worlds to raise none.
 
 ## Settings
 

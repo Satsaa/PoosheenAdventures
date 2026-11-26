@@ -50,10 +50,10 @@ export function createChecksTab(): TabView {
     const g = world.graph;
     const passed = world.lints.filter((l) => l.ok).length;
     const lints = h('ul', { class: 'pa-lints' }, ...world.lints.map((l) =>
-      h('li', { class: l.ok ? 'is-ok' : 'is-bad' },
-        h('span', { class: 'pa-lint-i', 'aria-hidden': 'true' }, l.ok ? '✓' : '✕'),
+      h('li', { class: l.ok ? 'is-ok' : l.warn ? 'is-warn' : 'is-bad' },
+        h('span', { class: 'pa-lint-i', 'aria-hidden': 'true' }, l.ok ? '✓' : l.warn ? '!' : '✕'),
         h('div', null,
-          h('div', { class: 'pa-lint-l' }, h('span', { class: 'pa-sr' }, l.ok ? 'Pass: ' : 'Fail: '), l.label),
+          h('div', { class: 'pa-lint-l' }, h('span', { class: 'pa-sr' }, l.ok ? 'Pass: ' : l.warn ? 'Warning: ' : 'Fail: '), l.label),
           h('div', { class: 'pa-lint-d' }, l.detail)))));
 
     const counts: [string, number][] = [
@@ -114,7 +114,7 @@ export function createChecksTab(): TabView {
 
   function settingsHint(ctx: TabCtx): HTMLElement | null {
     const n = ctx.world.settings ? countChanges(ctx.world.settings) : 0;
-    if (ctx.world.lints.every((l) => l.ok) || n === 0) return null;
+    if (ctx.world.lints.every((l) => l.ok || l.warn) || n === 0) return null;
     return h('div', { class: 'pa-hint' },
       h('span', null, `Settings in effect differ from defaults (${n} changed).`),
       h('button', { class: 'pa-btn2', type: 'button', onclick: () => ctx.goTab('settings') }, 'Open settings'));

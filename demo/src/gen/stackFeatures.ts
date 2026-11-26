@@ -4,6 +4,7 @@ import { D, T, type DimId, type MapObject } from '../core/types';
 import type { Feature, RegionBP } from './blueprint';
 import { STYLES, type ST } from './stackBase';
 import { FILL } from './spatial';
+import { canHold, standsAbove } from '../core/tileset';
 
 export type DoorMap = Map<string, { dim: DimId; x: number; y: number; obj: MapObject }>;
 
@@ -184,12 +185,13 @@ export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => voi
           st.mouths[r.idx].push((at.y + 2) * w + at.x);
         } else if (f.obj.kind === 'enemy') {
           // creatures need one free tile; if the region is full they simply are not there
-          const at = findBlock(st, r.idx, [], 0, 0, 0, 0);
+          const at = findBlock(st, r.idx, [], 0, 0, 0, 0, (x, y) => canHold(dim, y * w + x, 'enemy'));
           if (!at) continue;
           st.reserved[at.y * w + at.x] = 1;
           dim.objects.push({ ...f.obj, x: at.x, y: at.y } as MapObject);
         } else {
-          const at = findBlock(st, r.idx, P, -1, -1, 1, 1) ?? findBlock(st, r.idx, P, 0, 0, 0, 0);
+          const holds = (x: number, y: number) => canHold(dim, y * w + x, f.obj.kind);
+          const at = findBlock(st, r.idx, P, -1, -1, 1, 1, holds) ?? findBlock(st, r.idx, P, 0, 0, 0, 0, holds);
           if (!at) { fail(f.obj.label); continue; }
           reserve(st, at.x - 1, at.y - 1, at.x + 1, at.y + 1);
           dim.objects.push({ ...f.obj, x: at.x, y: at.y } as MapObject);
@@ -317,6 +319,8 @@ function rimAlcove(st: ST, r: number, f: Extract<Feature, { f: 'pocket' }>): boo
       // the chest tile: this region's rim, walled on its three other sides
       if (st.owner[c] !== r || !st.border[c] || !wall(c) || st.reserved[c]) continue;
       if (!wall(c + d) || !wall(c + side) || !wall(c - side)) continue;
+      // the chest stands on level ground: the alcove may not open onto lower land behind the rim
+      if (standsAbove(dim, c, dim.elev[g])) continue;
       // the gate tile must sit on a straight edge of open ground, so taking it cuts nothing off
       if (st.reserved[g - d] || ![g - d, g + side, g - side, g - d + side, g - d - side].every(open)) continue;
       dim.solid[c] = 0;

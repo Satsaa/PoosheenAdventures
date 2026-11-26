@@ -410,6 +410,7 @@
 }
 .pa-lints li.is-ok .pa-lint-i { background: var(--pa-good-soft); color: var(--pa-good); }
 .pa-lints li.is-bad .pa-lint-i { background: var(--pa-bad-soft); color: var(--pa-bad); }
+.pa-lints li.is-warn .pa-lint-i { background: color-mix(in srgb, var(--pa-accent) 18%, transparent); color: var(--pa-accent); font-weight: 700; }
 .pa-lint-l { font-size: 12.5px; font-weight: 500; }
 .pa-lint-d { font-size: 11.5px; color: var(--pa-muted); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .pa-lints li.is-bad .pa-lint-d { color: var(--pa-bad); }

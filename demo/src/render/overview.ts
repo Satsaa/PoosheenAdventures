@@ -5,6 +5,7 @@
 // (pre-shaded RGBA) paths.
 import { D, T, type Dimension } from '../core/types';
 import { hash2 } from './util';
+import { KIND, surfacePx, type WallPatterns } from './terrain';
 
 export type RGB = [number, number, number];
 
@@ -52,6 +53,8 @@ export function overviewPx(w: number, h: number, maxTex: number): number {
 export function buildOverview(
   dim: Dimension, lift: Float32Array, voidLift: number, topT: number, extraT: number, opx: number,
   col: OverviewColors, lit: boolean,
+  /** the sloped sides of raised ground, as the full-detail terrain draws them */
+  shape?: { liftPx: ArrayLike<number>; kind: Uint8Array; walls: WallPatterns },
 ): Overview {
   const t0 = performance.now();
   const { w, h, ground, deco } = dim;
@@ -92,6 +95,22 @@ export function buildOverview(
       const mat = col.mat(g);
       const shadeTop = 1 + Math.max(-0.3, Math.min(0.25, L * 0.12));
       const jit = 0.94 + hash2(x, y, 5) * 0.12;
+      const sloped = !!shape && (shape.kind[i] & KIND.SLOPED) !== 0;
+      if (sloped) {
+        // sample the surface north to south and put every sample where the projection takes it:
+        // a face that leans toward the camera stretches, so there are three samples per pixel row
+        const fc = col.face(g), rows = Math.max(3, opx * 3), Lpx = shape!.liftPx[i];
+        for (let sy = 0; sy < rows; sy++)
+          for (let px = 0; px < opx; px++) {
+            const fx = ((px + 0.5) / opx) * 16, fy = ((sy + 0.5) / rows) * 16;
+            const H = surfacePx(dim, shape!.liftPx, shape!.kind, shape!.walls, x, y, fx, fy);
+            const top = H >= Lpx - 0.3;
+            const row = Math.floor((topT + y + fy / 16 - H / 16) * opx);
+            let c = top ? base : fc;
+            if (top && dc && (opx === 1 || (px + sy) % 2 === 0)) c = mixed(base, dc);
+            put(x * opx + px, row, c, top, H / 16, top ? e : null, top ? mat : 0, x, y, top ? shadeTop * jit : 0.62);
+          }
+      } else
       for (let py = 0; py < opx; py++)
         for (let px = 0; px < opx; px++) {
           let c = base;
@@ -99,7 +118,7 @@ export function buildOverview(
           put(x * opx + px, oy0 + py, c, true, L, e, mat, x, y, shadeTop * jit);
         }
       // cliff face below
-      if (LS < L && !(dim.kind === 'overworld' && y + 1 >= h)) {
+      if (LS < L && (!sloped || y + 1 >= h || ground[i + w] === T.VOID) && !(dim.kind === 'overworld' && y + 1 >= h)) {
         const fc = col.face(g);
         for (let py = oy0 + opx; py < oy1; py++)
           for (let px = 0; px < opx; px++) put(x * opx + px, py, fc, false, L - (py - oy0 - opx) / opx, null, 0, x, y, 0.62);

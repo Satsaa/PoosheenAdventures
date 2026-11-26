@@ -85,7 +85,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
   const dim: Dimension = {
     id: bp.id, name: bp.name, kind: bp.kind, w, h, sw: SW, sh: SH, stack: bp.stack,
     ground: new Uint8Array(n), deco: new Uint8Array(n), elev: new Int8Array(n), solid: new Uint8Array(n).fill(1),
-    region: new Int16Array(n).fill(-1), zone: new Int32Array(n).fill(-1), zoneLoc: [], regions: [], objects: [], lip: new Uint8Array(n),
+    region: new Int16Array(n).fill(-1), zone: new Int32Array(n).fill(-1), zoneLoc: [], regions: [], objects: [],
   };
   const st: ST = {
     bp, dim, rng: new Rng(childSeed(seed, 'tiles' + bp.id)), w, h, scenery, lava, owner: new Int16Array(n).fill(-1),
@@ -221,11 +221,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
       if (style.rimGround === T.CAVEWALL) dim.elev[i] = region.elev + 1;
       if (style.rimRise) dim.elev[i] = region.elev + style.rimRise + (tower[i] ? 1 : 0);
       if (style.rimGround === T.VOID) dim.region[i] = -1; // sky islands simply end
-    } else {
-      // a rim of trees or rocks: its props stand on level ground, so its sides are only a bevel
-      dim.deco[i] = st.rng.pick(style.rim);
-      dim.lip![i] = 1;
-    }
+    } else dim.deco[i] = st.rng.pick(style.rim);
   }
   if (st.segs.length) dim.flow = st.flow;
   return st;
