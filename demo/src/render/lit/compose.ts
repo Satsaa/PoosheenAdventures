@@ -116,8 +116,17 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
         const nbs: [number, number, number][] = [[x, y - 1, 0], [x + 1, y, 1], [x, y + 1, 2], [x - 1, y, 3]];
         for (const [nx, ny, dir] of nbs) {
           const ng = gAt(nx, ny);
-          if (ng === g || ng === T.VOID || lAt(nx, ny) !== L) continue;
+          if (ng === g || ng === T.VOID) continue;
           const q = pal(ng);
+          if (lAt(nx, ny) !== L) {
+            // surf at the foot of higher land (coasts sit a step below the beach)
+            if (p.liquid && !q.liquid && lAt(nx, ny) > L && dir !== 2) {
+              const fm = get('fm:' + dir)!;
+              const mv = fm[variant(Math.min(x, nx), Math.min(y, ny), seed + 7 + dir, fm.length)];
+              inst.push(px, py, P, P, mv.x, mv.y, -1, -1, L / P, x, y, FLAG.TINTALL, g === T.LAVA ? 1 : 1, g === T.LAVA ? 0.55 : 1, g === T.LAVA ? 0.2 : 1, 1);
+            }
+            continue;
+          }
           if (p.liquid && !q.liquid) {
             const fm = get('fm:' + dir)!;
             const mv = fm[variant(Math.min(x, nx), Math.min(y, ny), seed + 7 + dir, fm.length)];
@@ -140,12 +149,13 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
         const fm = get('fm:0');
         if (fm) {
           const mv = fm[variant(x, y, seed + 21, fm.length)];
-          inst.push(px, py, P, P, mv.x, mv.y, -1, -1, L / P, x, y, FLAG.TINTALL, 1.1, 1.15, 1.2, 1);
+          inst.push(px, py, P, P, mv.x, mv.y, -1, -1, L / P, x, y, FLAG.TINTALL, 1, 1, 1, 1);
         }
       }
       // cliff face below
       const LS = lAt(x, y + 1);
-      if (LS < L) {
+      // open sea at the map's bottom edge continues past it (no cut face)
+      if (LS < L && !(g === T.DEEP && y + 1 >= h)) {
         const fl = get('f:' + g);
         if (fl) {
           const ff = fl[variant(x, y, seed + 11, fl.length)];
@@ -207,7 +217,8 @@ export function staticFeatures(dim: Dimension, lay: Layout): { torches: [number,
 
 // ---------------------------------------------------------------- objects
 
-export function objectKey(o: MapObject, done: boolean, sheet: AssetSheet): string | null {
+export function objectKey(o: MapObject, done: boolean, sheet: AssetSheet, dim?: Dimension): string | null {
+  const side = o.dir === 'e' || o.dir === 'w';
   let k: string | null = null;
   switch (o.kind) {
     case 'chest': k = 'o:chest'; break;
@@ -229,7 +240,15 @@ export function objectKey(o: MapObject, done: boolean, sheet: AssetSheet): strin
     }
     case 'gate': {
       const g = o.gate || 'open';
-      if (g === 'open') return null;
+      if (g === 'open') {
+        // open archway: lintel, with jambs where the wall continues beside it
+        if (!dim) return null;
+        const wall = (x: number, y: number) => x >= 0 && y >= 0 && x < dim.w && y < dim.h && isWallG(dim.ground[y * dim.w + x]);
+        const a = side ? wall(o.x, o.y - 1) : wall(o.x - 1, o.y), b = side ? wall(o.x, o.y + 1) : wall(o.x + 1, o.y);
+        k = 'o:arch:' + ((a ? 1 : 0) | (b ? 2 : 0));
+        if (side && sheet.frames.has(k + ':side')) k += ':side';
+        return sheet.frames.has(k) ? k : null;
+      }
       if ((g as string) === 'waterfall') k = 'o:wf:' + (o.dir || 's') + (o.style === 'ladder' ? ':ladder' : '');
       else if (g === 'ledge') k = 'o:ledge:' + (o.dir || 's');
       else if (g === 'guard') k = 'o:guard';
@@ -240,11 +259,13 @@ export function objectKey(o: MapObject, done: boolean, sheet: AssetSheet): strin
   }
   if (!k) return null;
   if (done && sheet.frames.has(k + ':done')) k += ':done';
+  if (side && sheet.frames.has(k + ':side')) k += ':side';
   return sheet.frames.has(k) ? k : null;
 }
 
 /** Entrance styles drawn into the wall behind them (house front / cliff face). */
 export function wallStyle(o: MapObject, key: string): boolean {
+  if (key.endsWith(':side') || key.startsWith('o:arch:')) return false;
   if (o.kind === 'gate') return o.gate === 'cracked';
   return key.startsWith('o:ent:') && !/stairs|beanstalk|exit/.test(key);
 }

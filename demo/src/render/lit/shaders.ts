@@ -217,7 +217,7 @@ uniform float uCastR;     // caster px per tile
 uniform vec2 uCastSize;
 uniform vec3 uSun;        // direction toward the sun (x east, y south, z up), normalized
 uniform float uShadowMode, uShadowStr, uShadowSoft, uTerrainSh, uContact, uAmbK, uSunK, uPointK, uSea;
-uniform float uFogDark, uFogDesat, uWaterK;
+uniform float uFogDark, uFogDesat, uWaterK, uFoamK, uGlintK;
 uniform int uLSN;          // how many of the first (strongest) lights cast shadows
 uniform float uLSK, uLSSoft;
 uniform vec4 uGhost0;   // on, ghost top (dim px), ghost overview px per dim px
@@ -246,6 +246,40 @@ float shadowRay(vec3 P, vec3 S) {
   }
   return 0.0;
 }
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+// ---- water: broad slow swells (world space, a few tiles long), rare drifting foam streaks
+float swell(vec2 w, float t) {
+  return sin(w.x * 0.55 + w.y * 0.32 - t * 0.45) * 0.6 + sin(w.x * 0.21 - w.y * 0.62 + t * 0.31) * 0.4;
+}
+vec2 swellGrad(vec2 w, float t) {
+  return vec2(cos(w.x * 0.55 + w.y * 0.32 - t * 0.45) * 0.33 + cos(w.x * 0.21 - w.y * 0.62 + t * 0.31) * 0.084,
+              cos(w.x * 0.55 + w.y * 0.32 - t * 0.45) * 0.19 - cos(w.x * 0.21 - w.y * 0.62 + t * 0.31) * 0.25);
+}
+// a few short 1 px foam streaks per screen that drift and fade in and out (never a per-pixel hash)
+float foamStreak(vec2 w, float t) {
+  vec2 cs = vec2(3.0, 1.5);
+  vec2 g = (w + vec2(t * 0.12, 0.0)) / cs;
+  vec2 id = floor(g), f = fract(g);
+  float h = hash(id);
+  if (h > 0.3) return 0.0;
+  float life = sin(t * 0.45 + h * 40.0);
+  if (life < 0.35) return 0.0;
+  float y0 = 0.25 + hash(id + 3.1) * 0.5, x0 = 0.1 + hash(id + 7.7) * 0.4, len = 0.18 + hash(id + 1.3) * 0.25;
+  float row = abs(floor(f.y * cs.y * 16.0) - floor(y0 * cs.y * 16.0));
+  return step(row, 0.5) * step(x0, f.x) * step(f.x, x0 + len) * (life - 0.35) / 0.65;
+}
+// deep-sea albedo and normal at world point w (shared by sea tiles and the sea past the map edge)
+vec3 seaAlbedo(vec2 w, float dist, float t, out vec3 n) {
+  vec2 q = floor(w * 16.0) / 16.0;   // stay on the pixel grid
+  float sw = swell(q, t);
+  float band = floor(sw * 1.4 + 0.5) / 1.4;
+  float far = smoothstep(2.0, 8.0, dist);
+  vec3 base = vec3(0.07, 0.2, 0.38) * (1.0 + band * 0.1) * mix(1.0, 0.8, far);
+  vec2 gr = swellGrad(q, t) * 0.18 * (1.0 - far * 0.5);
+  n = normalize(vec3(-gr, 1.0));
+  return base;
+}
+
 // occlusion of the segment from surface point P to point light Lp over the world height map
 float lightOcc(vec3 P, vec3 Lp) {
   vec2 dxy = Lp.xy - P.xy;
@@ -269,7 +303,6 @@ float lightOcc(vec3 P, vec3 Lp) {
   return occ;
 }
 float toon(float x) { return smoothstep(0.02, 0.07, x) * 0.36 + smoothstep(0.28, 0.34, x) * 0.34 + smoothstep(0.6, 0.66, x) * 0.30; }
-float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 void main() {
   ivec2 fc = ivec2(gl_FragCoord.xy);
   vec4 A = texelFetch(gA, fc, 0);
@@ -279,14 +312,21 @@ void main() {
   if (A.a < 0.5) {
     vec3 bg = mix(uBg0, uBg1, gl_FragCoord.y / uIS.y);
     if (uSea > 0.0) {
-      // open sea continuing past the map edge, lit like deep water
-      vec2 q = floor(vec2(dp.x, dp.y - uTop) / 2.0) / 8.0;
+      // open sea continuing past the map edge: the same model as the deep-water tiles, no seam
       float tt = uTime * uMotion * uWaterK;
-      float wv = sin(q.x * 0.9 + q.y * 1.7 + tt * 1.3) * sin(q.y * 1.3 - q.x * 0.6 - tt);
-      vec3 sea = vec3(0.03, 0.09, 0.2) * (1.0 + wv * 0.25);
-      vec3 lit = sea * (uAmbTop * uAmbK + uKeyCol * uSunK * 0.55 * max(uSun.z, 0.0));
-      lit += vec3(0.6, 0.7, 0.8) * step(0.9, wv) * 0.15 * (uAmbK * 0.5 + uSunK * max(uSun.z, 0.0));
-      bg = lit;
+      vec2 wq = vec2(sp.x, sp.y - uTop) / 16.0;
+      vec3 sn;
+      // distance to land continues the in-map value across the boundary, so there is no seam
+      ivec2 msz = textureSize(uMask, 0);
+      vec2 cl = clamp(floor(wq), vec2(0.0), vec2(msz) - 1.0);
+      vec4 em = texelFetch(uMask, ivec2(cl), 0);
+      int ec = int(em.b * 255.0 + 0.5);
+      float edist = (int(em.a * 255.0 + 0.5) == 2 && ec >= 16) ? float(ec - 16) : 15.0;
+      vec3 sa = seaAlbedo(wq, edist + length(wq - cl - 0.5), tt, sn);
+      float fo = foamStreak(wq, tt) * uFoamK * 0.4 * smoothstep(0.35, 0.9, uK);
+      sa = mix(sa, vec3(0.62, 0.7, 0.75), fo);
+      float nlk = max(dot(sn, uKeyDir), 0.0);
+      bg = sa * (mix(uAmbBot, uAmbTop, sn.z * 0.5 + 0.5) * uAmbK + uKeyCol * uSunK * toon(nlk));
     }
     if (uRock > 0.0) {
       float n = hash(floor(dp / 5.0)) * 0.45 + hash(floor(dp / 23.0)) * 0.55;
@@ -317,37 +357,49 @@ void main() {
   float t = uTime * uMotion * uWaterK;
   vec3 emi = E.rgb * 1.8;
   int flowC = int(M.b * 255.0 + 0.5), wk = int(M.a * 255.0 + 0.5);
+  float waterGlint = 0.0;
   if (mat == 1) {
     vec2 q = floor(P.xy * 16.0) / 16.0;
+    float zf = smoothstep(0.35, 0.9, uK);   // fine detail fades out when zoomed out (no moire)
     if (wk == 2) {
-      // rough deep water: choppy, fast, whitecaps
-      N = normalize(N + vec3(sin(q.x * 7.3 + t * 2.1) + sin(q.y * 9.7 - t * 2.6 + q.x * 3.1), cos(q.y * 8.1 + t * 1.9) + sin(q.x * 6.3 - t * 1.7), 0.0) * 0.45);
-      float cap = sin(q.x * 5.1 + q.y * 2.3 + t * 1.6) * sin(q.y * 4.3 - q.x * 1.7 - t * 1.2);
-      emi += vec3(0.5, 0.58, 0.62) * step(0.86, cap) * 0.5;
-    } else if (flowC > 0) {
-      // river: streaks drifting downstream
-      vec2 fd = flowC == 1 ? vec2(0.0, -1.0) : flowC == 2 ? vec2(1.0, 0.0) : flowC == 3 ? vec2(0.0, 1.0) : vec2(-1.0, 0.0);
-      float along = dot(q, fd), across = dot(q, vec2(-fd.y, fd.x));
-      float lane = floor(across * 5.0);
-      float st = fract(along * 0.9 - t * 0.7 * uMotion + hash(vec2(lane, 1.0)) * 7.0);
-      emi += vec3(0.22, 0.32, 0.38) * smoothstep(0.82, 0.97, st) * step(0.35, hash(vec2(lane, 2.0))) * smoothstep(0.35, 0.9, uK);
-      N = normalize(N + vec3(fd * 0.3 * sin(along * 7.0 - t * 3.0), 0.0));
+      // deep sea: dark readable blue, broad slow swells, rare foam streaks; darker far from land
+      float dist = flowC >= 16 ? float(flowC - 16) : 0.0;
+      vec3 sn;
+      A.rgb = seaAlbedo(P.xy, dist, t, sn);
+      N = sn;
+      float fo = foamStreak(P.xy, t) * uFoamK * zf * (1.0 - smoothstep(2.0, 10.0, dist) * 0.6);
+      A.rgb = mix(A.rgb, vec3(0.62, 0.7, 0.75), fo);
+      waterGlint = step(0.78, swell(q, t)) * step(0.985, hash(floor(P.xy * 4.0))) * zf;
     } else {
-      // calm: gentle swell
-      N = normalize(N + vec3(sin(q.x * 3.7 + t * 0.6) + sin(q.y * 4.1 - t * 0.8), cos(q.y * 3.3 + t * 0.7), 0.0) * 0.12);
+      // swimmable water: lighter, clearer and calmer
+      float sw = swell(q * 1.3, t * 0.7);
+      A.rgb *= 1.0 + floor(sw * 1.2 + 0.5) / 1.2 * 0.05;
+      N = normalize(vec3(-swellGrad(q * 1.3, t * 0.7) * 0.06, 1.0));
+      if (flowC > 0 && flowC < 16) {
+        // river: a few long, soft streaks drifting downstream
+        vec2 fd = flowC == 1 ? vec2(0.0, -1.0) : flowC == 2 ? vec2(1.0, 0.0) : flowC == 3 ? vec2(0.0, 1.0) : vec2(-1.0, 0.0);
+        float along = dot(q, fd), across = dot(q, vec2(-fd.y, fd.x));
+        float lane = floor(across * 16.0 / 3.0);
+        float st = fract(along * 0.35 - t * 0.35 + hash(vec2(lane, 1.0)) * 7.0);
+        emi += vec3(0.1, 0.14, 0.17) * smoothstep(0.7, 0.95, st) * (1.0 - smoothstep(0.95, 1.0, st)) * step(0.72, hash(vec2(lane, 2.0))) * zf * uFoamK;
+      }
+      waterGlint = step(0.85, sw) * step(0.992, hash(floor(P.xy * 4.0))) * zf;
     }
     if (uRock > 0.0) {
-      // underground water: soft caustics glow
-      float c = pow(abs(sin(q.x * 3.1 + t * 0.9) * sin(q.y * 2.7 - t * 1.1 + q.x)), 3.0);
-      emi += vec3(0.05, 0.22, 0.3) * (0.4 + c);
+      // underground water: a soft, banded caustic glow
+      float c = floor((0.5 + 0.5 * sin(q.x * 1.7 + t * 0.6) * sin(q.y * 1.4 - t * 0.7)) * 3.0) / 3.0;
+      emi += vec3(0.03, 0.1, 0.14) * (0.6 + c);
     }
   } else if (mat == 7) {
     // falling water: bright streaks scrolling down the face, per texel column
     float col = floor(dp.x);
     float r = hash(vec2(col, 3.0));
-    float v = fract(dp.y / 16.0 * 1.4 - t * (1.1 + r) + r * 7.0);
-    emi += (vec3(0.45, 0.6, 0.7) * smoothstep(0.7, 0.95, v) * (uMotion > 0.0 ? 1.0 : 0.4) + vec3(0.04, 0.08, 0.12)) * smoothstep(0.35, 0.9, uK);
+    float v = fract(dp.y / 16.0 * 0.8 - t * (0.9 + r * 0.6) + r * 7.0);
+    emi += (vec3(0.22, 0.3, 0.34) * smoothstep(0.6, 0.95, v) * step(0.55, r) * (uMotion > 0.0 ? 1.0 : 0.4) + vec3(0.04, 0.08, 0.12)) * smoothstep(0.35, 0.9, uK);
     N = normalize(vec3(0.0, 0.7, 0.7));
+  } else if (mat == 8) {
+    // surf: a thin foam line hugging the coast, breathing in and out (kept below the bloom threshold)
+    A.rgb *= 0.78 + 0.2 * sin(t * 1.3 + floor(P.x * 4.0) * 0.9 + floor(P.y * 4.0) * 0.7);
   } else if (mat == 2) {
     vec2 q = floor(P.xy * 8.0) / 8.0;
     emi *= 0.75 + 0.35 * sin(t * 1.8 + q.x * 2.1 + q.y * 1.7) + 0.15 * sin(t * 3.7 + q.y * 5.0);
@@ -385,9 +437,13 @@ void main() {
   vec3 V = vec3(0.0, 0.7071, 0.7071);
   bool shiny = mat == 1 || mat == 4 || mat == 7;
   vec3 spec = vec3(0.0);
-  if (shiny) {
+  if (mat == 1) {
+    // sparse glints on swell crests, mostly when the sun or moon is low
+    float lowK = 1.0 - smoothstep(0.25, 0.75, uKeyDir.z);
+    spec += uKeyCol * waterGlint * sh * uGlintK * (0.12 + 0.3 * lowK);
+  } else if (shiny) {
     vec3 hv = normalize(uKeyDir + V);
-    spec += uKeyCol * step(0.965, dot(N, hv)) * sh * (mat == 1 ? 0.9 : 0.6);
+    spec += uKeyCol * step(0.965, dot(N, hv)) * sh * 0.6;
   }
   vec3 pl = vec3(0.0);
   for (int i = 0; i < ${32}; i++) {
@@ -406,10 +462,11 @@ void main() {
     if (mat == 5 || mat == 3) nd = (nd + 0.4) / 1.4;
     float pul = uLC[i].w > 0.0 ? 0.72 + 0.28 * sin(uTime * uMotion * uLC[i].w + L.x * 3.1 + L.y) : 1.0;
     pl += uLC[i].rgb * uPointK * toon(max(nd, 0.0) * att * 1.6) * pul * (1.0 - lo);
-    if (shiny) {
+    if (shiny && mat != 1) {
       vec3 hv = normalize(l + V);
       spec += uLC[i].rgb * step(0.93, dot(N, hv)) * att * 0.8 * pul;
     }
+    if (mat == 1) spec += uLC[i].rgb * waterGlint * att * 0.6 * pul;
   }
   if (fog > 0.5) { pl *= 0.25; spec *= 0.2; emi *= 0.35; }
   vec3 c = A.rgb * (amb + key + pl) + spec + emi;

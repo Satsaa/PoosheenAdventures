@@ -560,7 +560,47 @@ export function objectModels(): ObjSpec[] {
     [(x, y, z) => capsule(x, y, z, 0.5, 0.92, 0.25, 0.5, 0.98, 0.45, 0.04), 0],
     [(x, y, z) => ellip(x, y, z, 0.5, 0.97, 0.56, 0.06, 0.05, 0.1), 1],
   ], { zMax: 0.7, padX: 0, outline: 0.8 }));
+  // open archways in a wall line: a lintel with jambs where the wall ends (mask 1 = west end, 2 = east end)
+  const lintelM: Mat = { ramp: ['#2c2838', '#3f394d', '#554e67', '#6d6582'], bias: 0.4 };
+  for (let mask = 0; mask < 4; mask++) {
+    add('o:arch:' + mask, model([lintelM], [
+      [(x, y, z) => {
+        let d = box(x, y, z, 0.5, 0.5, 0.56, 0.5, 0.1, 0.07);
+        if (mask & 1) d = Math.min(d, box(x, y, z, 0.08, 0.5, 0.3, 0.08, 0.12, 0.3));
+        if (mask & 2) d = Math.min(d, box(x, y, z, 0.92, 0.5, 0.3, 0.08, 0.12, 0.3));
+        return d;
+      }, 0],
+    ], { zMax: 0.68, padX: 0.05 }));
+  }
+  // side-on variants for doors in north-south walls: the face-on model rotated a quarter turn and
+  // mirrored through its door plane, so both faces carry the leaf, sigil, keyhole or bars
+  const PLANE: [RegExp, number][] = [[/^o:gate:(seal|portal)/, 0.6], [/^o:arch:/, 0.5], [/^o:gate:(locked|bossdoor|moon|sun|foes|dark|eye|chasm)|^o:ent:(house|shop|dungeon|sanctum|cave|shrine)/, 0.86]];
+  for (const spec of L.slice()) {
+    const pl = PLANE.find(([re]) => re.test(spec.key));
+    if (!pl) continue;
+    // an opened door seen edge-on: only the two jambs remain, the gap between them is clear floor
+    const opened = /^o:gate:(locked|bossdoor|moon|sun|foes|dark):done$/.test(spec.key);
+    L.push({ key: spec.key + ':side', model: opened ? jambs(spec.key.includes('bossdoor') ? 1.0 : 0.9) : sideOf(spec.model, pl[1]) });
+  }
   return L;
+}
+
+function jambs(h: number): Model {
+  return model([{ ramp: ['#3e3a46', '#615d6c', '#8b8797', '#b9b5c3'], bias: 0.3 }], [
+    [(x, y, z) => Math.min(box(x, y, z, 0.5, 0.09, h / 2, 0.11, 0.09, h / 2, 0.02), box(x, y, z, 0.5, 0.91, h / 2, 0.11, 0.09, h / 2, 0.02)), 0],
+  ], { zMax: h + 0.05, padX: 0.1 });
+}
+
+/** rotate a face-on model a quarter turn about the tile centre, mirrored through its door plane `p0` */
+function sideOf(m: Model, p0: number): Model {
+  // x is squashed 0.45x so the edge-on door is ~2.2x thicker than its face-on leaf: it must read at 2x zoom
+  const map = (x: number, y: number): [number, number] => [y, p0 + Math.abs(x - 0.5) * 0.45];
+  return {
+    ...m,
+    padX: Math.max(m.padX ?? 0.25, 0.1),
+    sdf: (x, y, z) => { const [u, v] = map(x, y); return m.sdf(u, v, z); },
+    mat: (x, y, z) => { const [u, v] = map(x, y); return m.mat(u, v, z); },
+  };
 }
 
 export const DECO_VARIANTS: Record<number, number> = {

@@ -52,6 +52,8 @@ export const GRAPHICS_DEFS: GraphicsDef[] = [
   { key: 'maxPixels', label: 'Max internal megapixels', group: DT, type: 'float', min: 0.3, max: 6, step: 0.1, default: 1.6, help: 'Upper bound on the lit renderer\'s internal resolution, in millions of pixels.', keywords: 'resolution performance cap' },
   { key: 'particles', label: 'Particle density', group: DT, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Fireflies, embers, snow, mist and sparkles.', keywords: 'effects ambient' },
   { key: 'water', label: 'Water animation', group: DT, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'How strongly water, lava and waterfalls move.', keywords: 'waves river flow' },
+  { key: 'waterFoam', label: 'Water foam', group: DT, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Amount of drifting foam streaks on the open sea and of flow streaks on rivers (surf along coasts is always drawn).', keywords: 'whitecaps waves sea river' },
+  { key: 'waterGlint', label: 'Water glints', group: DT, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Sparse sun / moon glints on swell crests, strongest when the light is low.', keywords: 'specular sparkle sea' },
   { key: 'animation', label: 'Creature animation', group: DT, type: 'bool', default: true, help: 'Animate enemies and NPCs (they always stand still with reduced motion).', keywords: 'motion wander enemies' },
   // post
   { key: 'saturation', label: 'Saturation', group: P, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Colour intensity after lighting (1 = each scene\'s own grade).', keywords: 'colour grade vivid' },
@@ -94,7 +96,7 @@ export interface Gfx {
   bloom: number; bloomThreshold: number; bloomRadius: number;
   shadows: 'baked' | 'flat' | 'off'; shadowStrength: number; shadowSoftness: number; terrainShadows: boolean; contactShadows: number;
   detailDistance: number; detailFade: number; dither: boolean; renderScale: number; maxPixels: number;
-  particles: number; water: number; animation: boolean;
+  particles: number; water: number; waterFoam: number; waterGlint: number; animation: boolean;
   saturation: number; contrast: number; vignette: number; fogDarkness: number; fogDesaturation: number;
   pixelSnap: 'world' | 'screen' | 'none'; integerZoom: boolean;
   outlineCreatures: 'off' | 'subtle' | 'strong'; outlineObjects: 'off' | 'subtle' | 'strong'; outlineProps: 'off' | 'subtle' | 'strong';

@@ -730,7 +730,6 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       if (x < -mx || y < -mx || x > W + mx || y > Hh + mx * 1.5) continue;
       const f = fadeOf(o, dt);
       if (f.a <= 0) continue;
-      if (o.kind === 'gate' && o.gate === 'open') continue;
       const done = state.done.has(o.id);
       const z = o.x >= 0 && o.y >= 0 && o.x < d.w && o.y < d.h ? liftT(o.y * d.w + o.x) : 0;
       let act: Actor | null = null;
@@ -805,7 +804,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       const minPri = Math.max(0, (s < 3 ? 4 : s < 6 ? 3 : s < 10 ? 2 : s < 16 ? 1 : 0) + (G.pinDensity < 0.5 ? 1 : G.pinDensity > 1.5 ? -1 : 0));
       const cell = (15 * G.pinSize) / Math.max(0.25, G.pinDensity);
       const occ = new Set<number>();
-      for (const q of vis.filter((v) => v.a > 0.5 && pinPriority(v.o) >= minPri).sort((p, q) => pinPriority(q.o) - pinPriority(p.o))) {
+      for (const q of vis.filter((v) => v.a > 0.5 && v.o.gate !== 'open' && pinPriority(v.o) >= minPri).sort((p, q) => pinPriority(q.o) - pinPriority(p.o))) {
         const key = Math.floor(q.x / cell) * 100003 + Math.floor(q.y / cell);
         if (occ.has(key)) continue;
         occ.add(key);

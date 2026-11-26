@@ -120,16 +120,16 @@ export function groundTile(g: number, v: number): Sprite {
           st = top * 0.62 + (n1 - 0.5) * 1.0 + (n2 - 0.5) * 0.6 + (r > 0.97 ? 1 : 0);
           break;
         case T.WATER:
-          // clear, calm: smooth gradients, a few light sparkles
+          // clear and calm: two close shades in broad blotches (the shader adds slow swells)
           h = 0;
-          st = top * 0.5 + (n1 - 0.5) * 0.9 + (r > 0.97 ? 1 : 0);
+          st = top * 0.5 + (n1 - 0.5) * 0.7;
           break;
         case T.DEEP: {
           // rough: dark, choppy ridges with whitecaps
           const ridge = Math.sin((x * 0.8 + y * 1.3 + n1 * 6) * 1.4);
           h = ridge * 0.01;
           st = top * 0.4 + (n2 - 0.5) * 1.4 + ridge * 0.5;
-          if (ridge > 0.85 && r < 0.45) { s.set(x, y, [200, 220, 235], 0, 0, 1, 0.01, null, MAT.WATER); H[y * N + x] = 0.01; S[y * N + x] = -1; continue; }
+
           break;
         }
         case T.FLOOR: {
@@ -309,10 +309,10 @@ export function edgeMask(dir: number, v: number, foam: boolean): Sprite {
       if (dir === 1) { u = y + 0.5; w = N - (x + 0.5); }
       else if (dir === 2) { u = N - (x + 0.5); w = N - (y + 0.5); }
       else if (dir === 3) { u = N - (y + 0.5); w = x + 0.5; }
-      let inside = w < (foam ? 1.6 : 0.6);
+      let inside = w < (foam ? 1.9 : 0.6);
       for (const [px, py, r] of pts) if (Math.hypot(u - px, w - py) < r) inside = true;
       if (!inside) continue;
-      if (foam) s.set(x, y, hashN(x, y, 7) < 0.25 ? [200, 230, 245] : [232, 246, 255], 0, 0, 1, 0.01, null, MAT.DIFFUSE);
+      if (foam) s.set(x, y, [178, 198, 208], 0, 0, 1, 0.01, null, MAT.FOAM);
       else s.set(x, y, [255, 255, 255], 0, 0, 1, 0, null, 0);
     }
   return s;

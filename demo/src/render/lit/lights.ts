@@ -89,7 +89,8 @@ export function objectLights(objs: { o: MapObject; done: boolean; z: number; alp
   const out: Light[] = [];
   for (const { o, done, z, alpha } of objs) {
     const n0 = out.length;
-    const x = o.x + 0.5, y = o.y + 0.55;
+    const sideOn = o.dir === 'e' || o.dir === 'w';
+    const x = o.x + 0.5, y = sideOn ? o.y + 0.3 : o.y + 0.55;
     switch (o.kind) {
       case 'entrance':
       case 'stairs': {

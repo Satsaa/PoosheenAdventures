@@ -404,7 +404,8 @@ export class LitRenderer {
     const maskData = new Uint8Array(n * 4);
     // B = river flow direction, A = water kind (static; setMask only rewrites R/G)
     const wi = computeWater(dim, meta.ve);
-    for (let i = 0; i < n; i++) { maskData[i * 4 + 2] = wi.flow[i]; maskData[i * 4 + 3] = wi.kind[i]; }
+    // B: river flow code 1..4, or 16 + distance to land for rough (deep) water
+    for (let i = 0; i < n; i++) { maskData[i * 4 + 2] = wi.kind[i] === 2 ? 16 + wi.dist[i] : wi.flow[i]; maskData[i * 4 + 3] = wi.kind[i]; }
     const mask = texture(gl, dim.w, dim.h, { data: maskData });
     const liftData = new Uint8Array(n);
     for (let i = 0; i < n; i++) liftData[i] = dim.ground[i] === T.VOID ? 0 : Math.max(0, Math.min(255, lay.liftPx[i]));
@@ -428,7 +429,8 @@ export class LitRenderer {
     const d = this.prepare(dim, meta);
     const m = d.maskData;
     for (let i = 0, n = dim.w * dim.h; i < n; i++) {
-      m[i * 4] = fogged(i) ? 255 : 0;
+      // open sea far from land is never fogged (it continues seamlessly past the map edge)
+      m[i * 4] = fogged(i) && !(m[i * 4 + 3] === 2 && m[i * 4 + 2] >= 19) ? 255 : 0;
       m[i * 4 + 1] = fresh(i) ? 255 : 0;
     }
     const gl = this.gl;
@@ -714,7 +716,7 @@ export class LitRenderer {
     let nObj = 0;
     if (s >= 4) {
       for (const { o, done, attach, alpha } of f.objs) {
-        const key = objectKey(o, done, this.sheet);
+        const key = objectKey(o, done, this.sheet, f.dim);
         if (!key) continue;
         const frm = fr.get(key)![0];
         const i = o.y * f.dim.w + o.x;
@@ -840,6 +842,8 @@ export class LitRenderer {
     gl.uniform1f(pl.u.uFogDark, G.fogDarkness);
     gl.uniform1f(pl.u.uFogDesat, G.fogDesaturation);
     gl.uniform1f(pl.u.uWaterK, G.water);
+    gl.uniform1f(pl.u.uFoamK, G.waterFoam);
+    gl.uniform1f(pl.u.uGlintK, G.waterGlint);
     gl.uniform3fv(pl.u.uBg0, mood.bg0);
     gl.uniform3fv(pl.u.uBg1, mood.bg1);
     gl.uniform3fv(pl.u.uFogTint, mood.fogTint);

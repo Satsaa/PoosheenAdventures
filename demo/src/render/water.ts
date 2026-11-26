@@ -12,6 +12,28 @@ const DIR_CODE: Record<string, number> = { n: 1, e: 2, s: 3, w: 4 };
 export interface WaterInfo {
   kind: Uint8Array;
   flow: Uint8Array;
+  /** deep water: tiles to the nearest land (capped at 15); open sea gets darker and calmer with it */
+  dist: Uint8Array;
+}
+
+/** distance (in tiles, capped) from each DEEP tile to the nearest tile that is not water */
+function seaDistance(dim: Dimension): Uint8Array {
+  const { w, h, ground } = dim;
+  const n = w * h;
+  const dist = new Uint8Array(n).fill(255);
+  const q: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const g = ground[i];
+    if (g !== T.DEEP && g !== T.WATER && g !== T.VOID) { dist[i] = 0; q.push(i); }
+  }
+  for (let k = 0; k < q.length; k++) {
+    const i = q[k], x = i % w, y = (i / w) | 0, d = dist[i] + 1;
+    if (d > 15) continue;
+    for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1])
+      if (j >= 0 && dist[j] > d) { dist[j] = d; q.push(j); }
+  }
+  for (let i = 0; i < n; i++) if (dist[i] > 15) dist[i] = 15;
+  return dist;
 }
 
 export function isWaterfall(o: { kind: string; gate?: string }): boolean {
@@ -34,7 +56,7 @@ export function computeWater(dim: Dimension, ve: Float32Array): WaterInfo {
         if (f >= 1 && f <= 4 && g === T.WATER) { kind[i] = WK.RIVER; flow[i] = f; } else if (g === T.WATER) kind[i] = WK.CALM;
       }
     }
-    return { kind, flow };
+    return { kind, flow, dist: seaDistance(dim) };
   }
   const isW = (i: number) => ground[i] === T.WATER;
   for (let i = 0; i < n; i++) if (ground[i] === T.DEEP) kind[i] = WK.ROUGH;
@@ -116,5 +138,5 @@ export function computeWater(dim: Dimension, ve: Float32Array): WaterInfo {
       flow[i] = d;
     }
   }
-  return { kind, flow };
+  return { kind, flow, dist: seaDistance(dim) };
 }

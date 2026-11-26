@@ -36,6 +36,8 @@ export const MAT = {
   TINT: 6,
   /** falling water: animated streaks scrolling down */
   FALL: 7,
+  /** surf foam: breathes in the shader */
+  FOAM: 8,
 } as const;
 
 export interface Frame {
