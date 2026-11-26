@@ -188,3 +188,82 @@ export function buildOutline(src: Dimension): Path2D {
   return p;
 }
 
+
+// ------------------------------------------------------------------ the shape of raised ground
+// (the CPU twin of TERRAIN_SHAPE in lit/shaders.ts: keep the two in step)
+
+/** (sBase, sK, eN, eEW) in px: see TERRAIN_SHAPE. */
+export type WallPattern = [number, number, number, number];
+export interface WallPatterns { main: WallPattern; lip: WallPattern }
+
+/**
+ * Three ways a wall shows its sides:
+ *  1 "room": all four faces about equally wide (dungeons, caves, the underworld);
+ *  2 "outdoor": the face that looks south is tall, the other three are narrow;
+ *  3 "lip": the face that looks south as in the dimension's own pattern, the others a thin bevel.
+ * Every dimension has pattern 1 or 2, and any tile can ask for the lip variant instead.
+ */
+export function wallPatterns(dim: Dimension): WallPatterns {
+  const room = dim.kind === 'interior' || dim.kind === 'underworld';
+  const s = wallShape;
+  const main: WallPattern = room ? [s.room, 1, s.room, s.room] : [s.south, 0, s.north, s.side];
+  return { main, lip: [main[0], main[1], s.lip, s.lip] };
+}
+
+/** Face sizes in px (a tile is 16); set from the graphics settings. */
+export interface WallShape { room: number; south: number; north: number; side: number; lip: number }
+let wallShape: WallShape = { room: 14, south: 10, north: 6, side: 7, lip: 1.5 };
+/** Returns true if the shape changed, in which case layouts and terrain chunks must be rebuilt. */
+export function setWallShape(next: WallShape): boolean {
+  const same = (Object.keys(next) as (keyof WallShape)[]).every((k) => wallShape[k] === next[k]);
+  wallShape = { ...next };
+  return !same;
+}
+
+export const KIND = { GROUND: 0, VOID: 1, LIQUID: 2, LIP: 4, SLOPED: 8 } as const;
+
+/** Per tile: what it is for the height model, and whether it has lower ground within reach. */
+export function tileKinds(dim: Dimension, liftPx: ArrayLike<number>): Uint8Array {
+  const { w, h, ground } = dim, n = w * h;
+  const kind = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const g = ground[i];
+    kind[i] = g === T.VOID ? KIND.VOID : g === T.WATER || g === T.DEEP || g === T.LAVA ? KIND.LIQUID : dim.lip?.[i] ? KIND.LIP : KIND.GROUND;
+  }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    if (kind[i] & 3) continue;
+    let sloped = false;
+    for (let dy = -2; dy <= 2 && !sloped; dy++) for (let dx = -2; dx <= 2; dx++) {
+      const xx = x + dx, yy = y + dy;
+      if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+      const j = yy * w + xx;
+      if ((kind[j] & 3) !== KIND.VOID && liftPx[j] < liftPx[i]) { sloped = true; break; }
+    }
+    if (sloped) kind[i] |= KIND.SLOPED;
+  }
+  return kind;
+}
+
+/** Surface lift in px at point (px, py) (px within the tile, 0..16) of tile (x, y). */
+export function surfacePx(dim: Dimension, liftPx: ArrayLike<number>, kind: Uint8Array, pat: WallPatterns, x: number, y: number, px: number, py: number): number {
+  const { w, h } = dim, i = y * w + x;
+  const L = liftPx[i];
+  if (!(kind[i] & KIND.SLOPED)) return L;
+  const lip = (kind[i] & KIND.LIP) !== 0;
+  let out = L;
+  for (let j = -2; j <= 2; j++) for (let k = -2; k <= 2; k++) {
+    if (!j && !k) continue;
+    const xx = x + k, yy = y + j;
+    if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+    const q = yy * w + xx, kq = kind[q] & 3;
+    if (kq === KIND.VOID || liftPx[q] >= L) continue;
+    const dL = L - liftPx[q];
+    const W = lip || kq === KIND.LIQUID ? pat.lip : pat.main;
+    const gx = Math.max(k * 16 - px, px - (k * 16 + 16), 0), gy = Math.max(j * 16 - py, py - (j * 16 + 16), 0);
+    const rx = W[3], ry = Math.min(32, j > 0 ? Math.max(0, W[0] - W[1] * dL) : W[2] + dL);
+    const dx = gx <= 0 ? 0 : rx < 0.25 ? 9 : gx / rx, dy = gy <= 0 ? 0 : ry < 0.25 ? 9 : gy / ry;
+    out = Math.min(out, liftPx[q] + dL * Math.min(Math.max(dx, dy), 1));
+  }
+  return out;
+}

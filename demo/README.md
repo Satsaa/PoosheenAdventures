@@ -124,6 +124,29 @@ Open `dist/index.html` in a browser. No server needed.
 - The town places houses on lots: a lattice of door tiles around the square, nearest first, so
   houses stand in rows and every door is on a street. A few houses can be entered.
 
+## Walls seen from every side
+
+The renderer draws a point at height z that much further up the screen. A box-shaped wall on
+the near side of a room therefore hides its own face and covers the floor behind it. So raised
+ground is not a box: toward lower ground it slopes, with a run that depends on the side
+(`TERRAIN_SHAPE` in `render/lit/shaders.ts`, `surfacePx` in `render/terrain.ts`).
+
+- Pattern 1, rooms (interiors and the underworld): runs chosen so all four faces are about
+  equally wide on screen.
+- Pattern 2, outdoors (overworld, sky, castle walls): the face that looks south is tall, the
+  other three are narrow.
+- Pattern 3, lip: the south face as in the dimension's own pattern, the others a thin bevel.
+  `Dimension.lip` marks tiles that use it (rims of trees and rocks, so their props stand on
+  level ground); steps down to water use it too.
+
+Nothing is flat: the slope is real geometry in the G-buffer (height and normal per pixel), and
+the height map that sun and lamp shadows are cast over is built from the same function, so
+lighting and picture agree. The face sizes are graphics settings ("Graphics: walls").
+
+What the generator guarantees for this: interior walls are two tiles thick, the way out of a
+room is a real gap in its south wall, and a height step never lies between two walkable tiles
+except at a stairs object (a ledge inside a room has a solid edge row with a gap for the stairs).
+
 ## Settings
 
 `generateWorld(seed, settings?)` takes a partial `GenSettings`; anything missing falls back to

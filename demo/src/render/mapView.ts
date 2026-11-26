@@ -4,7 +4,7 @@
 import type { World, Dimension, DimId, MapObject, LocId } from '../core/types';
 import { D, T } from '../core/types';
 import { hashStr } from '../core/rng';
-import { buildDimRender, buildOutline, type DimRender } from './terrain';
+import { buildDimRender, buildOutline, setWallShape, type DimRender } from './terrain';
 import { drawPin, npcColor, pinRank, pinColor } from './objects';
 import { Particles } from './particles';
 import { isWaterfall } from './water';
@@ -108,6 +108,8 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
 
   // ------------------------------------------------------------ geometry (tile lift = whole 16 px-per-tile pixels)
   const liftT = (i: number) => lay!.liftPx[i] / 16;
+  /** lift of what stands on the tile (its middle), which on a sloped side is lower than the tile's top */
+  const standT = (i: number) => (lay!.standPx ?? lay!.liftPx)[i] / 16;
   const voidLiftT = () => lay!.voidLiftPx / 16;
   const maxLiftT = () => lay!.maxLiftPx / 16;
   function faceT(i: number): number {
@@ -139,7 +141,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
 
   function tileElevY(x: number, y: number): number {
     if (!dim || !lay || x < 0 || y < 0 || x >= dim.w || y >= dim.h) return 0;
-    return dim.ground[y * dim.w + x] === T.VOID ? 0 : liftT(y * dim.w + x);
+    return dim.ground[y * dim.w + x] === T.VOID ? 0 : standT(y * dim.w + x);
   }
 
   /** screen -> tile, accounting for elevation (southernmost covering tile wins). */
@@ -304,6 +306,11 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
 
   function setGraphics(g: GraphicsSettings) {
     G = toGfx(g);
+    if (setWallShape({ room: G.wallRoom, south: G.wallSouth, north: G.wallNorth, side: G.wallSide, lip: G.wallLip })) {
+      // walls changed shape: what stands on them moves, and the terrain is composed again
+      if (dim && dr) lay = layout(dim, dr.ve, dr.voidElev);
+      lit?.resetTerrain();
+    }
     particles.density = G.particles;
     particles.cap = Math.round(300 * Math.min(1.5, G.particles));
     start();
@@ -731,12 +738,12 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       const f = fadeOf(o, dt);
       if (f.a <= 0) continue;
       const done = state.done.has(o.id);
-      let z = o.x >= 0 && o.y >= 0 && o.x < d.w && o.y < d.h ? liftT(o.y * d.w + o.x) : 0;
+      let z = o.x >= 0 && o.y >= 0 && o.x < d.w && o.y < d.h ? standT(o.y * d.w + o.x) : 0;
       let act: Actor | null = null;
       if (isActorObj(o)) {
         act = actorFor(o, f.a);
         actors.push(act);
-        z = liftT(act.tile); // the ground it is over now, not where it started
+        z = standT(act.tile); // the ground it is over now, not where it started
         x = sx(act.x + 0.5);
         y = sy(act.y + 0.5 - z);
       } else {

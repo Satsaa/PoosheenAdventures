@@ -22,7 +22,8 @@ import { npcColor } from '../objects';
 import { type Overview, type OverviewColors, type RGB, buildOverview, overviewPx } from '../overview';
 import { hexRgb } from '../util';
 import { computeWater } from '../water';
-import { FLOATS, InstBuf, type Layout, buildStatic, layout, objectKey, staticFeatures, wallStyle } from './compose';
+import { FLOATS, InstBuf, type Layout, buildStatic, layout, objectKey, standOf, staticFeatures, wallStyle } from './compose';
+import type { WallPatterns } from '../terrain';
 import { type Prog, delFramebuffer, delTexture, framebuffer, glStats, program, texture } from './gl';
 import { type Light, LightGrid, type Mood, type Sun, moodFor, staticLights } from './lights';
 import { CHAR_H, CHAR_W, charAtlas } from '../bake/charAtlas';
@@ -354,6 +355,11 @@ export class LitRenderer {
     this.freeDims();
   }
 
+  /** The shape of the terrain changed (wall face sizes): every composed chunk is stale. */
+  resetTerrain() {
+    this.freeDims();
+  }
+
   private freeChunk(c: Chunk) {
     if (!this.lost) {
       c.tex.forEach((t) => delTexture(this.gl, t));
@@ -407,10 +413,14 @@ export class LitRenderer {
     // B: river flow code 1..4, or 16 + distance to land for rough (deep) water
     for (let i = 0; i < n; i++) { maskData[i * 4 + 2] = wi.kind[i] === 2 ? 16 + wi.dist[i] : wi.flow[i]; maskData[i * 4 + 3] = wi.kind[i]; }
     const mask = texture(gl, dim.w, dim.h, { data: maskData });
-    const liftData = new Uint8Array(n);
-    for (let i = 0; i < n; i++) liftData[i] = dim.ground[i] === T.VOID ? 0 : Math.max(0, Math.min(255, lay.liftPx[i]));
+    // R = lift in px, G = what the tile is for the height model (see TERRAIN_SHAPE)
+    const liftData = new Uint8Array(n * 2);
+    for (let i = 0; i < n; i++) {
+      liftData[i * 2] = dim.ground[i] === T.VOID ? 0 : Math.max(0, Math.min(255, lay.liftPx[i]));
+      liftData[i * 2 + 1] = lay.kind![i];
+    }
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    const liftTex = texture(gl, dim.w, dim.h, { internal: gl.R8, format: gl.RED, data: liftData });
+    const liftTex = texture(gl, dim.w, dim.h, { internal: gl.RG8, format: gl.RG, data: liftData });
     d = {
       liftTex, props: buildPropGrid(dim),
       id: dim.id, dim, lay, cols: Math.ceil(lay.W / CPX), rows: Math.ceil(lay.H / CPX), ov, ovTex,
@@ -439,7 +449,7 @@ export class LitRenderer {
   }
 
   private drawSprites(inst: InstBuf, k: number, ox: number, oy: number, tw: number, th: number,
-    tex: WebGLTexture[] = this.atlas, occ: { lift: WebGLTexture } | null = null, fade = 1) {
+    tex: WebGLTexture[] = this.atlas, occ: { lift: WebGLTexture } | null = null, fade = 1, shape: { lift: WebGLTexture; walls: WallPatterns } | null = null) {
     if (!inst.n) return;
     const gl = this.gl, p = this.pSprite;
     gl.useProgram(p.p);
@@ -461,6 +471,14 @@ export class LitRenderer {
       gl.bindTexture(gl.TEXTURE_2D, occ.lift);
       gl.uniform1i(p.u.uOcc, 3);
       gl.uniform1i(p.u.uLift, 4);
+    }
+    if (shape) {
+      // static terrain: the per-tile lifts and the wall pattern shape the sloped sides
+      gl.activeTexture(gl.TEXTURE4);
+      gl.bindTexture(gl.TEXTURE_2D, shape.lift);
+      gl.uniform1i(p.u.uLift, 4);
+      gl.uniform4fv(p.u.uWallP, shape.walls.main);
+      gl.uniform4fv(p.u.uWallL, shape.walls.lip);
     }
     gl.uniform2f(p.u.uOff, ox, oy);
     gl.uniform1f(p.u.uK, k);
@@ -501,7 +519,7 @@ export class LitRenderer {
     gl.disable(gl.BLEND);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    this.drawSprites(this.chunkInst, 1, -cx * CPX, -cy * CPX, CPX, CPX);
+    this.drawSprites(this.chunkInst, 1, -cx * CPX, -cy * CPX, CPX, CPX, this.atlas, null, 1, { lift: d.liftTex, walls: lay.walls! });
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     const c: Chunk = { dim: d.id, cx, cy, tex, fbo, lastUse: performance.now() };
     d.chunks.set(cx + cy * 4096, c);
@@ -706,7 +724,7 @@ export class LitRenderer {
       forProps(d.props, f.dim, px0, py0, px1, py1, (i) => {
         const look = propLook(f.dim, d.props, i, this.sheet, this.seed);
         if (!look) return;
-        const x = i % W, y = (i / W) | 0, L = lay.liftPx[i], fm = look.frame;
+        const x = i % W, y = (i / W) | 0, L = standOf(lay, i), fm = look.frame;
         if (fade > 0 && x >= wx0 && x <= wx1 && y >= wy0 && y <= wy1)
           pi.push(x * TILE_PX - fm.ox, lay.top + y * TILE_PX - L - fm.oy, fm.w, fm.h, fm.x, fm.y, -1, -1, L / TILE_PX, x, y, 2048, look.r, look.g, look.b, look.windows ? night * 1.2 : 1);
         if (shadowsOn && x >= cr.x0 && x <= cr.x1 && y >= cr.y0 && y <= cr.y1) pushCaster(ci, fm, x, y, L / TILE_PX, false);
@@ -719,7 +737,7 @@ export class LitRenderer {
         if (!key) continue;
         const frm = fr.get(key)![0];
         const i = o.y * f.dim.w + o.x;
-        const L = lay.liftPx[i] ?? 0;
+        const L = standOf(lay, i);
         const tint = o.kind === 'gate' && o.gate === 'guard' ? [0.85, 0.45, 0.2] : [1, 1, 1];
         const dy = attach && wallStyle(o, key) ? -13 : 0;
         const dx = o.kind === 'gate' && o.gate === 'guard' && done ? 9 : 0;
@@ -734,7 +752,7 @@ export class LitRenderer {
         if (!cf) { ca.request(a.kind); continue; }
         const frm = cf.frames[Math.floor(a.at * cf.fps) % cf.frames.length];
         const flip = a.dir === 'w';
-        const L = lay.liftPx[a.tile] ?? 0;
+        const L = standOf(lay, a.tile);
         const tx = a.tile % f.dim.w, ty = (a.tile / f.dim.w) | 0;
         if (fade > 0) ai.push(Math.round(a.x * TILE_PX) - frm.ox, lay.top + Math.round(a.y * TILE_PX) - L - frm.oy, frm.w, frm.h, frm.x, frm.y, -2, a.alpha, L / TILE_PX, tx, ty, 64 | 512 | (flip ? 128 : 0), a.tint[0], a.tint[1], a.tint[2], a.e);
         if (shadowsOn && a.alpha > 0.5) pushCaster(aci, frm, a.x, a.y, L / TILE_PX, flip);
@@ -762,6 +780,8 @@ export class LitRenderer {
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, d.liftTex);
       gl.uniform1i(pt.u.uLift, 0);
+      gl.uniform4fv(pt.u.uWallP, lay.walls!.main);
+      gl.uniform4fv(pt.u.uWallL, lay.walls!.lip);
       gl.uniform2f(pt.u.uOrigin, cr.x0, cr.y0);
       gl.uniform1f(pt.u.uR, castR);
       gl.uniform2i(pt.u.uDim, f.dim.w, f.dim.h);

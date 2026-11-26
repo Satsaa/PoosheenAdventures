@@ -14,6 +14,63 @@ void main() {
   gl_Position = vec4(p, 0.0, 1.0);
 }`;
 
+// ---------------------------------------------------------------- the shape of raised ground
+// Walls and cliffs are not boxes: toward lower ground they slope, with a run that depends on the
+// side. Under this renderer's projection (a point at height z is drawn z further up the screen) a
+// slope that rises away from the viewer shows a long face, one that rises toward the viewer a short
+// one, and with the right runs every side of a room shows its wall. The same function shapes the
+// drawn terrain and the height map that shadows are cast over, so light and picture agree.
+//   uLift: R = lift of the tile in px, G = kind (0 ground, 1 void, 2 liquid; +4 lip; +8 has slopes)
+//   uWallP / uWallL: the pattern and its "lip" variant: (sBase, sK, eN, eEW) in px, where the run
+//   toward lower ground to the south is max(0, sBase - sK * dL), to the north eN + dL, sideways eEW.
+const TERRAIN_SHAPE = `
+uniform sampler2D uLift;
+uniform vec4 uWallP, uWallL;
+float nbL[25];
+float nbK[25];
+void loadNb(ivec2 t) {
+  ivec2 sz = textureSize(uLift, 0);
+  for (int j = 0; j < 5; j++) for (int i = 0; i < 5; i++) {
+    ivec2 q = t + ivec2(i - 2, j - 2);
+    float L = 0.0, K = 1.0;
+    if (q.x >= 0 && q.y >= 0 && q.x < sz.x && q.y < sz.y) { vec4 v = texelFetch(uLift, q, 0); L = v.r * 255.0; K = floor(v.g * 255.0 + 0.5); }
+    nbL[j * 5 + i] = L; nbK[j * 5 + i] = K;
+  }
+}
+// Surface lift (px) at point p (px, relative to the centre tile's corner) of the loaded tile.
+// dir: 0 top, 1 faces south, 2 faces north, 3 faces west, 4 faces east; lowL: the ground it rises from.
+float terrH(vec2 p, out int dir, out float lowL, out float run) {
+  float L = nbL[12], K = nbK[12];
+  dir = 0; lowL = L; run = 0.0;
+  if (mod(K, 4.0) > 0.5) return L;
+  bool lip = mod(K, 8.0) >= 3.5;
+  float h = L;
+  for (int j = 0; j < 5; j++) for (int i = 0; i < 5; i++) {
+    int n = j * 5 + i;
+    if (n == 12) continue;
+    float kq = mod(nbK[n], 4.0);
+    if (kq > 0.5 && kq < 1.5) continue;
+    float Lq = nbL[n];
+    if (Lq >= L) continue;
+    float dL = L - Lq;
+    vec4 W = (lip || kq > 1.5) ? uWallL : uWallP;
+    float ox = float(i - 2) * 16.0, oy = float(j - 2) * 16.0;
+    float gx = max(max(ox - p.x, p.x - (ox + 16.0)), 0.0);
+    float gy = max(max(oy - p.y, p.y - (oy + 16.0)), 0.0);
+    float rx = W.w;
+    float ry = min(32.0, j > 2 ? max(0.0, W.x - W.y * dL) : W.z + dL);
+    float dx = gx <= 0.0 ? 0.0 : (rx < 0.25 ? 9.0 : gx / rx);
+    float dy = gy <= 0.0 ? 0.0 : (ry < 0.25 ? 9.0 : gy / ry);
+    float hq = Lq + dL * min(max(dx, dy), 1.0);
+    if (hq < h) {
+      h = hq; lowL = Lq;
+      if (dx >= dy) { dir = i < 2 ? 3 : 4; run = rx; } else { dir = j > 2 ? 1 : 2; run = ry; }
+    }
+  }
+  return h;
+}
+`;
+
 // ---------------------------------------------------------------- sprite instances -> G-buffer
 export const SPRITE_VS = `#version 300 es
 layout(location=0) in vec2 aCorner;
@@ -38,8 +95,9 @@ void main() {
 
 export const SPRITE_FS = HDR + `
 uniform sampler2D uA, uN, uE;
-uniform sampler2D uOcc, uLift;   // terrain tile ids of the screen (copied), per-tile lift in px
+uniform sampler2D uOcc;          // terrain tile ids of the screen (copied)
 uniform int uOccOn;
+` + TERRAIN_SHAPE + `
 uniform float uFade;             // detail fade (dithered)
 uniform float uDepthOn;
 uniform vec3 uOutline;          // rim strength: creatures, objects, props
@@ -55,8 +113,72 @@ layout(location=3) out vec4 oT;
 void main() {
   ivec2 lp = clamp(ivec2(floor(vLocal)), ivec2(0), ivec2(vSize) - 1);
   int flags = int(vInst.w + 0.5);
+  if (vSrc.z < -2.5) {
+    // ---- the sloped sides of raised ground. The instance covers everything this tile's surface can
+    // project to; for each pixel, walk down from the tile's top until the sight line meets the surface.
+    loadNb(ivec2(int(vInst.y + 0.5), int(vInst.z + 0.5)));
+    float L = nbL[12], lowest = vTint.r;
+    float ys = float(lp.y) + 0.5 - L, px = float(lp.x) + 0.5;
+    bool southOpen = mod(nbK[17], 4.0) < 0.5 || mod(nbK[17], 4.0) > 1.5;
+    int dir = 0; float lowL = L, run = 0.0, hh = -99.0;
+    bool wasSouth = false, was = false;
+    for (int s2 = 0; s2 <= 128; s2++) {
+      float h2 = L - float(s2) * 0.5;
+      if (h2 < lowest - 0.5) break;
+      float py = ys + h2;
+      if (py < 0.0) break;
+      if (py >= 16.0) { wasSouth = true; continue; }
+      int d2; float l2, r2;
+      float H = terrH(vec2(px, py), d2, l2, r2);
+      if (H >= h2 - 0.3) {
+        if (!was && !wasSouth) break;                       // the top itself: its own sprite draws that
+        if (!was) {                                         // came in over the south edge: an upright face
+          if (!southOpen || nbL[17] >= L) break;
+          d2 = 1; l2 = nbL[17]; r2 = 0.0;
+          if (h2 < l2) break;
+        }
+        hh = h2; dir = d2 == 0 ? 1 : d2; lowL = l2; run = r2;
+        break;
+      }
+      was = true;
+    }
+    if (hh < -90.0) discard;
+    float dL = max(L - lowL, 0.01);
+    float frac = clamp((hh - lowL) / dL, 0.0, 1.0);
+    // how long the face is on screen, to lay the texture down it at an even scale
+    float ext = dir == 1 ? run + dL : dir == 2 ? max(run - dL, 3.0) : max(run, dL);
+    float down = (1.0 - frac) * ext;
+    float py2 = ys + hh;
+    int u = int(dir <= 2 ? px : py2);
+    int v = int(down);
+    if (v >= 48) v = 4 + (v - 4) % 44;
+    ivec2 st2 = ivec2(vSrc.xy) + ivec2(clamp(u, 0, 15), v);
+    vec4 a2 = texelFetch(uA, st2, 0);
+    vec4 n2 = texelFetch(uN, st2, 0);
+    vec4 e2 = texelFetch(uE, st2, 0);
+    vec3 alb2 = a2.rgb;
+    if (down < 1.5) alb2 = min(alb2 * 1.35 + 0.06, 1.0);          // the coping along the top edge
+    else if (down < 2.5 && ext > 6.0) alb2 *= 0.7;
+    if (frac * ext < 1.5) alb2 *= 0.72;                           // where it meets the floor
+    vec3 pn = dir == 1 ? vec3(0.0, dL, run) : dir == 2 ? vec3(0.0, -dL, run) : dir == 3 ? vec3(-dL, 0.0, run) : vec3(dL, 0.0, run);
+    vec3 det = (n2.rgb * 2.0 - 1.0) - vec3(0.0, 1.0, 0.0);
+    det = dir == 1 ? det : dir == 2 ? vec3(-det.x, -det.y, det.z) : dir == 3 ? vec3(-det.y, det.x, det.z) : vec3(det.y, -det.x, det.z);
+    vec3 nn2 = normalize(normalize(pn) + det * 0.6);
+    oA = vec4(alb2, 1.0);
+    oN = vec4(nn2 * 0.5 + 0.5, clamp((hh / 16.0 + 1.0) * 40.0 / 255.0, 0.0, 1.0));
+    oE = vec4(e2.rgb, e2.a);
+    int tx2 = int(vInst.y + 0.5), ty2 = int(vInst.z + 0.5);
+    oT = vec4(float(tx2 & 255), float(ty2 & 255), float((tx2 >> 8) + (ty2 >> 8) * 16), 0.0) / 255.0;
+    return;
+  }
   bool face = (flags & 1) != 0;
   bool flip = (flags & 128) != 0;
+  if ((flags & 16) != 0 && !face) {
+    // the top of a tile with sloped sides: only where the surface really is at the top
+    loadNb(ivec2(int(vInst.y + 0.5), int(vInst.z + 0.5)));
+    int d3; float l3, r3;
+    if (terrH(vec2(lp) + 0.5, d3, l3, r3) < nbL[12] - 0.3) discard;
+  }
   ivec2 lq = flip ? ivec2(int(vSize.x) - 1 - lp.x, lp.y) : lp;
   ivec2 st = ivec2(vSrc.xy) + lq;
   if (face && lp.y >= 48) st = ivec2(vSrc.xy) + ivec2(lp.x, 4 + (lp.y - 4) % 44);
@@ -183,8 +305,7 @@ void main() {
   o = vec4(clamp((vInst.x + hh) * 40.0 / 255.0, 0.0, 1.0), 0.0, 0.0, 0.0);
 }`;
 
-export const TERRAIN_H_FS = HDR + `
-uniform sampler2D uLift;
+export const TERRAIN_H_FS = HDR + TERRAIN_SHAPE + `
 uniform vec2 uOrigin;   // world tile of caster map pixel (0,0)
 uniform float uR;       // caster px per tile
 uniform ivec2 uDim;
@@ -194,22 +315,16 @@ void main() {
   ivec2 t = ivec2(floor(wt));
   float L = 0.0;
   if (t.x >= 0 && t.y >= 0 && t.x < uDim.x && t.y < uDim.y) {
-    L = texelFetch(uLift, t, 0).r * 255.0 / 16.0;
-    // rounded outer corners (like the drawn tops), so shadows have no square notch
-    vec2 f = fract(wt);
-    float r = 3.0 / 16.0, me = L * 16.0 / 255.0;
-    for (int c = 0; c < 4; c++) {
-      int sx = (c == 0 || c == 3) ? -1 : 1, sy = c <= 1 ? -1 : 1;
-      vec2 q = vec2(sx < 0 ? f.x : 1.0 - f.x, sy < 0 ? f.y : 1.0 - f.y);
-      if (q.x >= r || q.y >= r) continue;
-      float a = texelFetch(uLift, clamp(t + ivec2(0, sy), ivec2(0), uDim - 1), 0).r;
-      float b = texelFetch(uLift, clamp(t + ivec2(sx, 0), ivec2(0), uDim - 1), 0).r;
-      float d = texelFetch(uLift, clamp(t + ivec2(sx, sy), ivec2(0), uDim - 1), 0).r;
-      if (a < me && b < me && d < me && length(vec2(r) - q) > r) L = max(a, b) * 255.0 / 16.0;
+    vec4 c = texelFetch(uLift, t, 0);
+    L = c.r * 255.0;
+    // only tiles that have slopes need their neighbourhood
+    if (floor(c.g * 255.0 + 0.5) >= 7.5) {
+      loadNb(t);
+      int d; float l, r;
+      L = terrH(fract(wt) * 16.0, d, l, r);
     }
   }
-  // the tile surface is lifted: in ground (x, y) it occupies its own cell
-  o = vec4(0.0, clamp(L * 40.0 / 255.0, 0.0, 1.0), 0.0, 0.0);
+  o = vec4(0.0, clamp(L / 16.0 * 40.0 / 255.0, 0.0, 1.0), 0.0, 0.0);
 }`;
 
 // ---------------------------------------------------------------- static terrain layers (overview or chunk) -> screen G-buffer

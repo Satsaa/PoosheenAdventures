@@ -215,6 +215,11 @@ export interface Dimension {
   deco: Uint8Array; // D.*
   elev: Int8Array; // height level; a tile renders elev steps higher, with wall faces below
   solid: Uint8Array; // 1 = not walkable
+  /**
+   * 1 = this raised tile shows only a thin bevel on its west, east and north sides instead of a
+   * wall face (low walls, parapets, kerbs). Its south face is drawn as usual.
+   */
+  lip?: Uint8Array;
   /** which way river water flows on each tile: 0 = still, 1 = north, 2 = east, 3 = south, 4 = west */
   flow?: Uint8Array;
   region: Int16Array; // index into regions, -1 = none

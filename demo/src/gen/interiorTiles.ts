@@ -28,6 +28,9 @@ export interface InteriorTiles {
 
 interface Rect { x0: number; y0: number; x1: number; y1: number }
 
+/** wall thickness in tiles */
+const WT = 2;
+
 export function realiseInterior(bp: InteriorBP, seed: number): InteriorTiles {
   const rng = new Rng(childSeed(seed, bp.id));
   const st = STYLE[bp.style] ?? STYLE.dungeon;
@@ -38,10 +41,12 @@ export function realiseInterior(bp: InteriorBP, seed: number): InteriorTiles {
   const grid = new Rng(childSeed(seed, 'grid' + (bp.group ?? bp.id)));
   const colW = Array.from({ length: bp.gw }, () => (dungeon ? grid.range(7, 12) : 10));
   const rowH = Array.from({ length: bp.gh }, () => (dungeon ? grid.range(6, 9) : 8));
+  //    Walls are WT tiles thick: every side of a room shows its wall as a face that leans away
+  //    from the floor, and a wall needs the depth for a face on either side of it.
   const colX: number[] = [], rowY: number[] = [];
-  let w = 1, h = 1;
-  for (const c of colW) { colX.push(w); w += c + 1; }
-  for (const r of rowH) { rowY.push(h); h += r + 1; }
+  let w = WT, h = WT;
+  for (const c of colW) { colX.push(w); w += c + WT; }
+  for (const r of rowH) { rowY.push(h); h += r + WT; }
   const n = w * h;
   const dim: Dimension = {
     id: bp.id, name: bp.name, kind: 'interior', w, h, sw: 12, sh: 10,
@@ -66,7 +71,7 @@ export function realiseInterior(bp: InteriorBP, seed: number): InteriorTiles {
     const X = colX[cx], Y = rowY[cy], cw = colW[cx], ch = rowH[cy];
     const E = elevOf(ri);
     // (a wall shared with a higher room keeps the higher top)
-    for (let y = Y - 1; y <= Y + ch; y++) for (let x = X - 1; x <= X + cw; x++) { const i = at(x, y), was = dim.ground[i] === st.wall ? dim.elev[i] : 0; wall(i, E); dim.elev[i] = Math.max(dim.elev[i], was); dim.region[i] = ri; }
+    for (let y = Y - WT; y < Y + ch + WT; y++) for (let x = X - WT; x < X + cw + WT; x++) { const i = at(x, y), was = dim.ground[i] === st.wall ? dim.elev[i] : 0; wall(i, E); dim.elev[i] = Math.max(dim.elev[i], was); dim.region[i] = ri; }
     const inset = () => (dungeon && !room.far && !stairRooms.has(ri) && rng.chance(0.35) ? rng.range(1, 2) : 0);
     let l = inset(), r = inset(), t = inset(), b = inset();
     if (cw - l - r < 5) { l = 0; r = 0; }
@@ -123,7 +128,8 @@ export function realiseInterior(bp: InteriorBP, seed: number): InteriorTiles {
     const R = rects[ri], x = (R.x0 + R.x1) >> 1, y = R.y1;
     taken.add(at(x, y));
     taken.add(at(x, y - 1));
-    dim.ground[at(x, y + 1)] = T.PATH;
+    // the doorway: a gap through the whole south wall, at floor level (not walkable: the door object leads out)
+    for (let yy = y + 1; yy < h; yy++) { const i = at(x, yy); dim.ground[i] = T.PATH; dim.elev[i] = elevOf(ri); }
     return { x, y };
   };
   const exit = bp.floor ? { x: -1, y: -1 } : wayOut(bp.entryRoom);
@@ -178,19 +184,24 @@ export function realiseInterior(bp: InteriorBP, seed: number): InteriorTiles {
           dim.ground[i] = bp.lava ? T.LAVA : kind === 'pool' ? T.WATER : T.VOID;
         }
       } else if (kind === 'ledge') {
-        // the back of the room is a ledge one step up, with stairs in the middle. Only where no
-        // door or stair comes in at that height, so every passage still meets level floor.
-        const rows = [R.y0, R.y0 + 1, R.y0 + 2];
+        // the back of the room is a ledge one step up. Its edge is a row that cannot be walked
+        // (a height step never lies between two walkable tiles) with a gap for the stairs. Only
+        // where no door or stair comes in at that height, so every passage still meets level floor.
+        const rows = [R.y0, R.y0 + 1, R.y0 + 2, R.y0 + 3];
         let clear = true;
         for (const y of rows) for (let x = R.x0; x <= R.x1; x++) if (taken.has(at(x, y))) clear = false;
         if (clear) {
-          const E = elevOf(ri), sx = rng.range(R.x0 + 1, R.x1 - 1);
-          for (const y of rows.slice(0, 2)) for (let x = R.x0; x <= R.x1; x++) dim.elev[at(x, y)] = E + 1;
+          const E = elevOf(ri), sx = rng.range(R.x0 + 1, R.x1 - 1), edge = R.y0 + 2;
+          for (let y = R.y0; y <= edge; y++) for (let x = R.x0; x <= R.x1; x++) dim.elev[at(x, y)] = E + 1;
+          for (let x = R.x0; x <= R.x1; x++) { dim.solid[at(x, edge)] = 1; taken.add(at(x, edge)); }
+          // the stairs: a walkable gap in the edge, at the lower level
+          dim.solid[at(sx, edge)] = 0;
+          dim.elev[at(sx, edge)] = E;
           // the walls behind it rise with it
-          for (let y = R.y0 - 1; y <= R.y0 + 1; y++) for (let x = R.x0 - 1; x <= R.x1 + 1; x++) { const i = at(x, y); if (dim.ground[i] === st.wall) dim.elev[i] = Math.max(dim.elev[i], E + 2); }
-          dim.objects.push({ id: `s.ledge.${ri}`, kind: 'stairs', x: sx, y: R.y0 + 1, label: 'Stairs', dir: 'n' });
-          taken.add(at(sx, R.y0 + 1));
-          taken.add(at(sx, R.y0 + 2));
+          for (let y = R.y0 - WT; y <= R.y0 + 2; y++) for (let x = R.x0 - WT; x <= R.x1 + WT; x++) { const i = at(x, y); if (dim.ground[i] === st.wall) dim.elev[i] = Math.max(dim.elev[i], E + 2); }
+          dim.objects.push({ id: `s.ledge.${ri}`, kind: 'stairs', x: sx, y: edge, label: 'Stairs', dir: 'n' });
+          taken.add(at(sx, edge - 1));
+          taken.add(at(sx, edge + 1));
         }
       } else if (kind === 'corners') {
         // cut corners make an eight-sided room

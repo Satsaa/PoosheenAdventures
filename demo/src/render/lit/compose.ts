@@ -7,11 +7,12 @@ import type { AssetSheet, Frame } from '../bake/sheet';
 import { TILE_PX } from '../bake/sheet';
 import { pal } from '../palette';
 import { hash2 } from '../util';
-import { isWallG } from '../terrain';
+import { KIND, isWallG, surfacePx, tileKinds, wallPatterns, type WallPatterns } from '../terrain';
 import { DECAL } from '../props';
 import { FACE_OFF, shapeOf } from '../bake/ground';
 
-export const FLAG = { FACE: 1, BEV_N: 2, BEV_W: 4, BEV_E: 8, TINTALL: 32 } as const;
+/** SLOPED: the top of a tile whose sides slope; the shader keeps only what is really at the top */
+export const FLAG = { FACE: 1, BEV_N: 2, BEV_W: 4, BEV_E: 8, SLOPED: 16, TINTALL: 32 } as const;
 /** autotile flags (see SPRITE_FS): face end returns, outer corner cuts, inner corners, contact skirting */
 export const AUTO = {
   FACE_L: 4096, FACE_R: 8192, CUT_NW: 16384, CUT_NE: 32768, IN_NW: 65536, IN_NE: 131072,
@@ -57,6 +58,24 @@ export interface Layout {
   liftPx: Int16Array;
   voidLiftPx: number;
   maxLiftPx: number;
+  /** what each tile is for the height model (KIND.*), set by the renderer */
+  kind?: Uint8Array;
+  walls?: WallPatterns;
+  /** lift in px of whatever stands in the middle of each tile (lower than liftPx on a slope) */
+  standPx?: Int16Array;
+}
+
+/** Lift of the ground under a prop, object or creature standing on tile i. */
+export const standOf = (lay: Layout, i: number): number => (lay.standPx ? lay.standPx[i] : lay.liftPx[i]) ?? 0;
+
+/** Fill in the per-tile kinds and standing heights once the layout and wall patterns are known. */
+export function shapeLayout(dim: Dimension, lay: Layout, kind: Uint8Array, walls: WallPatterns): void {
+  lay.kind = kind;
+  lay.walls = walls;
+  const n = dim.w * dim.h;
+  const stand = new Int16Array(n);
+  for (let i = 0; i < n; i++) stand[i] = kind[i] & KIND.SLOPED ? Math.round(surfacePx(dim, lay.liftPx, kind, walls, i % dim.w, (i / dim.w) | 0, 8, 8)) : lay.liftPx[i];
+  lay.standPx = stand;
 }
 
 export const liftOf = (ve: number) => Math.round(ve * TILE_PX * 0.4);
@@ -71,7 +90,9 @@ export function layout(dim: Dimension, ve: Float32Array, voidElev: number): Layo
   }
   const voidLiftPx = liftOf(voidElev);
   const top = maxL + 36;
-  return { W: dim.w * P, H: top + dim.h * P + (maxL - voidLiftPx) + 8, top, liftPx, voidLiftPx, maxLiftPx: maxL };
+  const lay: Layout = { W: dim.w * P, H: top + dim.h * P + (maxL - voidLiftPx) + 8, top, liftPx, voidLiftPx, maxLiftPx: maxL };
+  shapeLayout(dim, lay, tileKinds(dim, liftPx), wallPatterns(dim));
+  return lay;
 }
 
 export function variant(x: number, y: number, salt: number, n: number) {
@@ -116,9 +137,12 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
       const gl = get('g:' + g);
       if (!gl) continue;
       const p = pal(g);
-      let flags = 0;
+      // sides that slope down to lower ground are drawn by one "slope" instance; the top keeps
+      // only what is really at the top, and loses the rims and corner cuts of a box-shaped tile
+      const sloped = !!lay.kind && (lay.kind[i] & KIND.SLOPED) !== 0 && !!get('f:' + g);
+      let flags = sloped ? FLAG.SLOPED : 0;
       const lN = lAt(x, y - 1), lW = lAt(x - 1, y), lE = lAt(x + 1, y), lNW = lAt(x - 1, y - 1), lNE = lAt(x + 1, y - 1);
-      if (!p.liquid) {
+      if (!p.liquid && !sloped) {
         // raised edges: rims, outer corner cuts and inner corners from the 8-neighbourhood
         if (lN < L) flags |= FLAG.BEV_N;
         if (lW < L) flags |= FLAG.BEV_W;
@@ -140,7 +164,7 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
       const lS = lAt(x, y + 1), lSW = lAt(x - 1, y + 1), lSE = lAt(x + 1, y + 1);
       let topMaskF: Frame | null = null;
       const rims: Frame[] = [];
-      if (art && !p.liquid) {
+      if (art && !p.liquid && !sloped) {
         const cut = (lN < L && lW < L && lNW < L ? 1 : 0) | (lN < L && lE < L && lNE < L ? 2 : 0) |
           (lS < L && lE < L && lSE < L ? 4 : 0) | (lS < L && lW < L && lSW < L ? 8 : 0);
         topMaskF = cut ? get(`wm:${shapeOf(g)}:${cut}`)?.[0] ?? null : null;
@@ -226,8 +250,22 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
       }
       // cliff face below
       const LS = lAt(x, y + 1);
+      if (sloped) {
+        // everything this tile's sloped sides can project to: from its top row at full lift down
+        // to its bottom row at the lift of the lowest ground around it
+        let low = L;
+        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+          const xx = x + dx, yy = y + dy;
+          if (xx < 0 || yy < 0 || xx >= w || yy >= h || (lay.kind![yy * w + xx] & 3) === KIND.VOID) continue;
+          low = Math.min(low, liftPx[yy * w + xx]);
+        }
+        const fl = get('f:' + g)!;
+        const ff = fl[variant(x, y, seed + 11, fl.length)];
+        inst.push(px, py, P, P + L - low, ff.x, ff.y, -3, 1, L / P, x, y, 0, low, 1, 1, 1);
+      }
+      const southVoid = gAt(x, y + 1) === T.VOID;
       // open sea at the map's bottom edge continues past it (no cut face)
-      if (LS < L && !(dim.kind === 'overworld' && y + 1 >= h)) {
+      if (LS < L && (!sloped || southVoid) && !(dim.kind === 'overworld' && y + 1 >= h)) {
         const fl = get('f:' + g);
         if (art && !p.liquid && get(`wf:${g}:pp`)) {
           const end = (side: number) => {
