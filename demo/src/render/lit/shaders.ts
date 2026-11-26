@@ -251,14 +251,20 @@ float lightOcc(vec3 P, vec3 Lp) {
   vec2 dxy = Lp.xy - P.xy;
   float len = length(dxy);
   if (len < 0.3) return 0.0;
+  // Step a fixed distance in the world, not a fixed number of times: every 0.2 tile, so a
+  // one-tile wall or a pillar can never fall between two samples however far the light is.
+  float n = clamp(ceil(len / 0.2), 4.0, 48.0);
   float occ = 0.0;
-  for (int k = 1; k <= 12; k++) {
-    float u = float(k) / 13.0;
-    if (len * (1.0 - u) < 0.55) break;   // the light's own fixture
-    vec2 q = P.xy + dxy * u;
-    float hz = mix(P.z, Lp.z, u);
-    float H = castH(q);
-    occ = max(occ, smoothstep(0.02, 0.05 + uLSSoft * 0.35, H - hz));
+  for (int k = 1; k <= 48; k++) {
+    float fk = float(k);
+    if (fk >= n) break;
+    float u = fk / n;
+    // Only the light's own fixture is exempt (a torch bracket, a crystal). This used to skip
+    // 0.55 tile, which is most of the wall a torch hangs on, and let its light through that wall.
+    if (len * (1.0 - u) < 0.22) break;
+    float H = castH(P.xy + dxy * u);
+    occ = max(occ, smoothstep(0.02, 0.05 + uLSSoft * 0.35, H - mix(P.z, Lp.z, u)));
+    if (occ >= 0.999) break;
   }
   return occ;
 }
