@@ -259,41 +259,6 @@ $('btnFog').addEventListener('click', (e) => {
   pushState();
 });
 
-// ------------------------------------------------------------------ touch diagnostics
-// A readout for input problems that only show up on a particular device or app: which element a
-// touch lands on, whether it could be cancelled, and which element actually scrolled.
-{
-  const out = $('diag');
-  const lines: string[] = [];
-  const name = (t: EventTarget | null) => {
-    const e = t as HTMLElement | null;
-    if (!e || !e.tagName) return String(t === document ? 'document' : t === window ? 'window' : '?');
-    const cls = typeof e.className === 'string' && e.className ? '.' + e.className.trim().split(/\s+/).slice(0, 2).join('.') : '';
-    return e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') + cls;
-  };
-  const say = (s: string) => {
-    if (lines[0]?.startsWith(s.slice(0, 24))) lines[0] = s; else lines.unshift(s);
-    lines.length = Math.min(lines.length, 12);
-    out.textContent = lines.join('\n');
-  };
-  let on = false, moves = 0;
-  const hear = (type: string) => window.addEventListener(type, (ev) => {
-    if (!on) return;
-    if (type === 'scroll') { const e = ev.target as HTMLElement; say(`scroll   ${name(ev.target)} top=${Math.round((e as HTMLElement).scrollTop ?? window.scrollY)}`); return; }
-    if (type === 'touchmove' || type === 'pointermove') { moves++; say(`${type} x${moves} on ${name(ev.target)} cancelable=${ev.cancelable} prevented=${ev.defaultPrevented}`); return; }
-    moves = 0;
-    say(`${type.padEnd(11)} on ${name(ev.target)} cancelable=${ev.cancelable}`);
-  }, { capture: true, passive: true });
-  ['touchstart', 'touchmove', 'touchend', 'touchcancel', 'pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'wheel', 'scroll'].forEach(hear);
-  $('btnDiag').addEventListener('click', () => {
-    on = !on;
-    $('btnDiag').setAttribute('aria-pressed', String(on));
-    out.hidden = !on;
-    lines.length = 0;
-    out.textContent = on ? 'Touch diagnostics on. Drag where the problem is, then read the lines here (newest first).' : '';
-  });
-}
-
 const cleanSeed = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'poosheen';
 $('seedForm').addEventListener('submit', (e) => {
   e.preventDefault();

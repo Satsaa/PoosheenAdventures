@@ -456,13 +456,7 @@
 .pa-pane-head {
   flex: none; position: relative; z-index: 3;
   background: var(--pa-surface); border-bottom: 1px solid var(--pa-line);
-  /* a fixed strip: dragging or wheeling here never scrolls the list or the page */
-  touch-action: none; overscroll-behavior: none;
 }
-/* Every descendant too: touch-action is only combined up to the nearest scroll container, so a
-   clipped child would otherwise let the gesture through to the page. */
-.pa-pane-head * { touch-action: none; }
-.pa-pane-head textarea { touch-action: pan-y; overscroll-behavior: contain; }
 .pa-set-head { padding: 10px var(--pa-pad-x, 14px) 10px; max-height: 60vh; overflow: hidden; overflow: clip; }
 .pa-other-row { margin: 8px 0 0; font-size: 12px; }
 .pa-other { color: var(--pa-accent-2); text-decoration-color: color-mix(in srgb, var(--pa-accent-2) 50%, transparent); }
