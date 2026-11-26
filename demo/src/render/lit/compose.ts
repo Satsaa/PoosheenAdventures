@@ -189,7 +189,7 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
       // cliff face below
       const LS = lAt(x, y + 1);
       // open sea at the map's bottom edge continues past it (no cut face)
-      if (LS < L && !(g === T.DEEP && y + 1 >= h)) {
+      if (LS < L && !(dim.kind === 'overworld' && y + 1 >= h)) {
         const fl = get('f:' + g);
         if (fl) {
           const ff = fl[variant(x, y, seed + 11, fl.length)];

@@ -99,7 +99,7 @@ export function buildOverview(
           put(x * opx + px, oy0 + py, c, true, L, e, mat, x, y, shadeTop * jit);
         }
       // cliff face below
-      if (LS < L && !(g === T.DEEP && y + 1 >= h)) {
+      if (LS < L && !(dim.kind === 'overworld' && y + 1 >= h)) {
         const fc = col.face(g);
         for (let py = oy0 + opx; py < oy1; py++)
           for (let px = 0; px < opx; px++) put(x * opx + px, py, fc, false, L - (py - oy0 - opx) / opx, null, 0, x, y, 0.62);

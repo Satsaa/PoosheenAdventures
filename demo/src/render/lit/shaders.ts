@@ -121,8 +121,8 @@ void main() {
       if (c == 1) dDark = 99.0;
       nn = normalize(nn + vec3(c == 0 ? -0.5 : 0.5, -0.5, 0.3));
     }
-    if (dLit >= rw && dLit < rw + 1.0 && chamfer) alb *= 0.72;   // coping groove inside the rim (walls)
-    if (dLit < rw) { alb = min(alb * 1.5 + 0.07, 1.0); nn = normalize(nn + vec3((flags & 4) != 0 && pc.x < rw ? -0.7 : 0.0, (flags & 2) != 0 && pc.y < rw ? -0.7 : 0.0, 0.3)); }
+    if (dLit >= rw && dLit < rw + 1.0 && chamfer) alb *= 0.62;   // coping groove inside the rim (walls)
+    if (dLit < rw) { alb = min(alb * 1.6 + 0.12, 1.0); nn = normalize(nn + vec3((flags & 4) != 0 && pc.x < rw ? -0.7 : 0.0, (flags & 2) != 0 && pc.y < rw ? -0.7 : 0.0, 0.3)); }
     else if (dDark < 1.0) alb *= 0.55;
     // inner corners: the rim turns the corner (diagonal neighbour lower)
     if ((flags & 65536) != 0 && pc.x < rw && pc.y < rw) alb = min(alb * 1.5 + 0.07, 1.0);
@@ -389,7 +389,7 @@ void main() {
         // beyond a land edge (mountain range, thicket, wastes): continue the edge's terrain as chunky
         // pixel noise in its own colours, dimmed with distance
         vec2 ouv = (vec2(cl.x + 0.5, cl.y + 0.5 + uOvTop) * uOvP) / uOvSize;
-        vec3 ec0 = texture(uOvA, ouv).rgb;
+        vec3 ec0 = textureLod(uOvA, ouv, 3.0).rgb;   // blurred edge colour: no stripes from single edge pixels
         vec2 g2 = floor(wq * 4.0);
         float nb = hash(floor(wq * 0.7)) * 0.5 + hash(floor(wq * 1.6)) * 0.3 + hash(g2) * 0.2;
         vec3 la = ec0 * (0.7 + nb * 0.55);
