@@ -48,7 +48,8 @@ export function runLints(g: LogicGraph, items: Items, sol: Solution, npcs: Npc[]
   const add = (id: string, label: string, bad: string[], good: string) =>
     lints.push({ id, label, ok: bad.length === 0, detail: bad.length ? bad.slice(0, 4).join('; ') + (bad.length > 4 ? ` (+${bad.length - 4})` : '') : good });
   const locName = new Map(g.locs.map((l) => [l.id, l.name]));
-  const locDim = new Map(g.locs.map((l) => [l.id, l.dim]));
+  // (floors of one building count as one place: its entrance hall refills whatever it makes you spend)
+  const locDim = new Map(g.locs.map((l) => [l.id, l.dim.replace(/\.f\d+$/, '')]));
 
   add('solvable', 'Goal reachable from the start', sol.ok ? [] : ['goal item never collected'], `${sol.spheres.length} spheres`);
   add('complete', 'Every chest, NPC reward and shop item is obtainable',

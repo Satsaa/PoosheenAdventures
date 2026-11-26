@@ -317,13 +317,17 @@ export function traceRivers(
   };
   const levelOf = (l: { a: number; b: number }) => Math.min(elevOf(part.cell[l.a]), elevOf(part.cell[l.b]));
 
+  // springs rise inland: corners with land all round (on a map that is mostly sea, or under a
+  // world that is mostly rock, blind picks would hardly ever find one)
+  const inland: number[] = [];
+  for (let cy = 1; cy < gh; cy++) for (let cx = 1; cx < gw; cx++) if (!edge(cx, cy)) inland.push(cy * cw + cx);
   for (let tries = 0; tries < count * 12 && rivers.length < count; tries++) {
-    if (gw < 3 || gh < 3) break;
+    if (gw < 3 || gh < 3 || !inland.length) break;
     // spring: a free inner corner, the highest of a few samples
     let start = -1, startLevel = -1;
     for (let i = 0; i < 8; i++) {
-      const cx = rng.range(1, gw - 1), cy = rng.range(1, gh - 1), c = cy * cw + cx;
-      if (taken.has(c) || edge(cx, cy)) continue;
+      const c = inland[rng.int(inland.length)], cx = c % cw, cy = (c / cw) | 0;
+      if (taken.has(c)) continue;
       let best = -1;
       for (const [dx, dy] of N4) { const s = sides(cx, cy, dx, dy); if (s) best = Math.max(best, levelOf(s)); }
       if (best > startLevel) { startLevel = best; start = c; }

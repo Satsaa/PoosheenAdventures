@@ -51,17 +51,22 @@ export function realiseTiles(bp: Blueprint, seed: number): TileResult {
   // interiors, linked both ways to the door that leads to them
   for (const ib of bp.ctx.interiors) {
     const it = realiseInterior(ib, seed);
-    const door = doors.get(ib.entranceEdge);
-    if (!door) { problems.push(`${ib.name} has no entrance on the map`); continue; }
-    door.obj.to = { dim: it.dim.id, x: it.exit.x, y: it.exit.y };
-    it.dim.parent = { dim: door.dim, x: door.x, y: door.y };
-    it.dim.objects.push({ id: 'x.' + ib.entranceEdge, kind: 'entrance', x: it.exit.x, y: it.exit.y, label: 'Way out', style: 'exit', dir: 's', edgeId: ib.entranceEdge, to: { dim: door.dim, x: door.x, y: door.y } });
     layers.push({ dim: it.dim, barriers: it.barriers, anchors: it.anchors });
+    if (ib.floor) continue; // an upper or lower floor: reached by stairs, which the interior placed itself
+    const ways = [{ edgeId: ib.entranceEdge, at: it.exit }, ...(ib.exits ?? []).map((x) => ({ edgeId: x.edgeId, at: it.exits.get(x.edgeId)! }))];
+    ways.forEach((way, k) => {
+      const door = doors.get(way.edgeId);
+      if (!door) { problems.push(`${ib.name} has no entrance on the map`); return; }
+      door.obj.to = { dim: it.dim.id, x: way.at.x, y: way.at.y };
+      if (k === 0) it.dim.parent = { dim: door.dim, x: door.x, y: door.y };
+      it.dim.objects.push({ id: 'x.' + way.edgeId, kind: 'entrance', x: way.at.x, y: way.at.y, label: 'Way out', style: 'exit', dir: 's', edgeId: way.edgeId, to: { dim: door.dim, x: door.x, y: door.y } });
+    });
   }
 
   for (const l of layers) zones(l, bp.graph, problems);
   const over = sts.get('over');
-  const wet = over ? addRivers(bp, over, problems) : new Set<string>();
+  const wet = new Set<string>();
+  for (const st of sts.values()) for (const id of addRivers(bp, st, problems)) wet.add(id);
   if (over) for (const id of addSeas(bp, over)) wet.add(id);
   if (wet.size || dropped) {
     settleOneWays(bp, layers);
@@ -156,6 +161,7 @@ function verify(layers: Layer[], g: LogicGraph, problems: string[], realised: Se
 }
 
 const RIVER_NAMES = ['Purrling River', 'Whiskerwater', 'The Long Lap', 'Catnap Creek', 'Yarnwind River', 'Biscuit Brook'];
+const CAVE_RIVER_NAMES = ['The Drip', 'Blindfish Run', 'Echo Stream', 'Coldwater Seep', 'The Sunless Lap', 'Gloomwater'];
 
 /**
  * Rivers become logic only after they are painted, because where a bank is level with the water
@@ -167,6 +173,7 @@ function addRivers(bp: Blueprint, st: ST, problems: string[]): Set<string> {
   const made = new Set<string>();
   const { dim, w, river, bridge, segs } = st;
   if (!segs.length) return made;
+  const RIVERS = dim.kind === 'underworld' ? CAVE_RIVER_NAMES : RIVER_NAMES;
   const n = dim.ground.length;
   const tilesOf: number[][] = segs.map(() => []);
   const shores: Set<LocId>[] = segs.map(() => new Set());
@@ -204,7 +211,7 @@ function addRivers(bp: Blueprint, st: ST, problems: string[]): Set<string> {
         stack.push(j);
       }
     }
-    if (count !== all.length) problems.push(`a stretch of ${RIVER_NAMES[segs[k].river % RIVER_NAMES.length]} is broken into separate pools`);
+    if (count !== all.length) problems.push(`a stretch of ${RIVERS[segs[k].river % RIVERS.length]} is broken into separate pools`);
   });
 
   const swim = bp.plan.tools.includes('flippers');
@@ -223,7 +230,7 @@ function addRivers(bp: Blueprint, st: ST, problems: string[]): Set<string> {
     }
     const stretches = segs.filter((o) => o.river === sg.river).length;
     const course = stretches === 1 ? '' : `, ${sg.seg === 0 ? 'upper' : sg.seg === stretches - 1 ? 'lower' : 'middle'} course`;
-    const name = RIVER_NAMES[sg.river % RIVER_NAMES.length] + (stretches > 3 && sg.seg > 0 && sg.seg < stretches - 1 ? `${course} ${sg.seg}` : course);
+    const name = RIVERS[sg.river % RIVERS.length] + (stretches > 3 && sg.seg > 0 && sg.seg < stretches - 1 ? `${course} ${sg.seg}` : course);
     const id = `${dim.id}.rv${sg.river}.${sg.seg}`;
     const mid = all[all.length >> 1];
     const node = hnode(id, 'region', name, 0, { biome: 'river', elev: sg.level, dim: dim.id });

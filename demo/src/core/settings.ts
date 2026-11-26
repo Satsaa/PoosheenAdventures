@@ -19,7 +19,8 @@ export interface ItemSetting {
 export interface GenSettings {
   worldW: number; worldH: number; regions: number; borderWobble: number; cliffs: boolean; scenery: number; landCoverage: number; coastFromSeed: boolean; landlocked: number;
   oceanSize: number; islands: number; islandSize: number; docks: number; ferries: number; ferryFare: number; outcrops: number;
-  rivers: number; riverWidth: number; riverCaves: number;
+  rivers: number; riverWidth: number; riverCaves: number; caveRivers: number; caveHeights: boolean; tunnels: number;
+  castle: boolean; town: boolean; townHouses: number; dungeonFloors: number;
   underworld: boolean; underworldSize: number; underworldRegions: number; sky: boolean; skySize: number;
   dungeons: number; sealMedallions: number; lockDensity: number; linearity: number; secrets: number; everyToolUsed: boolean;
   dungeonRooms: number; smallKeys: number; dungeonLoops: number;
@@ -67,7 +68,11 @@ export const SETTING_DEFS: SettingDef[] = [
 
   num('rivers', 'Rivers', 'Rivers', 'int', 0, 12, 1, 2, 'How many rivers cross the overworld. They flow downhill along the lines between screens, follow region borders or cut straight through a region, and drop over waterfalls where the land steps down.', 'water stream waterfall'),
   num('riverWidth', 'Rivers', 'River width', 'int', 1, 3, 1, 1, 'Half-width of the water band: 1 gives a river two tiles wide, 3 gives six.', 'water wide'),
-  num('riverCaves', 'Rivers', 'Underground rivers', 'float', 0, 1, 0.05, 0.4, 'Chance that a cave has a river running through it, with its treasure on the far bank. Needs the Swim Gear in the world.', 'cave water place interior'),
+  num('riverCaves', 'Caves', 'River caves', 'float', 0, 1, 0.05, 0.4, 'Chance that a cave has a river running through it, with its treasure on the far bank. Needs the Swim Gear in the world.', 'cave water place interior'),
+
+  num('tunnels', 'Caves', 'Tunnels', 'float', 0, 1, 0.05, 0.3, 'Chance that the way between two regions is a cave with a mouth on either side instead of a gap in the border. The gate then stands inside the cave. Shortcuts can be tunnels too.', 'cave multi entrance passage two exits'),
+  flag('caveHeights', 'Caves', 'Cave heights', true, 'Caves have floors at different heights: underworld regions sit on different levels with stairs and drops between them, tunnels climb from one mouth to the other, and cave rooms get raised ledges.', 'elevation cliffs ledge stairs underworld'),
+  num('caveRivers', 'Caves', 'Underworld rivers', 'int', 0, 6, 1, 1, 'Rivers that run through the underworld. They follow the same rules as rivers above ground: bridges at borders, the Swim Gear to enter, waterfalls where the cave floor drops.', 'water stream cave underground'),
 
   num('oceanSize', 'Ocean', 'Sea width', 'int', 0, 16, 1, 4, 'Screens of open sea added beyond the land on every side that is sea. The map grows by this much on those sides; the land keeps the size set under World.', 'ocean amount water margin size'),
   num('islands', 'Ocean', 'Island regions', 'int', 0, 10, 1, 2, 'Islands out at sea that are regions in their own right, with places and gates of their own. They can only be reached over the water, which makes the Boat (or a ferry) part of the progression. Needs a sea wide enough to hold them.', 'archipelago isle boat'),
@@ -76,6 +81,10 @@ export const SETTING_DEFS: SettingDef[] = [
   num('ferries', 'Ocean', 'Ferrymen', 'float', 0, 1, 0.05, 0.5, 'Chance that a dock has a ferryman, who sails you to any other ferry dock on that sea for a fare, no Boat needed.', 'boat merchant travel passage npc'),
   num('ferryFare', 'Ocean', 'Ferry fare', 'int', 0, 999, 1, 30, 'Rupees per crossing.', 'boat price cost rupees'),
   num('outcrops', 'Ocean', 'Outcrops', 'int', 0, 16, 1, 5, 'Reefs, sandbars and cays scattered over the open sea, per 50 screens of water. Each is grown tile by tile, so no two have the same outline. On a sea that can be sailed, some hold a chest or pots.', 'islet rock sandbar treasure secret boat'),
+
+  flag('castle', 'Places', 'Castle', true, 'One region is a castle: straight walls on the screen grid instead of a wobbly border, towers on the corners, a paved yard, guards, and the Sealed Sanctum as its keep when the sanctum is above ground.', 'fortress walls blocky keep region'),
+  flag('town', 'Places', 'Town', true, 'One region near the start is a town: houses in rows along streets, a square, townsfolk, and a few houses you can enter.', 'village city houses streets region'),
+  num('townHouses', 'Places', 'Town houses', 'int', 0, 24, 1, 9, 'How many houses the town has. Built only where they fit.', 'village city buildings'),
 
   flag('underworld', 'Layers', 'Underworld', true, 'A cave layer under the overworld, reached by stairs. Its caves take their theme from the land above.', 'caves subworld below'),
   num('underworldSize', 'Layers', 'Underworld size', 'int', 1, 512, 1, 12, 'How many screens of cave exist.', 'caves'),
@@ -92,6 +101,7 @@ export const SETTING_DEFS: SettingDef[] = [
 
   num('dungeonRooms', 'Dungeons', 'Dungeon rooms', 'int', 2, 64, 1, 8, 'Typical room count; each dungeon varies by one. The room grid grows to fit.', 'size chambers'),
   num('smallKeys', 'Dungeons', 'Small keys', 'int', 0, 12, 1, 2, 'Upper limit of locked doors per dungeon. Doors always chain, so no order of opening can waste a key.', 'locked doors'),
+  num('dungeonFloors', 'Dungeons', 'Dungeon floors', 'int', 1, 5, 1, 2, 'Upper limit of floors per dungeon. Floors lie exactly above one another and are joined by stairs; a dungeon either climbs (2F, 3F) or digs down (B1, B2).', 'layers levels storeys basement tower stairs'),
   num('dungeonLoops', 'Dungeons', 'Dungeon loops', 'float', 0, 1, 0.05, 0.3, 'Chance that two neighbouring rooms on the same side of every locked door get an extra doorway.', 'cycles shortcuts'),
 
   num('shortcuts', 'Loops', 'Shortcuts and ledges', 'float', 0, 1, 0.05, 0.75, 'Chance that two touching regions the tree did not connect get a gated shortcut, or a one-way ledge if heights differ.', 'cycles loops'),

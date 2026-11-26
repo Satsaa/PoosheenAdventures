@@ -87,6 +87,8 @@ export const UNDER_BIOMES: Record<string, { id: string; name: string; color: str
   badlands: { id: 'magma', name: 'Cinder Warrens', color: '#b4543a' },
   forest: { id: 'cavern', name: 'Root Cellars', color: '#6b5a48' },
   plains: { id: 'cavern', name: 'Burrow Network', color: '#6b5a48' },
+  castle: { id: 'cavern', name: 'Castle Catacombs', color: '#6b5a48' },
+  town: { id: 'cavern', name: 'Town Cellars', color: '#6b5a48' },
 };
 
 export const DUNGEON_NAMES = ['Temple of Naps', 'Baddie Keep', 'Hollow Bellows', 'Catacomb of Crumbs', 'Yarnspire'];
@@ -123,6 +125,7 @@ export const ENEMIES: EnemyKind[] = [
   { id: 'rockback', name: 'Rockback', plural: 'Rockbacks', icon: '◭', biomes: ['mountain', 'crystal', 'magma'], drops: 'bombs', weight: 4 },
   { id: 'bat', name: 'Cave Bat', plural: 'Cave Bats', icon: '⌄', biomes: ['cavern', 'flooded', 'crystal', 'magma', 'cave', 'dungeon'], drops: 'rupees', weight: 4 },
   { id: 'puff', name: 'Cloud Puff', plural: 'Cloud Puffs', icon: '☁', biomes: ['sky'], drops: 'arrows', weight: 4 },
+  { id: 'knoblin', name: 'Castle Guard', plural: 'Castle Guards', icon: '♞', biomes: ['castle'], drops: 'arrows', weight: 5 },
   { id: 'wisp', name: 'Wisp', plural: 'Wisps', icon: '✧', biomes: ['*'], drops: 'rupees', night: true, weight: 1.5 },
   { id: 'pinjata', name: 'Pinjata Poosheen', plural: 'Pinjata Poosheens', icon: '♛', biomes: ['*'], drops: 'rupees', weight: 0.3 },
 ];
@@ -138,3 +141,15 @@ export const FILLER_NAMES: Record<number, string[]> = {
   4: ['The Empty Bowl', 'Litterbox Flats', 'The Dry Dish'],
 };
 export const FERRY_NAMES = ['Salty', 'Old Barnacle', 'Captain Purr', 'Driftwood', 'Skipper Mew'];
+
+/** Regions that are built rather than grown. */
+export const CASTLE_NAMES = ['Castle Grumblepaw', 'Fort Hiss', 'Clawstone Keep', 'Castle Fluffington', 'The Scratching Post'];
+export const TOWN_NAMES = ['Mewton', 'Purrlington', 'Whiskerby', 'Tabby Cross', 'Nappington', 'Kibbleford'];
+export const TOWN_LINES = [
+  'Lovely day for a nap in the square.',
+  'They say the castle guards never sleep. Imagine.',
+  'My cousin sailed out to the islands and came back with a tan.',
+  'If you find a yarn ball, somebody around here knits.',
+  'The caves under the border? Quicker than the road, if you are not afraid of the dark.',
+  'I counted the stairs in the old temple once. Lost count on the second floor down.',
+];

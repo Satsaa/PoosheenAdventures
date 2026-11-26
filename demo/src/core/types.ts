@@ -227,8 +227,11 @@ export interface Dimension {
   structures?: Structure[];
   /** stacked worlds share tile coordinates: -1 underworld, 0 overworld, 1 sky */
   stack?: number;
-  /** interiors: the overworld entrance that leads here */
+  /** interiors: the entrance that leads here (for a deeper floor: the stairs back toward the entrance floor) */
   parent?: { dim: DimId; x: number; y: number };
+  /** floors of one building: the id of its entrance floor, and this floor's short name ("1F", "B2") */
+  group?: DimId;
+  floor?: string;
 }
 
 // ---------------------------------------------------------------- npcs & quests

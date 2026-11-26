@@ -38,6 +38,8 @@ export interface RegionBP {
   feats: Feature[];
   /** a sliver (one screen or less): connected, but nothing is placed in it */
   barren?: boolean;
+  /** built, not grown: its border follows the screen grid in straight lines (a castle) */
+  blocky?: boolean;
 }
 
 export interface OpeningBP {
@@ -58,6 +60,8 @@ export interface StackBP {
   name: string;
   stack: number;
   part: Partition;
+  /** index of the region the world is entered through */
+  entry: number;
   regions: RegionBP[];
   openings: OpeningBP[];
   hnode: HNode;
@@ -75,6 +79,24 @@ export interface RoomBP {
   objs: ObjTpl[];
   /** an underground river crosses the room: this is the far bank */
   far?: { loc: LocId; edgeId: string; req: Req; objs: ObjTpl[] };
+  /** height of the room's floor, relative to the lowest room of the interior */
+  elev?: number;
+}
+
+/** Stairs to the room directly above or below, on another floor of the same building. */
+export interface StairBP {
+  edgeId: string;
+  room: number;
+  /** the interior (floor) they lead to */
+  to: DimId;
+  up: boolean;
+  gate: GateKind;
+  req: Req;
+  label: string;
+  /** which of the two stair spots of a room: a room can have stairs up and stairs down */
+  slot: number;
+  /** the way back toward the entrance floor */
+  home?: boolean;
 }
 
 export interface DoorBP {
@@ -98,6 +120,16 @@ export interface InteriorBP {
   entranceEdge: string;
   /** adjacent room pairs without a door: candidates for shortcuts */
   loops?: [number, number][];
+  /** further ways out to the world, besides the entrance: a tunnel has a mouth at either end */
+  exits?: { edgeId: string; room: number }[];
+  /** floors of one building share a room grid: the entrance floor's id, and this floor's number (0 = entrance) */
+  group?: DimId;
+  floor?: number;
+  /** short name of the floor, e.g. "B1" or "2F" */
+  floorName?: string;
+  stairs?: StairBP[];
+  /** rooms may get raised ledges */
+  heights?: boolean;
 }
 
 export class Ctx {

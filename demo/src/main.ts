@@ -98,24 +98,33 @@ function generate(seed: string, keepView = false): void {
   try { history.replaceState(null, '', '#' + seed); } catch { /* hash is a convenience only */ }
 }
 
-function buildDimTabs(): void {
+/** Tabs for the stacked worlds; inside a building with several floors, one more tab per floor. */
+function buildDimTabs(group?: DimId): void {
   const tabs = $('dimTabs');
   tabs.textContent = '';
-  for (const d of world.dims.filter((x) => x.kind !== 'interior').sort((a, b) => (b.stack ?? 0) - (a.stack ?? 0))) {
+  tabs.dataset.group = group ?? '';
+  const tab = (id: DimId, label: string, title = '') => {
     const b = document.createElement('button');
     b.type = 'button';
     b.role = 'tab';
-    b.dataset.dim = d.id;
-    b.textContent = d.name;
-    b.addEventListener('click', () => showDim(d.id));
+    b.dataset.dim = id;
+    b.textContent = label;
+    if (title) b.title = title;
+    b.addEventListener('click', () => showDim(id));
     tabs.append(b);
-  }
+  };
+  for (const d of world.dims.filter((x) => x.kind !== 'interior').sort((a, b) => (b.stack ?? 0) - (a.stack ?? 0))) tab(d.id, d.name);
+  if (!group) return;
+  // upper floors first, like the stacked worlds: 3F, 2F, 1F, B1, B2
+  const level = (f = '') => (f.startsWith('B') ? -Number(f.slice(1)) : Number(f.replace('F', '')));
+  for (const d of world.dims.filter((x) => x.group === group).sort((a, b) => level(b.floor) - level(a.floor))) tab(d.id, d.floor ?? d.name, d.name);
 }
 
 function showDim(id: DimId, at?: { x: number; y: number }): void {
   const dim = world.dims.find((d) => d.id === id);
   if (!dim) return;
   dimId = id;
+  if (($('dimTabs').dataset.group ?? '') !== (dim.group ?? '')) buildDimTabs(dim.group);
   map.setDimension(id);
   if (at) map.focus(at.x, at.y, dim.kind === 'interior' ? undefined : 26);
   for (const b of $('dimTabs').querySelectorAll('button')) b.setAttribute('aria-selected', String(b.dataset.dim === id));
@@ -214,6 +223,8 @@ $('btnBack').addEventListener('click', () => {
   if (p) showDim(p.dim, p);
 });
 $('btnFit').addEventListener('click', () => map.fitAll());
+// a handle for the console and for automated checks
+(window as unknown as Record<string, unknown>).poosheen = { show: (id: DimId) => { showDim(id); map.fitAll(); }, world: () => world };
 
 // fullscreen for the map: the browser's own where it is allowed, otherwise the stage fills the page
 const stage = document.querySelector('.stage') as HTMLElement;

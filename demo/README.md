@@ -90,6 +90,36 @@ Open `dist/index.html` in a browser. No server needed.
   rock, sandbars, and cays that may hold a chest or pots. Ground to stand on only appears on a
   sea somebody can sail. `outcrops` is a count per 50 screens of water.
 
+## Floors, tunnels, cave heights and water
+
+- A dungeon may have several floors (`dungeonFloors`). Every floor is its own interior
+  dimension on the same room grid, so a staircase joins the room directly above to the room
+  directly below at the same tile. Stairs are edges of the same lock graph as doors: rooms on
+  all floors are its nodes, vertical neighbours are extra candidates. The page shows a tab per
+  floor while you are inside.
+- A tunnel is a cave with two mouths (`tunnels`): an edge between two regions is realised as
+  mouth, chambers, mouth, with the gate on a passage inside. The graph does not change shape;
+  the edge just has more tiles. A cave mouth that finds no open ground opens in the region's
+  own rim instead.
+- Cave heights (`caveHeights`): underworld regions lie on different levels, so the existing
+  stairs, ledges and waterfalls appear underground; tunnels climb from one mouth's height to
+  the other's; cave and dungeon rooms may have a raised ledge with stairs.
+- Cave water: rivers run through the underworld (`caveRivers`) under the rules of rivers above
+  ground, caves have pools, and a swim gate inside a tunnel is a flooded passage.
+- Free refills are judged per building: a dungeon's entrance hall covers all of its floors.
+
+## Castle and town
+
+- Both are chosen after the region graph is built and before anything is placed, so they are
+  ordinary regions with a different look. The castle is the region that holds the Sealed
+  Sanctum when that is above ground (the sanctum is then its keep), else the deepest region;
+  the town is a roomy region near the start.
+- The castle is `blocky`: the border warp is switched off for it, so its outline follows the
+  screen grid. Its rim is a stone wall two tiles thick and two levels high, with a tower on
+  every outward corner. A river along its border is a moat.
+- The town places houses on lots: a lattice of door tiles around the square, nearest first, so
+  houses stand in rows and every door is on a street. A few houses can be entered.
+
 ## Settings
 
 `generateWorld(seed, settings?)` takes a partial `GenSettings`; anything missing falls back to

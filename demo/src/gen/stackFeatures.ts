@@ -118,10 +118,25 @@ export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => voi
           let at: { x: number; y: number } | null = null;
           for (const s of [shape, plain]) {
             const xs = s.map((o) => o[0]), ys = s.map((o) => o[1]);
-            at = findBlock(st, r.idx, P, Math.min(...xs) - 1, Math.min(...ys) - 1, Math.max(...xs) + 1, 1);
-            if (at) { shape = s; reserve(st, at.x + Math.min(...xs) - 1, at.y + Math.min(...ys) - 1, at.x + Math.max(...xs) + 1, at.y + 1); break; }
+            const x0 = Math.min(...xs) - 1, y0 = Math.min(...ys) - 1, x1 = Math.max(...xs) + 1;
+            // a town is laid out: houses stand in rows along streets, on the lot nearest the square that is still free
+            if (r.biome === 'town' && kind === 'house') at = lots(st, r).find((l) => freeBlock(st, r.idx, l.x + x0, l.y + y0, l.x + x1, l.y + 1)) ?? null;
+            if (at) P.push(at);
+            at ??= findBlock(st, r.idx, P, x0, y0, x1, 1);
+            if (at) { shape = s; reserve(st, at.x + x0, at.y + y0, at.x + x1, at.y + 1); break; }
           }
-          if (!at) { if (f.f === 'entrance') fail(f.label); continue; }
+          if (!at) {
+            if (f.f !== 'entrance') continue;
+            // no open ground for a free-standing mouth: a cave can just as well open in the region's own rim
+            const m = built ? null : rimMouth(st, r.idx);
+            if (!m) { fail(f.label); continue; }
+            const obj: MapObject = { id: 'd.' + f.edgeId, kind: 'entrance', x: m.x, y: m.y, label: f.label, style: f.style, req: f.req, edgeId: f.edgeId, dir: m.dir };
+            dim.objects.push(obj);
+            st.mouths[r.idx].push(m.y * w + m.x);
+            doors.set(f.edgeId, { dim: dim.id, x: m.x, y: m.y, obj });
+            P.push(m);
+            continue;
+          }
           const deco = st.bp.kind === 'underworld' ? D.STALAG : st.bp.kind === 'sky' ? D.PILLAR : kind === 'cave' ? D.ROCK : D.HOUSE;
           const tiles = shape.map(([dx, dy]) => (at!.y + dy) * w + at!.x + dx);
           for (const t of tiles) { dim.solid[t] = 1; dim.deco[t] = deco; }
@@ -131,6 +146,7 @@ export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => voi
               floors: kind === 'house' ? rng.range(1, 2) : kind === 'shop' ? 1 : 2,
             });
           }
+          if (r.biome === 'town') st.mouths[r.idx].push(at.y * w + at.x); // every door is on a street
           if (f.f === 'house') continue;
           const obj: MapObject = { id: 'd.' + f.edgeId, kind: 'entrance', x: at.x, y: at.y, label: f.label, style: f.style, req: f.req, edgeId: f.edgeId, dir: 'n' };
           dim.objects.push(obj);
@@ -185,6 +201,22 @@ export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => voi
   return doors;
 }
 
+/** The lots of a town: door tiles on a lattice around the square, nearest first. The square's own column stays a street. */
+const lotCache = new WeakMap<RegionBP, { x: number; y: number }[]>();
+function lots(st: ST, r: RegionBP): { x: number; y: number }[] {
+  let out = lotCache.get(r);
+  if (out) return out;
+  out = [];
+  const a = [...st.anchors].find(([, loc]) => loc === r.id)?.[0];
+  if (a !== undefined) {
+    const ax = a % st.w, ay = (a / st.w) | 0;
+    for (let j = -6; j <= 6; j++) for (let i = 0; i < 8; i++) for (const side of [-1, 1]) out.push({ x: ax + side * (4 + 6 * i), y: ay + 6 * j });
+    out.sort((p, q) => Math.abs(p.x - ax) + 1.3 * Math.abs(p.y - ay) - (Math.abs(q.x - ax) + 1.3 * Math.abs(q.y - ay)));
+  }
+  lotCache.set(r, out);
+  return out;
+}
+
 /** Footpaths from each region's centre to its openings and doors (overworld only). */
 function paths(st: ST): void {
   if (st.bp.kind !== 'overworld') return;
@@ -192,6 +224,14 @@ function paths(st: ST): void {
   for (const r of st.bp.regions) {
     const start = [...st.anchors].find(([, loc]) => loc === r.id)?.[0];
     if (start === undefined) continue;
+    if (r.biome === 'town' || r.biome === 'castle') {
+      // the square (or the castle yard's paved middle)
+      const sx = start % w, sy = (start / w) | 0, base = STYLES[r.biome].ground;
+      for (let y = sy - 2; y <= sy + 2; y++) for (let x = sx - 2; x <= sx + 2; x++) {
+        const i = y * w + x;
+        if (st.owner[i] === r.idx && !dim.solid[i] && !st.border[i] && dim.ground[i] === base) dim.ground[i] = T.PATH;
+      }
+    }
     const prev = new Map<number, number>([[start, -1]]);
     const q = [start];
     for (let k = 0; k < q.length; k++) {
@@ -233,6 +273,31 @@ function scenery(st: ST): void {
       }
     }
   }
+}
+
+/**
+ * A cave mouth in the rim: open ground with this region's own solid rim straight to the north.
+ * Nothing is carved, so nothing can be cut off; the door simply stands in the rock face.
+ */
+function rimMouth(st: ST, r: number): { x: number; y: number; dir: 'n' | 'e' | 's' | 'w' } | null {
+  const { w, dim } = st;
+  // a mouth in the north rim is seen face-on, so that is tried first; then the other three sides
+  for (const [d, side, dir] of [[-w, 1, 'n'], [1, w, 'e'], [-1, w, 'w'], [w, 1, 's']] as const) {
+    for (const g of st.interior[r]) {
+      const c = g + d;
+      if (st.reserved[g] || dim.solid[g] || st.barriers.has(g)) continue;
+      if (st.owner[c] !== r || !st.border[c] || !dim.solid[c] || st.river[c] || st.reserved[c]) continue;
+      if ([g - side, g + side, g - d].some((i) => st.barriers.has(i) || st.reserved[i])) continue;
+      for (const i of [c, c - side, c + side]) {
+        if (st.owner[i] !== r || !st.border[i] || !dim.solid[i] || st.river[i]) continue;
+        st.reserved[i] = 1;
+        if (dim.deco[i] && st.bp.kind === 'overworld') dim.deco[i] = D.ROCK; // a rock face among the trees
+      }
+      for (const i of [g, g - side, g + side, g - d]) st.reserved[i] = 1;
+      return { x: g % w, y: (g / w) | 0, dir };
+    }
+  }
+  return null;
 }
 
 /**

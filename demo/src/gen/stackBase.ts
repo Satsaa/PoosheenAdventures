@@ -10,6 +10,8 @@ export interface BiomeStyle {
   /** what the solid rim of the region is made of */
   rim: number[];
   rimGround?: number;
+  /** how far the rim stands above the region's ground (built walls) */
+  rimRise?: number;
   solid: number[];
   soft: number[];
   density: number;
@@ -29,6 +31,9 @@ export const STYLES: Record<string, BiomeStyle> = {
   flooded: { ground: T.CAVE, rim: [], rimGround: T.CAVEWALL, solid: [D.STALAG], soft: [D.MUSHROOM], density: 0.02, pond: T.WATER },
   crystal: { ground: T.CAVE, rim: [], rimGround: T.CAVEWALL, solid: [D.CRYSTAL, D.STALAG], soft: [], density: 0.05 },
   magma: { ground: T.CAVE, rim: [], rimGround: T.CAVEWALL, solid: [D.STALAG], soft: [], density: 0.02, pond: T.LAVA },
+  // built places: a castle stands on the screen grid inside straight stone walls; a town is a meadow with streets
+  castle: { ground: T.STONE, rim: [], rimGround: T.WALL, rimRise: 2, solid: [D.PILLAR], soft: [D.TUFT], density: 0.01 },
+  town: { ground: T.GRASS, rim: [D.TREE], solid: [D.TREE], soft: [D.FLOWER, D.FLOWER, D.TUFT], density: 0.012 },
   sky: { ground: T.CLOUD, rim: [], rimGround: T.VOID, solid: [D.PILLAR], soft: [], density: 0.015 },
 };
 
@@ -89,15 +94,21 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
 
   // 1. organic region shapes: screens, warped by smooth noise. The warp is the same for every
   //    stacked world, so a cave really lies under the land that owns its entrance.
+  //    A blocky region (a castle) is not warped: wherever the warp would give a tile to it or
+  //    take one from it, the plain screen grid decides, so its border is made of straight lines.
   const A = wobble;
   const scr = new Int32Array(n);
+  const blocky = bp.regions.map((r) => !!r.blocky), anyBlocky = blocky.some(Boolean);
+  const isBlocky = (s: number) => bp.part.cell[s] >= 0 && blocky[bp.part.cell[s]];
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const wx = x + (valueNoise(seed, x / 9, y / 9) - 0.5) * 2 * A;
     const wy = y + (valueNoise(seed ^ 0x51ed, x / 9, y / 9) - 0.5) * 2 * A;
     const sx = Math.max(0, Math.min(gw - 1, Math.floor(wx / SW)));
     const sy = Math.max(0, Math.min(gh - 1, Math.floor(wy / SH)));
-    scr[y * w + x] = sy * gw + sx;
-    reg[y * w + x] = bp.part.cell[sy * gw + sx];
+    let s = sy * gw + sx;
+    if (anyBlocky) { const plain = ((y / SH) | 0) * gw + ((x / SW) | 0); if (isBlocky(plain) || isBlocky(s)) s = plain; }
+    scr[y * w + x] = s;
+    reg[y * w + x] = bp.part.cell[s];
   }
   markRivers(st, scr, gw, riverWidth);
 
@@ -110,6 +121,30 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
       if (nx < 0 || ny < 0 || nx >= w || ny >= h || reg[ny * w + nx] !== reg[i]) { st.border[i] = 1; break; }
     }
     if (st.river[i]) st.border[i] = 1; // water is not land: it bounds the walkable area like a rim does
+  }
+  // built walls are two tiles thick, and every outward corner carries a tower
+  const tower = new Uint8Array(anyBlocky ? n : 0);
+  if (anyBlocky) {
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (reg[i] < 0 || !blocky[reg[i]] || st.border[i]) continue;
+      for (let dy = -2; dy <= 2 && !st.border[i]; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h || reg[ny * w + nx] !== reg[i]) { st.border[i] = 1; break; }
+      }
+    }
+    const same = (s: number, dx: number, dy: number) => {
+      const x = (s % gw) + dx, y = ((s / gw) | 0) + dy;
+      return x >= 0 && y >= 0 && x < gw && y < gh && bp.part.cell[y * gw + x] === bp.part.cell[s];
+    };
+    bp.regions.forEach((r, k) => {
+      if (!r.blocky) return;
+      for (const s of bp.part.regions[k]) for (const [cx, cy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        if (same(s, cx, 0) || same(s, 0, cy)) continue;
+        const x0 = (s % gw) * SW + (cx < 0 ? 0 : SW - 4), y0 = ((s / gw) | 0) * SH + (cy < 0 ? 0 : SH - 4);
+        for (let y = y0; y < y0 + 4; y++) for (let x = x0; x < x0 + 4; x++) if (reg[y * w + x] === k) { st.border[y * w + x] = 1; tower[y * w + x] = 1; }
+      }
+    });
   }
 
   // 3. each region keeps its largest walkable piece; slivers cut off by the warp become rim
@@ -182,6 +217,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
     if (style.rimGround !== undefined) {
       dim.ground[i] = style.rimGround;
       if (style.rimGround === T.CAVEWALL) dim.elev[i] = region.elev + 1;
+      if (style.rimRise) dim.elev[i] = region.elev + style.rimRise + (tower[i] ? 1 : 0);
       if (style.rimGround === T.VOID) dim.region[i] = -1; // sky islands simply end
     } else dim.deco[i] = st.rng.pick(style.rim);
   }
@@ -240,7 +276,9 @@ export function carveOpenings(st: ST, drop: (edgeId: string) => void): void {
     for (const t of c.walls) {
       border[t] = 1;
       dim.solid[t] = 1;
-      dim.deco[t] = STYLES[st.bp.regions[regOf[t]].biome].rim[0] ?? D.ROCK;
+      const owner = st.bp.regions[regOf[t]], style = STYLES[owner.biome];
+      if (style.rimRise) { dim.ground[t] = style.rimGround!; dim.elev[t] = owner.elev + style.rimRise; }
+      else dim.deco[t] = style.rim[0] ?? D.ROCK;
     }
     let lastA = 0;
     c.path.forEach((j, k) => {

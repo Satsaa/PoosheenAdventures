@@ -3,7 +3,7 @@ import type { DimId, DimKind, Edge, GateKind, HNode, ItemId, Req } from '../core
 import { Rng, childSeed } from '../core/rng';
 import { BIOMES, DUNGEON_NAMES, GATES, NPC_NAMES } from '../core/content';
 import { NONE, any, has, use } from '../core/req';
-import { Ctx, hnode, type RegionBP, type StackBP } from './blueprint';
+import { Ctx, hnode, type InteriorBP, type RegionBP, type RoomBP, type StackBP } from './blueprint';
 import { buildLockGraph, type Payload } from './lockgraph';
 import { buildDungeon, singleRoom } from './dungeon';
 import type { Partition } from './spatial';
@@ -24,6 +24,8 @@ export interface StackSpec {
   fill?: StackBP['fill'];
   /** islands: region pairs that can be joined over the water, with the ocean filler they share */
   sea?: { pairs: [number, number, number][]; needs: ItemId | null };
+  /** called once the graph is known and before anything is placed: last chance to re-theme a region */
+  afterGraph?: (stack: StackBP, lg: { assign: Map<string, Payload[]>; tier: Map<string, number> }) => void;
   /** a portal payload landed in `region`: build the sub-world and connect it */
   onPortal: (region: RegionBP, payload: Payload) => void;
 }
@@ -33,7 +35,7 @@ const likesOf = (biome: string): ItemId[] => BIOMES.find((b) => b.id === biome)?
 export function buildStack(ctx: Ctx, spec: StackSpec): StackBP {
   const rng = new Rng(spec.seed);
   const world = hnode(spec.id, 'world', spec.name, spec.seed, { dim: spec.id });
-  const stack: StackBP = { id: spec.id, kind: spec.kind, name: spec.name, stack: spec.stack, part: spec.part, regions: [], openings: [], hnode: world };
+  const stack: StackBP = { id: spec.id, kind: spec.kind, name: spec.name, stack: spec.stack, part: spec.part, entry: spec.entryRegion, regions: [], openings: [], hnode: world };
   stack.rivers = spec.rivers;
   stack.fill = spec.fill;
   ctx.stacks.push(stack);
@@ -66,8 +68,17 @@ export function buildStack(ctx: Ctx, spec: StackSpec): StackBP {
     seaCandidates: spec.sea?.pairs.map(([a, b]) => [stack.regions[a].id, stack.regions[b].id]),
     seaNeeds: spec.sea?.needs,
   });
+  spec.afterGraph?.(stack, lg);
   for (const le of lg.edges) {
     const a = byId.get(le.a)!, b = byId.get(le.b)!;
+    if (!le.sea && spec.kind !== 'sky' && !a.barren && !b.barren && rng.chance(ctx.settings.tunnels)) {
+      // not a gap in the border but a cave under it, with a mouth on either side and the gate inside
+      tunnel(ctx, rng, a, b, le);
+      world.edges.push({ a: a.id, b: b.id, req: le.req, gate: le.gate });
+      b.hnode.needs = le.req;
+      if (le.spends) { localSource(ctx, a, le.spends); localSource(ctx, b, le.spends); }
+      continue;
+    }
     if (le.sea) {
       // over the water: a pier on each shore, both on the same sea
       const f = seaOf.get(a.idx + '|' + b.idx)!;
@@ -97,6 +108,51 @@ export function buildStack(ctx: Ctx, spec: StackSpec): StackBP {
     for (const p of lg.assign.get(rid)!) realise(ctx, prng, region, p, spec.onPortal);
   }
   return stack;
+}
+
+/**
+ * A cave with two mouths: in at `a`, out at `b`. Two or three chambers in a row; one passage
+ * between them carries the gate. Where the regions lie at different heights the tunnel climbs.
+ */
+export function tunnel(ctx: Ctx, rng: Rng, a: RegionBP, b: RegionBP, gate: { req: Req; gate: GateKind; label: string; spends?: ItemId }): void {
+  const id = `${a.id}.${ctx.uid('tunnel')}`;
+  const name = `Tunnel, ${a.name} to ${b.name}`;
+  const n = rng.range(2, 3);
+  const node = hnode(id, 'place', name, childSeed(a.hnode.seed, id), { placeKind: 'tunnel', dim: id });
+  node.needs = gate.req;
+  // heights: from one mouth's level to the other's; a level tunnel may still hump in the middle
+  const base = Math.min(a.elev, b.elev), ea = Math.min(3, a.elev - base), eb = Math.min(3, b.elev - base);
+  const heights = ctx.settings.caveHeights;
+  const hump = heights && ea === eb && n === 3 && rng.chance(0.5) ? 1 : 0;
+  const rooms: RoomBP[] = [];
+  for (let k = 0; k < n; k++) {
+    const part = k === 0 ? `${a.name} end` : k === n - 1 ? `${b.name} end` : 'middle';
+    const loc = ctx.loc(`${id}.r${k}`, `${name}: ${part}`, `${id}.r${k}`, id);
+    const rn = hnode(loc, 'room', part, childSeed(a.hnode.seed, loc), { dim: id });
+    rn.locs.push(loc);
+    node.children.push(rn);
+    rooms.push({ cell: k, loc, objs: [], elev: heights ? Math.round(ea + ((eb - ea) * k) / (n - 1)) + (k === 1 ? hump : 0) : 0 });
+  }
+  const interior: InteriorBP = { id, name, style: 'cave', gw: n, gh: 1, rooms, doors: [], entryRoom: 0, entranceEdge: '', heights };
+  const gated = rng.int(n - 1);
+  for (let k = 0; k < n - 1; k++) {
+    const g = k === gated ? gate : { req: NONE, gate: 'open' as GateKind, label: 'Open passage' };
+    const e = ctx.edge(rooms[k].loc, rooms[k + 1].loc, g.req, g.gate);
+    interior.doors.push({ edgeId: e.id, a: k, b: k + 1, gate: g.gate, req: g.req, label: g.label });
+    node.edges.push({ a: e.a, b: e.b, req: g.req, gate: g.gate });
+    // what the gate spends, the chambers on both sides of it give back
+    if (k === gated && gate.spends) for (const room of [rooms[k], rooms[k + 1]]) {
+      const s = ctx.source(room.loc, gate.spends, `Pots (${ctx.items[gate.spends].name})`);
+      room.objs.push({ id: 'o.' + s.id, kind: 'source', label: s.label, sourceId: s.id, style: 'pot', icon: ctx.items[gate.spends].icon });
+    }
+  }
+  const ea0 = ctx.edge(a.id, rooms[0].loc, NONE, 'portal'), eb0 = ctx.edge(b.id, rooms[n - 1].loc, NONE, 'portal');
+  interior.entranceEdge = ea0.id;
+  interior.exits = [{ edgeId: eb0.id, room: n - 1 }];
+  ctx.interiors.push(interior);
+  a.feats.push({ f: 'entrance', edgeId: ea0.id, style: 'cave', label: `Tunnel to ${b.name}`, req: NONE, interior });
+  b.feats.push({ f: 'entrance', edgeId: eb0.id, style: 'cave', label: `Tunnel to ${a.name}`, req: NONE, interior });
+  a.hnode.children.push(node);
 }
 
 /**

@@ -1,12 +1,12 @@
 // Seed -> blueprint (logic graph + features to realise). No tiles yet.
 import type { HNode, ItemId, LogicGraph } from '../core/types';
 import { Rng, childSeed } from '../core/rng';
-import { BASE_ITEMS, BIOMES, ENEMIES, FILLER_NAMES, GATES, ISLAND_BIOMES, ISLAND_NAMES, UNDER_BIOMES, WEAPONS } from '../core/content';
+import { BASE_ITEMS, BIOMES, CASTLE_NAMES, ENEMIES, FILLER_NAMES, GATES, ISLAND_BIOMES, ISLAND_NAMES, NPC_NAMES, TOWN_LINES, TOWN_NAMES, UNDER_BIOMES, WEAPONS } from '../core/content';
 import { NONE, all, any, at, has, reqItems, use } from '../core/req';
 import { solve } from '../core/solver';
 import { Ctx, hnode, type RegionBP, type StackBP } from './blueprint';
 import { makePlan, type Plan } from './plan';
-import { buildStack, localSource, placeItem } from './regions';
+import { buildStack, localSource, placeItem, tunnel } from './regions';
 import { singleRoom } from './dungeon';
 import { addNpcs } from './npcs';
 import { FILL, addRegions, carveIslands, fillers, growRegions, landMask, neighbours as neighboursOf, splitByRivers, traceRivers, type Partition, type Rect } from './spatial';
@@ -88,29 +88,31 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   // rivers flow downhill over this land; a region cut in two by one becomes two banks
   // (a course that would leave a bank too small to hold anything is not taken; wider rivers need wider banks)
   const minBank = 1 + S.riverWidth;
-  const roomyBanks = (rs: Parameters<typeof splitByRivers>[1]) => {
-    const cut = splitByRivers(base, rs);
-    return cut.part.regions.every((screens, i) => screens.length >= Math.min(minBank, base.regions[cut.origin[i]].length));
+  const roomyBanks = (whole: Partition) => (rs: Parameters<typeof splitByRivers>[1]) => {
+    const cut = splitByRivers(whole, rs);
+    return cut.part.regions.every((screens, i) => screens.length >= Math.min(minBank, whole.regions[cut.origin[i]].length));
   };
-  const rivers = S.rivers > 0 ? traceRivers(new Rng(childSeed(seed, 'rivers')), base, (r) => baseThemes[r].elev, S.rivers, roomyBanks, (s) => fill.kind[s] === FILL.OCEAN) : [];
+  const rivers = S.rivers > 0 ? traceRivers(new Rng(childSeed(seed, 'rivers')), base, (r) => baseThemes[r].elev, S.rivers, roomyBanks(base), (s) => fill.kind[s] === FILL.OCEAN) : [];
   const cut = splitByRivers(base, rivers);
   const origin = cut.origin;
   const entryRegion = cut.part.cell[startScreen];
   // a split region's parts are named after where they lie: "north bank", "east bank", ...
   const centre = (screens: number[]) => ({ x: screens.reduce((a, c) => a + (c % GW), 0) / screens.length, y: screens.reduce((a, c) => a + ((c / GW) | 0), 0) / screens.length });
   const taken = new Set<string>();
-  const themes = origin.map((o, i) => {
-    const t = baseThemes[o];
-    const parts = origin.filter((x) => x === o).length;
-    if (parts === 1 || i === entryRegion) { taken.add(t.name); return t; }
-    const whole = centre(base.regions[o]), mine = centre(cut.part.regions[i]);
-    const dx = mine.x - whole.x, dy = mine.y - whole.y;
+  type Theme = (typeof baseThemes)[number];
+  const bankThemes = (whole: Partition, split: { part: Partition; origin: number[] }, of: Theme[], keep: number): Theme[] => split.origin.map((o, i) => {
+    const t = of[o];
+    const parts = split.origin.filter((x) => x === o).length;
+    if (parts === 1 || i === keep) { taken.add(t.name); return t; }
+    const all = centre(whole.regions[o]), mine = centre(split.part.regions[i]);
+    const dx = mine.x - all.x, dy = mine.y - all.y;
     const side = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'east' : 'west') : dy > 0 ? 'south' : 'north';
     let name = `${t.name}, ${side} bank`;
     for (let k = 2; taken.has(name); k++) name = `${t.name}, ${side} bank ${k}`;
     taken.add(name);
     return { ...t, name };
   });
+  const themes = bankThemes(base, cut, baseThemes, entryRegion);
   // 1b. islands: regions out at sea, with water on every side. Each is tied to the mainland over
   //     its sea, from a coastal region low enough for a pier (or from another island).
   let part = cut.part;
@@ -162,7 +164,7 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
       const tryP = growRegions(prng, GW, GH, prng.range(Math.min(2, maxRegions), maxRegions), { budget: Math.max(2, prng.range(size - 1, size + 1)), seeds: [seedScreen], allowed: isLand });
       if (connected(tryP)) { sub = tryP; break; }
     }
-    const theme = (idx: number) => {
+    const theme = (idx: number): Theme => {
       if (kind === 'sky') return { biome: 'sky', elev: 0, name: ['Cloudnap Isle', 'Highpurr Terrace'][idx % 2], color: '#dfe9ff' };
       // what lies above decides what the cave is like: lakes flood it, mountains fill it with crystal
       const count = new Map<string, number>();
@@ -172,23 +174,60 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
       let name = u.name;
       for (let k = 2; usedNames.has(name); k++) name = k === 2 ? `Deep ${u.name}` : `${u.name} ${k}`;
       usedNames.add(name);
-      return { biome: u.id, elev: 0, name, color: u.color };
+      // cave floors lie at different heights: stairs and drops between cave systems, and water runs downhill
+      return { biome: u.id, elev: S.caveHeights && S.cliffs ? prng.pick(u.id === 'flooded' ? [0, 0, 1] : [0, 1, 1, 2]) : 0, name, color: u.color };
     };
+    const whole = sub.regions.map((_, i) => theme(i));
+    // rivers run through the underworld too; a cave system cut in two by one becomes two banks
+    const under = kind === 'under' && S.caveRivers > 0;
+    const subRivers = under ? traceRivers(new Rng(childSeed(seed, 'caverivers')), sub, (r) => whole[r].elev, S.caveRivers, roomyBanks(sub)) : [];
+    const subCut = splitByRivers(sub, subRivers);
+    const entry = subCut.part.cell[seedScreen];
+    const subThemes = bankThemes(sub, subCut, whole, entry);
     const stack = buildStack(ctx, {
       id: kind, kind: kind === 'under' ? 'underworld' : 'sky', name: kind === 'under' ? 'Underworld' : 'Sky', stack: kind === 'under' ? -1 : 1,
-      part: sub, seed: childSeed(seed, kind + 'w'), payloads: p.data!.inner as typeof plan.over, entryRegion: 0, entryCaps: p.caps ?? [],
-      entryPayloads: prng.chance(0.5) ? 1 : 0, theme, onPortal: () => { throw new Error('nested portal'); },
+      part: subCut.part, seed: childSeed(seed, kind + 'w'), payloads: p.data!.inner as typeof plan.over, entryRegion: entry, entryCaps: p.caps ?? [],
+      entryPayloads: prng.chance(0.5) ? 1 : 0, theme: (i) => subThemes[i], onPortal: () => { throw new Error('nested portal'); }, rivers: subRivers,
     });
     stack.hnode.entryCaps = p.caps ?? [];
     stack.hnode.needs = region.hnode.needs;
-    const e = ctx.edge(region.id, stack.regions[0].id, NONE, 'portal');
+    const first = stack.regions[entry];
+    const e = ctx.edge(region.id, first.id, NONE, 'portal');
     const down = kind === 'under';
-    region.feats.push({ f: 'vertical', edgeId: e.id, style: down ? 'stairs-down' : 'beanstalk', label: down ? 'Stairs to the Underworld' : 'Beanstalk to the Sky', req: NONE, other: stack.regions[0] });
+    region.feats.push({ f: 'vertical', edgeId: e.id, style: down ? 'stairs-down' : 'beanstalk', label: down ? 'Stairs to the Underworld' : 'Beanstalk to the Sky', req: NONE, other: first });
     game.edges.push({ a: 'over', b: kind, req: NONE, gate: 'portal' });
   };
 
+  // 2a. built places. Once the graph says what goes where, one region becomes the castle (the one
+  //     that holds the Sealed Sanctum if it can, else the deepest) and an early one becomes the town.
+  let castle: RegionBP | null = null, town: RegionBP | null = null;
+  const builtPlaces: NonNullable<Parameters<typeof buildStack>[1]['afterGraph']> = (stack, lg) => {
+    const brng = new Rng(childSeed(seed, 'built'));
+    const fits = (r: RegionBP, screens: number) => !r.barren && r.idx !== entryRegion && !isIsle[part.regions[r.idx][0]] && part.regions[r.idx].length >= screens;
+    const become = (r: RegionBP, biome: string, name: string, color: string) => {
+      Object.assign(r, { biome, name, color });
+      r.hnode.name = name;
+      r.hnode.meta.biome = biome;
+      ctx.locs.get(r.id)!.name = name;
+      themes[r.idx] = { ...themes[r.idx], biome, name, color };
+    };
+    const tier = (r: RegionBP) => lg.tier.get(r.id) ?? 0;
+    if (S.castle) {
+      const cands = stack.regions.filter((r) => fits(r, 3));
+      castle = cands.find((r) => lg.assign.get(r.id)!.some((p) => p.kind === 'sanctum')) ?? cands.sort((a, b) => tier(b) - tier(a))[0] ?? null;
+      if (castle) { become(castle, 'castle', brng.pick(CASTLE_NAMES), '#b9b4c6'); castle.blocky = true; }
+    }
+    if (S.town) {
+      // near the start, and of the regions that are, the roomiest
+      const cands = stack.regions.filter((r) => fits(r, 4) && r !== castle && r.elev <= 2 && r.biome !== 'lake');
+      const near = Math.min(...cands.map(tier)) + 1;
+      town = cands.filter((r) => tier(r) <= near).sort((a, b) => part.regions[b.idx].length - part.regions[a.idx].length)[0] ?? null;
+      if (town) become(town, 'town', brng.pick(TOWN_NAMES), '#e0b98a');
+    }
+  };
+
   const over = buildStack(ctx, {
-    id: 'over', kind: 'overworld', name: 'Overworld', stack: 0, part, seed: childSeed(seed, 'overw'), payloads: plan.over,
+    id: 'over', kind: 'overworld', name: 'Overworld', stack: 0, part, seed: childSeed(seed, 'overw'), payloads: plan.over, afterGraph: builtPlaces,
     entryRegion, entryCaps: [], entryPayloads: plan.gifts, theme: (i) => themes[i], onPortal, rivers, fill,
     sea: seaPairs.length ? { pairs: seaPairs, needs: ctx.hasBoat ? 'boat' : null } : undefined,
   });
@@ -229,6 +268,45 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   shop.node.provides = ['heart'];
   start.feats.push({ f: 'entrance', edgeId: se.id, style: 'shop', label: 'Village Shop', req: NONE, interior: shop.interior });
   start.hnode.children.push(shop.node);
+
+  // 3b. the castle keep and the town's houses
+  const lived = new Rng(childSeed(seed, 'lived'));
+  const big = castle as RegionBP | null, burg = town as RegionBP | null;
+  if (big && !big.feats.some((f) => f.f === 'entrance' && f.style === 'sanctum')) {
+    // no sanctum to be its keep: the keep is a hall with the royal treasury in it
+    const keep = singleRoom(ctx, `${big.id}.keep`, `Keep of ${big.name}`, 'dungeon', childSeed(seed, 'keep'));
+    const e = ctx.edge(big.id, keep.entryLoc, NONE, 'portal');
+    keep.interior.entranceEdge = e.id;
+    const c = ctx.check(keep.entryLoc, 'heart', 'chest', 'Royal treasury (heart piece)');
+    keep.room.objs.push({ id: 'o.' + c.id, kind: 'chest', label: c.label, checkId: c.id });
+    keep.node.provides = ['heart'];
+    big.feats.push({ f: 'entrance', edgeId: e.id, style: 'dungeon', label: keep.interior.name, req: NONE, interior: keep.interior });
+    big.hnode.children.push(keep.node);
+  }
+  if (burg) {
+    const names = lived.shuffle(NPC_NAMES.filter((n) => !ctx.npcs.some((p) => p.name === n)));
+    const lines = lived.shuffle(TOWN_LINES);
+    const homes = Math.min(3, S.townHouses, names.length, Math.floor(part.regions[burg.idx].length / 2));
+    for (let k = 0; k < S.townHouses; k++) {
+      if (k >= homes) { burg.feats.push({ f: 'house' }); continue; }
+      // a few houses can be entered: somebody lives there, and keeps pots or a little treasure
+      const who = names[k];
+      const home = singleRoom(ctx, `${burg.id}.home${k}`, `${who}'s house`, 'house', childSeed(seed, 'home' + k));
+      const e = ctx.edge(burg.id, home.entryLoc, NONE, 'portal');
+      home.interior.entranceEdge = e.id;
+      if (k === 0) {
+        const c = ctx.check(home.entryLoc, 'heart', 'chest', `Chest in ${who}'s house (heart piece)`);
+        home.room.objs.push({ id: 'o.' + c.id, kind: 'chest', label: c.label, checkId: c.id });
+        home.node.provides = ['heart'];
+      } else {
+        const s = ctx.source(home.entryLoc, 'rupees', `${who}'s pots (rupees)`);
+        home.room.objs.push({ id: 'o.' + s.id, kind: 'source', label: s.label, sourceId: s.id, style: 'pot', icon: '◆' });
+      }
+      burg.feats.push({ f: 'entrance', edgeId: e.id, style: 'house', label: home.interior.name, req: NONE, interior: home.interior });
+      burg.hnode.children.push(home.node);
+      ctx.npcs.push({ id: 'town' + k, name: who, role: 'Townsfolk', icon: '☺', color: '#e0b98a', stages: [{ when: NONE, loc: burg.id, dim: burg.stack.id, x: 0, y: 0, line: lines[k % lines.length], offers: [] }] });
+    }
+  }
 
   // 4. optional secrets: heart pieces behind ANY tool, so later tools reward backtracking
   for (const r of roomy) {
@@ -323,6 +401,13 @@ function addLoops(ctx: Ctx, rng: Rng, graph: LogicGraph, over: StackBP): void {
         const pool = tools(a, b);
         if (!pool.length) continue;
         const g = GATES[rng.pick(pool)];
+        if (stack.kind !== 'sky' && !a.barren && !b.barren && rng.chance(S.tunnels)) {
+          // the shortcut is a cave under the border
+          tunnel(ctx, rng, a, b, g);
+          stack.hnode.edges.push({ a: a.id, b: b.id, req: g.req, gate: g.gate });
+          if (g.spends) { localSource(ctx, a, g.spends); localSource(ctx, b, g.spends); }
+          continue;
+        }
         const e = ctx.edge(a.id, b.id, g.req, g.gate);
         stack.openings.push({ edgeId: e.id, a: a.idx, b: b.idx, gate: g.gate, req: g.req, label: g.label + ' (shortcut)', optional: true });
         stack.hnode.edges.push({ a: a.id, b: b.id, req: g.req, gate: g.gate });
@@ -331,7 +416,7 @@ function addLoops(ctx: Ctx, rng: Rng, graph: LogicGraph, over: StackBP): void {
     }
     // extra stairs: every other region of a stacked world also connects to whatever is above/below it
     if (stack === over) continue;
-    for (const r of stack.regions.slice(1)) {
+    for (const r of stack.regions.filter((x) => x.idx !== stack.entry)) {
       if (!rng.chance(S.extraStairs)) continue;
       const screen = rng.pick(stack.part.regions[r.idx]);
       const top = over.regions[over.part.cell[screen]];
