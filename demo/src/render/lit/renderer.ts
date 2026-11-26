@@ -849,6 +849,8 @@ export class LitRenderer {
     gl.uniform1f(pl.u.uWaterK, G.water);
     gl.uniform1f(pl.u.uFoamK, G.waterFoam);
     gl.uniform1f(pl.u.uGlintK, G.waterGlint);
+    gl.uniform4f(pl.u.uGlintP, G.waterGlintDensity, 16 / Math.max(1, G.waterGlintSize), G.waterGlintCrest, G.waterGlintLowSun);
+    gl.uniform1f(pl.u.uGlintPL, G.waterGlintLights);
     gl.uniform3fv(pl.u.uBg0, mood.bg0);
     gl.uniform3fv(pl.u.uBg1, mood.bg1);
     gl.uniform3fv(pl.u.uFogTint, mood.fogTint);

@@ -39,7 +39,7 @@ export function realiseTiles(bp: Blueprint, seed: number): TileResult {
   const sts = new Map<DimId, ST>();
   for (const s of bp.ctx.stacks) {
     const S = bp.ctx.settings;
-    const st = initStack(s, s.part.gw, s.part.gh, seed, S.borderWobble, S.scenery, S.riverWidth);
+    const st = initStack(s, s.part.gw, s.part.gh, seed, S.borderWobble, S.scenery, S.riverWidth, S.lava);
     carveOpenings(st, drop);
     sts.set(s.id, st);
   }
@@ -222,10 +222,10 @@ function addRivers(bp: Blueprint, st: ST, problems: string[]): Set<string> {
     const fall = up >= 0 ? falls.get(`${up}>${k}`) : undefined;
     const upLoc = up >= 0 ? kept[up] : null;
     const all = tilesOf[k].filter((i) => !bridge[i]);
-    if (!swim || !all.length || !(shores[k].size || (upLoc && fall))) {
+    if (!swim || sg.lava || !all.length || !(shores[k].size || (upLoc && fall))) {
       kept.push(null);
-      // still a waterfall to look at, even when nobody can swim
-      if (fall) dim.objects.push({ id: `wf.${k}`, kind: 'gate', gate: 'waterfall', x: fall.tile % w, y: (fall.tile / w) | 0, label: 'Waterfall', dir: fall.dir });
+      // still a waterfall to look at, even when nobody can swim (molten rock just pours over the edge)
+      if (fall && !sg.lava) dim.objects.push({ id: `wf.${k}`, kind: 'gate', gate: 'waterfall', x: fall.tile % w, y: (fall.tile / w) | 0, label: 'Waterfall', dir: fall.dir });
       return;
     }
     const stretches = segs.filter((o) => o.river === sg.river).length;

@@ -272,7 +272,8 @@ uniform float uCastR;     // caster px per tile
 uniform vec2 uCastSize;
 uniform vec3 uSun;        // direction toward the sun (x east, y south, z up), normalized
 uniform float uShadowMode, uShadowStr, uShadowSoft, uTerrainSh, uContact, uAmbK, uSunK, uPointK, uSea;
-uniform float uFogDark, uFogDesat, uWaterK, uFoamK, uGlintK;
+uniform float uFogDark, uFogDesat, uWaterK, uFoamK, uGlintK, uGlintPL;
+uniform vec4 uGlintP; // water speculars: density, cells per tile, crest focus, low-sun boost
 uniform sampler2D uOvA;
 uniform float uOvP, uOvTop;
 uniform vec2 uOvSize;
@@ -447,7 +448,7 @@ void main() {
       N = sn;
       float fo = foamStreak(P.xy, t) * uFoamK * zf * (1.0 - smoothstep(2.0, 10.0, dist) * 0.6);
       A.rgb = mix(A.rgb, vec3(0.62, 0.7, 0.75), fo);
-      waterGlint = step(0.78, swell(q, t)) * step(0.985, hash(floor(P.xy * 4.0))) * zf;
+      waterGlint = step(0.78 * uGlintP.z, swell(q, t)) * step(1.0 - 0.015 * uGlintP.x, hash(floor(P.xy * uGlintP.y))) * zf;
     } else {
       // swimmable water: lighter, clearer and calmer
       float sw = swell(q * 1.3, t * 0.7);
@@ -461,7 +462,7 @@ void main() {
         float st = fract(along * 0.35 - t * 0.35 + hash(vec2(lane, 1.0)) * 7.0);
         emi += vec3(0.1, 0.14, 0.17) * smoothstep(0.7, 0.95, st) * (1.0 - smoothstep(0.95, 1.0, st)) * step(0.72, hash(vec2(lane, 2.0))) * zf * uFoamK;
       }
-      waterGlint = step(0.85, sw) * step(0.992, hash(floor(P.xy * 4.0))) * zf;
+      waterGlint = step(0.85 * uGlintP.z, sw) * step(1.0 - 0.008 * uGlintP.x, hash(floor(P.xy * uGlintP.y))) * zf;
     }
     if (uRock > 0.0) {
       // underground water: a soft, banded caustic glow
@@ -518,7 +519,7 @@ void main() {
   if (mat == 1) {
     // sparse glints on swell crests, mostly when the sun or moon is low
     float lowK = 1.0 - smoothstep(0.25, 0.75, uKeyDir.z);
-    spec += uKeyCol * waterGlint * sh * uGlintK * (0.12 + 0.3 * lowK);
+    spec += uKeyCol * waterGlint * sh * uGlintK * (0.12 + 0.3 * lowK * uGlintP.w);
   } else if (shiny) {
     vec3 hv = normalize(uKeyDir + V);
     spec += uKeyCol * step(0.965, dot(N, hv)) * sh * 0.6;
@@ -544,7 +545,7 @@ void main() {
       vec3 hv = normalize(l + V);
       spec += uLC[i].rgb * step(0.93, dot(N, hv)) * att * 0.8 * pul;
     }
-    if (mat == 1) spec += uLC[i].rgb * waterGlint * att * 0.6 * pul;
+    if (mat == 1) spec += uLC[i].rgb * waterGlint * att * 0.6 * pul * uGlintPL;
   }
   if (fog > 0.5) { pl *= 0.25; spec *= 0.2; emi *= 0.35; }
   vec3 c = A.rgb * (amb + key + pl) + spec + emi;

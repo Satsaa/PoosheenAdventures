@@ -130,6 +130,8 @@ export interface InteriorBP {
   stairs?: StairBP[];
   /** rooms may get raised ledges */
   heights?: boolean;
+  /** entered from a magma cave: its pools and pits hold lava */
+  lava?: boolean;
 }
 
 export class Ctx {

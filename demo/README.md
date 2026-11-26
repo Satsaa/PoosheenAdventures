@@ -106,6 +106,10 @@ Open `dist/index.html` in a browser. No server needed.
   the other's; cave and dungeon rooms may have a raised ledge with stairs.
 - Cave water: rivers run through the underworld (`caveRivers`) under the rules of rivers above
   ground, caves have pools, and a swim gate inside a tunnel is a flooded passage.
+- Lava (`lava`): pools are grown tile by tile in underworld caves, mostly magma ones. A pool has
+  no holes and keeps a full ring of open floor, so it can be walked round and never cuts a
+  cave in two. An underworld river that rises in a magma cave runs molten (no swimming), and
+  places entered from a magma cave have lava in their pools and pits.
 - Free refills are judged per building: a dungeon's entrance hall covers all of its floors.
 
 ## Castle and town

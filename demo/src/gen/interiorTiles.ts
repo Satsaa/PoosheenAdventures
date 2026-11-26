@@ -175,7 +175,7 @@ export function realiseInterior(bp: InteriorBP, seed: number): InteriorTiles {
         for (let y = R.y0 + 2; y <= R.y1 - 2; y++) for (let x = R.x0 + 2; x <= R.x1 - 2; x++) {
           const i = at(x, y);
           dim.solid[i] = 1; taken.add(i);
-          dim.ground[i] = kind === 'pool' ? T.WATER : T.VOID;
+          dim.ground[i] = bp.lava ? T.LAVA : kind === 'pool' ? T.WATER : T.VOID;
         }
       } else if (kind === 'ledge') {
         // the back of the room is a ledge one step up, with stairs in the middle. Only where no

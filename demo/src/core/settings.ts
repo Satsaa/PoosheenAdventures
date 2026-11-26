@@ -19,7 +19,7 @@ export interface ItemSetting {
 export interface GenSettings {
   worldW: number; worldH: number; regions: number; borderWobble: number; cliffs: boolean; scenery: number; landCoverage: number; coastFromSeed: boolean; landlocked: number;
   oceanSize: number; islands: number; islandSize: number; docks: number; ferries: number; ferryFare: number; outcrops: number;
-  rivers: number; riverWidth: number; riverCaves: number; caveRivers: number; caveHeights: boolean; tunnels: number;
+  rivers: number; riverWidth: number; riverCaves: number; caveRivers: number; caveHeights: boolean; tunnels: number; lava: number;
   castle: boolean; town: boolean; townHouses: number; dungeonFloors: number;
   underworld: boolean; underworldSize: number; underworldRegions: number; sky: boolean; skySize: number;
   dungeons: number; sealMedallions: number; lockDensity: number; linearity: number; secrets: number; everyToolUsed: boolean;
@@ -73,6 +73,8 @@ export const SETTING_DEFS: SettingDef[] = [
   num('tunnels', 'Caves', 'Tunnels', 'float', 0, 1, 0.05, 0.3, 'Chance that the way between two regions is a cave with a mouth on either side instead of a gap in the border. The gate then stands inside the cave. Shortcuts can be tunnels too.', 'cave multi entrance passage two exits'),
   flag('caveHeights', 'Caves', 'Cave heights', true, 'Caves have floors at different heights: underworld regions sit on different levels with stairs and drops between them, tunnels climb from one mouth to the other, and cave rooms get raised ledges.', 'elevation cliffs ledge stairs underworld'),
   num('caveRivers', 'Caves', 'Underworld rivers', 'int', 0, 6, 1, 1, 'Rivers that run through the underworld. They follow the same rules as rivers above ground: bridges at borders, the Swim Gear to enter, waterfalls where the cave floor drops.', 'water stream cave underground'),
+
+  num('lava', 'Caves', 'Lava', 'float', 0, 3, 0.1, 1, 'How much lava the underworld holds: pools of every shape in the magma caves and a few in ordinary ones, lava instead of water in the pools and pits of places entered from magma caves, and an underworld river that rises there runs molten. Lava can never be crossed and never cuts a cave in two.', 'magma molten fire underworld pool'),
 
   num('oceanSize', 'Ocean', 'Sea width', 'int', 0, 16, 1, 4, 'Screens of open sea added beyond the land on every side that is sea. The map grows by this much on those sides; the land keeps the size set under World.', 'ocean amount water margin size'),
   num('islands', 'Ocean', 'Island regions', 'int', 0, 10, 1, 2, 'Islands out at sea that are regions in their own right, with places and gates of their own. They can only be reached over the water, which makes the Boat (or a ferry) part of the progression. Needs a sea wide enough to hold them.', 'archipelago isle boat'),

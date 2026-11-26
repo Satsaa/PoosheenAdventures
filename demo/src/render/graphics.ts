@@ -19,7 +19,7 @@ export interface GraphicsDef {
 
 export type GraphicsSettings = Record<string, number | boolean | string>;
 
-const L = 'Graphics: light', S = 'Graphics: shadows', DT = 'Graphics: detail', P = 'Graphics: post', O = 'Graphics: overlay', C = 'Graphics: camera';
+const L = 'Graphics: light', S = 'Graphics: shadows', DT = 'Graphics: detail', W = 'Graphics: water', P = 'Graphics: post', O = 'Graphics: overlay', C = 'Graphics: camera';
 
 export const GRAPHICS_DEFS: GraphicsDef[] = [
   // light
@@ -51,10 +51,16 @@ export const GRAPHICS_DEFS: GraphicsDef[] = [
   { key: 'renderScale', label: 'Render scale', group: DT, type: 'float', min: 0.35, max: 2, step: 0.05, default: 1, help: 'Internal resolution relative to the screen (capped by the device pixel ratio). Lower is faster and chunkier.', keywords: 'resolution performance pixels dpr' },
   { key: 'maxPixels', label: 'Max internal megapixels', group: DT, type: 'float', min: 0.3, max: 6, step: 0.1, default: 1.6, help: 'Upper bound on the lit renderer\'s internal resolution, in millions of pixels.', keywords: 'resolution performance cap' },
   { key: 'particles', label: 'Particle density', group: DT, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Fireflies, embers, snow, mist and sparkles.', keywords: 'effects ambient' },
-  { key: 'water', label: 'Water animation', group: DT, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'How strongly water, lava and waterfalls move.', keywords: 'waves river flow' },
-  { key: 'waterFoam', label: 'Water foam', group: DT, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Amount of drifting foam streaks on the open sea and of flow streaks on rivers (surf along coasts is always drawn).', keywords: 'whitecaps waves sea river' },
-  { key: 'waterGlint', label: 'Water glints', group: DT, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Sparse sun / moon glints on swell crests, strongest when the light is low.', keywords: 'specular sparkle sea' },
   { key: 'animation', label: 'Creature animation', group: DT, type: 'bool', default: true, help: 'Animate enemies and NPCs (they always stand still with reduced motion).', keywords: 'motion wander enemies' },
+  // water
+  { key: 'water', label: 'Water animation', group: W, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'How strongly water, lava and waterfalls move.', keywords: 'waves river flow' },
+  { key: 'waterFoam', label: 'Water foam', group: W, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Amount of drifting foam streaks on the open sea and of flow streaks on rivers (surf along coasts is always drawn).', keywords: 'whitecaps waves streaks' },
+  { key: 'waterGlint', label: 'Speculars: brightness', group: W, type: 'float', min: 0, max: 4, step: 0.05, default: 1, help: 'How bright the sun and moon glints on water are. 0 switches them off.', keywords: 'specular sparkle glint sea highlight' },
+  { key: 'waterGlintDensity', label: 'Speculars: density', group: W, type: 'float', min: 0, max: 8, step: 0.1, default: 1, help: 'How many glints there are. 1 is sparse; 8 covers the crests in sparkle.', keywords: 'specular sparkle glint count amount' },
+  { key: 'waterGlintSize', label: 'Speculars: size', group: W, type: 'int', min: 1, max: 8, step: 1, default: 4, help: 'Size of one glint in texture pixels (a tile is 16).', keywords: 'specular sparkle glint pixel' },
+  { key: 'waterGlintCrest', label: 'Speculars: crest focus', group: W, type: 'float', min: 0, max: 1.25, step: 0.05, default: 1, help: 'How strictly glints keep to the crests of the swell. 0 scatters them over all water; higher values leave only the tops of the highest waves.', keywords: 'specular sparkle glint waves swell spread' },
+  { key: 'waterGlintLowSun', label: 'Speculars: low-sun boost', group: W, type: 'float', min: 0, max: 4, step: 0.1, default: 1, help: 'How much brighter glints get when the sun or moon is near the horizon. 0 keeps them the same all day.', keywords: 'specular sparkle glint sunset dusk dawn time' },
+  { key: 'waterGlintLights', label: 'Speculars: from lamps', group: W, type: 'float', min: 0, max: 4, step: 0.05, default: 1, help: 'Glints that torches, lanterns and other point lights make on water near them.', keywords: 'specular sparkle glint torch point light cave' },
   // post
   { key: 'saturation', label: 'Saturation', group: P, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Colour intensity after lighting (1 = each scene\'s own grade).', keywords: 'colour grade vivid' },
   { key: 'contrast', label: 'Contrast', group: P, type: 'float', min: 0.5, max: 1.6, step: 0.02, default: 1, help: 'Contrast after lighting (1 = each scene\'s own grade).', keywords: 'grade' },
@@ -96,7 +102,8 @@ export interface Gfx {
   bloom: number; bloomThreshold: number; bloomRadius: number;
   shadows: 'baked' | 'flat' | 'off'; shadowStrength: number; shadowSoftness: number; terrainShadows: boolean; contactShadows: number;
   detailDistance: number; detailFade: number; dither: boolean; renderScale: number; maxPixels: number;
-  particles: number; water: number; waterFoam: number; waterGlint: number; animation: boolean;
+  particles: number; water: number; waterFoam: number; animation: boolean;
+  waterGlint: number; waterGlintDensity: number; waterGlintSize: number; waterGlintCrest: number; waterGlintLowSun: number; waterGlintLights: number;
   saturation: number; contrast: number; vignette: number; fogDarkness: number; fogDesaturation: number;
   pixelSnap: 'world' | 'screen' | 'none'; integerZoom: boolean;
   outlineCreatures: 'off' | 'subtle' | 'strong'; outlineObjects: 'off' | 'subtle' | 'strong'; outlineProps: 'off' | 'subtle' | 'strong';

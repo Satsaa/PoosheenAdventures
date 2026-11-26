@@ -197,7 +197,7 @@ export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => voi
       }
     }
   }
-  for (const st of sts.values()) { stampOutcrops(st, sea.outcrops); paths(st); scenery(st); }
+  for (const st of sts.values()) { stampOutcrops(st, sea.outcrops); stampLava(st); paths(st); scenery(st); }
   return doors;
 }
 
@@ -266,7 +266,7 @@ function scenery(st: ST): void {
         for (const j of [i - 1, i + 1, i - w, i + w, i - w - 1, i - w + 1, i + w - 1, i + w + 1]) if (dim.solid[j] || st.barriers.has(j)) open = false;
         if (!open) continue;
         dim.solid[i] = 1;
-        if (style.pond !== undefined && rng.chance(0.6)) dim.ground[i] = style.pond;
+        if (style.pond !== undefined && !(style.pond === T.LAVA && st.lava <= 0) && rng.chance(0.6)) dim.ground[i] = style.pond;
         else if (style.solid.length) dim.deco[i] = rng.pick(style.solid);
       } else if (roll < density + 0.07 * Math.min(1.5, st.scenery) && style.soft.length && dim.ground[i] === style.ground) {
         dim.deco[i] = rng.pick(style.soft);
@@ -379,6 +379,50 @@ function buildDock(st: ST, r: number, filler: number, ferry: boolean, edgeId?: s
     }
   }
   return false;
+}
+
+/** How much of each kind of cave is lava. */
+const LAVA_SHARE: Record<string, number> = { magma: 0.07, cavern: 0.012, crystal: 0.006 };
+
+/**
+ * Lava pools in the underworld, grown tile by tile like the outcrops at sea. A pool never has a
+ * hole and always keeps a full ring of open floor around it, so whoever could walk through that
+ * spot can walk round it: lava changes the way, never whether there is one.
+ */
+function stampLava(st: ST): void {
+  if (st.bp.kind !== 'underworld' || st.lava <= 0) return;
+  const { w, dim, rng } = st;
+  const mine = new Uint8Array(dim.ground.length);
+  const RING = [-w - 1, -w, -w + 1, 1, w + 1, w, w - 1, -1]; // the eight neighbours, in a circle
+  for (const r of st.bp.regions) {
+    const tiles = st.interior[r.idx];
+    let budget = Math.round(tiles.length * (LAVA_SHARE[r.biome] ?? 0) * st.lava);
+    const open = (i: number) => st.owner[i] === r.idx && !st.border[i] && !dim.solid[i] && !st.barriers.has(i);
+    for (let tries = 0; budget > 2 && tries < 60; tries++) {
+      const c = tiles[rng.int(tiles.length)];
+      const fits = (i: number) => open(i) && !st.reserved[i] && RING.every((d) => mine[i + d] || open(i + d));
+      if (!fits(c)) continue;
+      const blob = [c];
+      mine[c] = 1;
+      const size = Math.min(budget, rng.range(4, 26));
+      for (let grow = 0; grow < size * 8 && blob.length < size; grow++) {
+        const t = blob[rng.int(blob.length)] + rng.pick([-1, 1, -w, w]);
+        if (mine[t] || !fits(t)) continue;
+        // no holes: the pool must touch the new tile along one unbroken stretch of its ring
+        let runs = 0;
+        for (let k = 0; k < 8; k++) if (mine[t + RING[k]] && !mine[t + RING[(k + 7) % 8]]) runs++;
+        if (runs !== 1) continue;
+        mine[t] = 1;
+        blob.push(t);
+      }
+      if (blob.length < 3) { for (const i of blob) mine[i] = 0; continue; }
+      for (const i of blob) {
+        dim.ground[i] = T.LAVA; dim.solid[i] = 1; dim.deco[i] = D.NONE; st.reserved[i] = 1; mine[i] = 0;
+        for (const d of RING) st.reserved[i + d] = 1; // the shore stays clear
+      }
+      budget -= blob.length;
+    }
+  }
 }
 
 /**

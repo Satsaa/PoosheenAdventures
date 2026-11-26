@@ -133,7 +133,7 @@ export function tunnel(ctx: Ctx, rng: Rng, a: RegionBP, b: RegionBP, gate: { req
     node.children.push(rn);
     rooms.push({ cell: k, loc, objs: [], elev: heights ? Math.round(ea + ((eb - ea) * k) / (n - 1)) + (k === 1 ? hump : 0) : 0 });
   }
-  const interior: InteriorBP = { id, name, style: 'cave', gw: n, gh: 1, rooms, doors: [], entryRoom: 0, entranceEdge: '', heights };
+  const interior: InteriorBP = { id, name, style: 'cave', gw: n, gh: 1, rooms, doors: [], entryRoom: 0, entranceEdge: '', heights, lava: molten(ctx, a) || molten(ctx, b) };
   const gated = rng.int(n - 1);
   for (let k = 0; k < n - 1; k++) {
     const g = k === gated ? gate : { req: NONE, gate: 'open' as GateKind, label: 'Open passage' };
@@ -180,6 +180,9 @@ export function seaDock(ctx: Ctx, region: RegionBP, filler: number, rng: Rng): E
   return e;
 }
 
+/** Places entered from a magma cave are hot inside too. */
+const molten = (ctx: Ctx, region: RegionBP): boolean => ctx.settings.lava > 0 && region.biome === 'magma';
+
 /** Whatever a gate makes the player spend, the near side of the gate gives back. */
 export function localSource(ctx: Ctx, region: RegionBP, item: ItemId): void {
   const label = item === 'bombs' ? 'Bomb flowers' : item === 'arrows' ? 'Arrow reeds' : 'Tall grass';
@@ -208,6 +211,7 @@ function realise(ctx: Ctx, rng: Rng, region: RegionBP, p: Payload, onPortal: Sta
       const name = DUNGEON_NAMES[nth % DUNGEON_NAMES.length] + (round ? ' ' + ['II', 'III', 'IV', 'V', 'VI'][round - 1] : '');
       const d = buildDungeon(ctx, `${region.id}.${p.data!.scope}`, name, childSeed(region.hnode.seed, p.id), p);
       d.node.entryCaps = caps;
+      if (molten(ctx, region)) for (const floor of ctx.interiors) if (floor.group === d.interior.id) floor.lava = true;
       const e = ctx.edge(region.id, d.entryLoc, NONE, 'portal');
       d.interior.entranceEdge = e.id;
       region.feats.push({ f: 'entrance', edgeId: e.id, style: 'dungeon', label: name, req: NONE, interior: d.interior });
@@ -283,6 +287,8 @@ export function placeItem(ctx: Ctx, rng: Rng, region: RegionBP, item: ItemId, ca
     const wet = caps.includes('flippers') && rng.chance(ctx.settings.riverCaves);
     const s = singleRoom(ctx, id, wet ? 'River Cave' : dark ? 'Lightless Cave' : 'Cave', 'cave', childSeed(region.hnode.seed, id));
     const req = dark ? has('lantern') : NONE;
+    s.interior.lava = !wet && molten(ctx, region);
+    s.interior.heights = ctx.settings.caveHeights;
     const e = ctx.edge(region.id, s.entryLoc, req, dark ? 'dark' : 'portal');
     s.interior.entranceEdge = e.id;
     let chestLoc = s.entryLoc;

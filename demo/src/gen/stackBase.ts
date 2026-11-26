@@ -48,6 +48,8 @@ export interface ST {
   owner: Int16Array;
   /** scenery density multiplier */
   scenery: number;
+  /** how much lava the underworld holds (0 = none) */
+  lava: number;
   /** 1 = rim tile (solid edge of a region) */
   border: Uint8Array;
   /** river stretch per tile (index into segs, +1), 0 = no river. Bridges keep it: water runs under them */
@@ -63,7 +65,7 @@ export interface ST {
   /** sandbars and cays out at sea that can be walked on: a tile to stand on, the zone id, and what was left there */
   outcrops: { filler: number; tile: number; loc: LocId; holds: 'chest' | 'pots' | 'nothing' }[];
   /** every stretch of every river: a new stretch starts at each waterfall */
-  segs: { river: number; seg: number; level: number }[];
+  segs: { river: number; seg: number; level: number; lava?: boolean }[];
   /** 1 = something was placed here or wants this tile kept clear */
   reserved: Uint8Array;
   /** shuffled interior tiles per region */
@@ -78,7 +80,7 @@ export interface ST {
 
 const N8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] as const;
 
-export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wobble: number, scenery: number, riverWidth = 1): ST {
+export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wobble: number, scenery: number, riverWidth = 1, lava = 0): ST {
   const w = gw * SW, h = gh * SH, n = w * h;
   const dim: Dimension = {
     id: bp.id, name: bp.name, kind: bp.kind, w, h, sw: SW, sh: SH, stack: bp.stack,
@@ -86,7 +88,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
     region: new Int16Array(n).fill(-1), zone: new Int32Array(n).fill(-1), zoneLoc: [], regions: [], objects: [],
   };
   const st: ST = {
-    bp, dim, rng: new Rng(childSeed(seed, 'tiles' + bp.id)), w, h, scenery, owner: new Int16Array(n).fill(-1),
+    bp, dim, rng: new Rng(childSeed(seed, 'tiles' + bp.id)), w, h, scenery, lava, owner: new Int16Array(n).fill(-1),
     border: new Uint8Array(n), river: new Int16Array(n), bridge: new Uint8Array(n), flow: new Uint8Array(n), fillAt: new Int16Array(n).fill(-1), docks: [], outcrops: [], segs: [], reserved: new Uint8Array(n), interior: bp.regions.map(() => []),
     barriers: new Map(), anchors: new Map(), mouths: bp.regions.map(() => []), problems: [],
   };
@@ -211,7 +213,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
     const region = bp.regions[r], style = STYLES[region.biome];
     dim.elev[i] = region.elev;
     dim.ground[i] = style.ground;
-    if (st.river[i]) { dim.ground[i] = T.WATER; dim.elev[i] = st.segs[st.river[i] - 1].level; continue; }
+    if (st.river[i]) { const sg = st.segs[st.river[i] - 1]; dim.ground[i] = sg.lava ? T.LAVA : T.WATER; dim.elev[i] = sg.level; continue; }
     st.flow[i] = 0;
     if (!st.border[i]) { dim.solid[i] = 0; continue; }
     if (style.rimGround !== undefined) {
@@ -330,7 +332,9 @@ function markRivers(st: ST, scr: Int32Array, gw: number, width: number): void {
   rivers.forEach((r, ri) => {
     const base = st.segs.length;
     const count = r.seg[r.seg.length - 1] + 1;
-    for (let k = 0; k < count; k++) st.segs.push({ river: ri, seg: k, level: r.level[r.seg.indexOf(k)] });
+    // a river that rises in a magma cave runs molten all the way
+    const lava = st.lava > 0 && st.bp.kind === 'underworld' && st.bp.regions[st.bp.part.cell[r.lines[0].a]]?.biome === 'magma';
+    for (let k = 0; k < count; k++) st.segs.push({ river: ri, seg: k, level: r.level[r.seg.indexOf(k)], lava });
     r.lines.forEach((l, k) => { lineAt.set(lineKey(l.a, l.b), base + r.seg[k]); lineDir.set(lineKey(l.a, l.b), dirOf(r.corners[k], r.corners[k + 1])); });
     r.corners.forEach((c, k) => { const j = Math.min(Math.max(k - 1, 0), r.lines.length - 1); cornerDir.set(c, dirOf(r.corners[j], r.corners[j + 1])); });
     r.corners.forEach((c, k) => cornerAt.set(c, base + r.seg[Math.min(Math.max(k - 1, 0), r.seg.length - 1)]));
