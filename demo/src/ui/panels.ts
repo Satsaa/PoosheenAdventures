@@ -72,6 +72,24 @@ function guardHead(el: HTMLElement): void {
   }, { passive: false });
 }
 
+/**
+ * Whatever delivers a scroll to the list while a finger that went down on the header is still
+ * down (the browser, or an app wrapped around the page), it is undone: the list is pinned to
+ * where it was when the touch began, until shortly after the finger lifts.
+ */
+function pinListWhileOnHead(head: HTMLElement, body: HTMLElement): void {
+  let pinned: number | null = null;
+  let release = 0;
+  const pin = () => { clearTimeout(release); pinned = body.scrollTop; };
+  const unpin = () => { clearTimeout(release); release = window.setTimeout(() => { pinned = null; }, 350); };
+  for (const type of ['touchstart', 'pointerdown'] as const) head.addEventListener(type, pin, { passive: true, capture: true });
+  for (const type of ['touchend', 'touchcancel', 'pointerup', 'pointercancel'] as const) {
+    head.addEventListener(type, unpin, { passive: true, capture: true });
+    window.addEventListener(type, () => { if (pinned !== null) unpin(); }, { passive: true, capture: true });
+  }
+  body.addEventListener('scroll', () => { if (pinned !== null && body.scrollTop !== pinned) body.scrollTop = pinned; }, { passive: true });
+}
+
 export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
   const pid = `pa${instance++}`;
   let world: World | null = null;
@@ -107,8 +125,9 @@ export function createPanels(root: HTMLElement, cb: PanelCallbacks): Panels {
     const body = h('div', { class: 'pa-body', tabindex: '-1' }, view.el);
     // a tab's header (if any) sits outside the scrolling body, so dragging it never scrolls the list
     if (view.head) guardHead(view.head);
-    const pane = h('div', { class: 'pa-pane', role: 'tabpanel', id: `${pid}-p-${t.id}`, 'aria-labelledby': `${pid}-t-${t.id}` },
-      view.head ? h('div', { class: 'pa-pane-head' }, view.head) : null, body);
+    const headBox = view.head ? h('div', { class: 'pa-pane-head' }, view.head) : null;
+    if (headBox) pinListWhileOnHead(headBox, body);
+    const pane = h('div', { class: 'pa-pane', role: 'tabpanel', id: `${pid}-p-${t.id}`, 'aria-labelledby': `${pid}-t-${t.id}` }, headBox, body);
     views.set(t.id, { view, btn, pane, body, dirty: true });
     bar.append(btn);
   }

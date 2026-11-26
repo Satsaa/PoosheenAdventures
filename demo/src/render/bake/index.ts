@@ -5,6 +5,12 @@
 //   f:<T>          cliff face strip below a tile of ground T, 16x48     (rows are used from the top)
 //   m:<dir>        edge blend mask (albedo alpha), dir 0..3 = N E S W
 //   fm:<dir>       shore foam mask (albedo = foam colour)
+//   mc:<corner>    corner blend mask (albedo alpha), corner 0..3 = NW NE SE SW: a diagonal neighbour of higher
+//                  priority bleeds into this corner (outer corners of grass around a path, sand around a pond...)
+//   Raised edges (wall / cave wall / cliff tops and faces) are autotiled in the sprite shader from per-instance
+//   neighbour flags (see lit/compose.ts AUTO): rims and coping on exposed edges, rounded (cave, cliff) or
+//   chamfered (wall) outer corners, lit inner corners, face end returns, and contact skirting on the ground at
+//   a wall foot. A sheet with hand-drawn blob pieces could replace them by adding `w:<mat>:<mask47>` keys.
 //   d:<D>          deco prop, pivot = tile NW ground corner             d:2:snow, d:8:glow variants
 //   hp:<wall>:<floors>:<mask>  modular building piece (wall plaster|stone, floors 1|2, mask = N1 E2 S4 W8 neighbours in the footprint)
 //   characters (enemies, NPCs, player) live in a second, progressively baked sheet: see charAtlas.ts
@@ -12,7 +18,7 @@
 //                  o:guard, o:start, o:boss, o:src:<pot|grass|flower>, o:ledge:<n|e|s|w>
 //   torch          wall torch for interiors
 import { D, T } from '../../core/types';
-import { edgeMask, faceStrip, groundTile } from './ground';
+import { cornerMask, edgeMask, faceStrip, groundTile } from './ground';
 import { DECO_VARIANTS, WALL_KINDS, decoModel, housePiece, objectModels } from './models';
 import { renderModel } from './sdf';
 import { type AssetSheet, Sprite, addToSheet, packSheet } from './sheet';
@@ -57,6 +63,7 @@ export function bakeAtlas(): AssetSheet {
     for (let v = 0; v < 3; v++) {
       put('m:' + dir, edgeMask(dir, v, false));
       put('fm:' + dir, edgeMask(dir, v, true));
+      put('mc:' + dir, cornerMask(dir, v));
     }
   for (const [ds, n] of Object.entries(DECO_VARIANTS)) {
     const d = Number(ds);

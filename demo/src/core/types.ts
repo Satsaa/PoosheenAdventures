@@ -45,7 +45,9 @@ export type GateKind =
   /** river logic: wading in or out at a level bank, and going over a fall */
   | 'shore' | 'waterfall'
   /** a door that only opens at night; a room that opens once its enemies are beaten */
-  | 'moon' | 'sun' | 'foes';
+  | 'moon' | 'sun' | 'foes'
+  /** sailing: a dock joins a region to the sea it lies on */
+  | 'dock';
 
 export interface Loc {
   id: LocId;
@@ -299,6 +301,8 @@ export interface World {
   solution: Solution;
   lints: Lint[];
   ok: boolean;
+  /** how this world meets the edge of the map: 0 = island, 1 = landlocked, and which sides are sea */
+  shape?: { landlocked: number; sea: { n: boolean; e: boolean; s: boolean; w: boolean } };
   /** generation attempts needed and ms spent */
   stats: { attempts: number; ms: number };
 }

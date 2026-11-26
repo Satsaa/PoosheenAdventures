@@ -21,6 +21,7 @@ export interface StackSpec {
   entryPayloads: number;
   theme: (idx: number) => { biome: string; elev: number; name: string; color: string };
   rivers?: StackBP['rivers'];
+  fill?: StackBP['fill'];
   /** a portal payload landed in `region`: build the sub-world and connect it */
   onPortal: (region: RegionBP, payload: Payload) => void;
 }
@@ -32,6 +33,7 @@ export function buildStack(ctx: Ctx, spec: StackSpec): StackBP {
   const world = hnode(spec.id, 'world', spec.name, spec.seed, { dim: spec.id });
   const stack: StackBP = { id: spec.id, kind: spec.kind, name: spec.name, stack: spec.stack, part: spec.part, regions: [], openings: [], hnode: world };
   stack.rivers = spec.rivers;
+  stack.fill = spec.fill;
   ctx.stacks.push(stack);
 
   spec.part.regions.forEach((_, idx) => {

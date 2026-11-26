@@ -3,7 +3,7 @@
 import { D, T, type Dimension, type LocId } from '../core/types';
 import { Rng, childSeed, valueNoise } from '../core/rng';
 import type { StackBP } from './blueprint';
-import { SH, SW, lineKey } from './spatial';
+import { FILL, SH, SW, lineKey } from './spatial';
 
 export interface BiomeStyle {
   ground: number;
@@ -51,6 +51,8 @@ export interface ST {
   bridge: Uint8Array;
   /** downstream direction per river tile: 1 n, 2 e, 3 s, 4 w */
   flow: Uint8Array;
+  /** filler region per tile outside the land (index into bp.fill.list), -1 on land */
+  fillAt: Int16Array;
   /** every stretch of every river: a new stretch starts at each waterfall */
   segs: { river: number; seg: number; level: number }[];
   /** 1 = something was placed here or wants this tile kept clear */
@@ -67,7 +69,7 @@ export interface ST {
 
 const N8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] as const;
 
-export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wobble: number, scenery: number, riverWidth = 1, edgeMountains = 0): ST {
+export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wobble: number, scenery: number, riverWidth = 1): ST {
   const w = gw * SW, h = gh * SH, n = w * h;
   const dim: Dimension = {
     id: bp.id, name: bp.name, kind: bp.kind, w, h, sw: SW, sh: SH, stack: bp.stack,
@@ -76,7 +78,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
   };
   const st: ST = {
     bp, dim, rng: new Rng(childSeed(seed, 'tiles' + bp.id)), w, h, scenery, owner: new Int16Array(n).fill(-1),
-    border: new Uint8Array(n), river: new Int16Array(n), bridge: new Uint8Array(n), flow: new Uint8Array(n), segs: [], reserved: new Uint8Array(n), interior: bp.regions.map(() => []),
+    border: new Uint8Array(n), river: new Int16Array(n), bridge: new Uint8Array(n), flow: new Uint8Array(n), fillAt: new Int16Array(n).fill(-1), segs: [], reserved: new Uint8Array(n), interior: bp.regions.map(() => []),
     barriers: new Map(), anchors: new Map(), mouths: bp.regions.map(() => []), problems: [],
   };
   const reg = st.owner;
@@ -146,13 +148,24 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
     if (r < 0) {
       dim.ground[i] = T.VOID;
       if (bp.kind !== 'overworld') continue;
-      // outside the land: open sea, or a mountain range nobody can cross
-      const sx = scr[i] % gw, sy = (scr[i] / gw) | 0;
-      if (valueNoise(seed ^ 0x7a11, sx * 0.45, sy * 0.45) < edgeMountains) {
+      // outside the land: whatever filler region this screen belongs to
+      const kind = bp.fill?.kind[scr[i]] ?? FILL.OCEAN;
+      st.fillAt[i] = bp.fill?.of[scr[i]] ?? -1;
+      if (kind === FILL.RANGE) {
         const peak = valueNoise(seed ^ 0x99, (i % w) / 5, ((i / w) | 0) / 5);
         dim.elev[i] = 4 + (peak > 0.55 ? 1 : 0) + (peak > 0.75 ? 1 : 0);
         dim.ground[i] = dim.elev[i] >= 5 ? T.SNOW : T.STONE;
         if (st.rng.chance(0.1)) dim.deco[i] = D.ROCK;
+      } else if (kind === FILL.THICKET) {
+        // a wall of trees nobody gets through
+        dim.elev[i] = 1;
+        dim.ground[i] = T.GRASS;
+        dim.deco[i] = st.rng.chance(0.3) ? D.PINE : D.TREE;
+      } else if (kind === FILL.WASTES) {
+        dim.elev[i] = 1;
+        dim.ground[i] = T.SAND;
+        const roll = st.rng.next();
+        if (roll < 0.14) dim.deco[i] = D.ROCK; else if (roll < 0.2) dim.deco[i] = D.CACTUS; else if (roll < 0.23) dim.deco[i] = D.DEADTREE;
       } else dim.ground[i] = T.DEEP;
       continue;
     }

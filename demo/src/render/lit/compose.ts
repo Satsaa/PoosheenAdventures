@@ -11,6 +11,15 @@ import { isWallG } from '../terrain';
 import { DECAL } from '../props';
 
 export const FLAG = { FACE: 1, BEV_N: 2, BEV_W: 4, BEV_E: 8, TINTALL: 32 } as const;
+/** autotile flags (see SPRITE_FS): face end returns, outer corner cuts, inner corners, contact skirting */
+export const AUTO = {
+  FACE_L: 4096, FACE_R: 8192, CUT_NW: 16384, CUT_NE: 32768, IN_NW: 65536, IN_NE: 131072,
+  SK_N: 262144, SK_E: 524288, SK_W: 1048576, SK_NW: 2097152, SK_NE: 4194304,
+} as const;
+/** outer-corner radius in px per ground (+16 = chamfer instead of round) */
+function cornerR(g: number): number {
+  return g === T.WALL ? 16 + 3 : g === T.CAVEWALL ? 5 : g === T.FLOOR || g === T.PLANK ? 0 : 3;
+}
 export const FLOATS = 16;
 const P = TILE_PX;
 
@@ -103,14 +112,26 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
       if (!gl) continue;
       const p = pal(g);
       let flags = 0;
+      const lN = lAt(x, y - 1), lW = lAt(x - 1, y), lE = lAt(x + 1, y), lNW = lAt(x - 1, y - 1), lNE = lAt(x + 1, y - 1);
       if (!p.liquid) {
-        if (lAt(x, y - 1) < L) flags |= FLAG.BEV_N;
-        if (lAt(x - 1, y) < L) flags |= FLAG.BEV_W;
-        if (lAt(x + 1, y) < L) flags |= FLAG.BEV_E;
+        // raised edges: rims, outer corner cuts and inner corners from the 8-neighbourhood
+        if (lN < L) flags |= FLAG.BEV_N;
+        if (lW < L) flags |= FLAG.BEV_W;
+        if (lE < L) flags |= FLAG.BEV_E;
+        if (lN < L && lW < L && lNW < L) flags |= AUTO.CUT_NW;
+        if (lN < L && lE < L && lNE < L) flags |= AUTO.CUT_NE;
+        if (lN >= L && lW >= L && lNW < L) flags |= AUTO.IN_NW;
+        if (lN >= L && lE >= L && lNE < L) flags |= AUTO.IN_NE;
+        // contact skirting at the foot of higher ground (south faces of the row above, sides, corners)
+        if (lN > L) flags |= AUTO.SK_N;
+        if (lW > L) flags |= AUTO.SK_W;
+        if (lE > L) flags |= AUTO.SK_E;
+        if (lN <= L && lW <= L && lNW > L) flags |= AUTO.SK_NW;
+        if (lN <= L && lE <= L && lNE > L) flags |= AUTO.SK_NE;
       }
       const f0 = gl[variant(x, y, seed + g, gl.length)];
-      const flip = g !== T.FLOOR && g !== T.WALL && g !== T.PLANK && hash2(x, y, seed + 13) < 0.5 ? 128 : 0;
-      inst.push(px, py, P, P, f0.x, f0.y, -1, -1, L / P, x, y, flags | flip);
+      const flip = g !== T.FLOOR && g !== T.WALL && g !== T.PLANK && g !== T.CAVEWALL && hash2(x, y, seed + 13) < 0.5 ? 128 : 0;
+      inst.push(px, py, P, P, f0.x, f0.y, -1, (flags & (AUTO.CUT_NW | AUTO.CUT_NE)) ? cornerR(g) : 0, L / P, x, y, flags | flip);
       // edge blends with higher-priority neighbours on the same level
       if (p.prio >= 0) {
         const nbs: [number, number, number][] = [[x, y - 1, 0], [x + 1, y, 1], [x, y + 1, 2], [x - 1, y, 3]];
@@ -141,7 +162,20 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
           if (!ngl || !mk) continue;
           const nf = ngl[variant(nx, ny, seed + ng, ngl.length)];
           const mv = mk[variant(Math.min(x, nx), Math.min(y, ny), seed + 3 + dir, mk.length)];
-          inst.push(px, py, P, P, nf.x, nf.y, mv.x, mv.y, L / P, x, y, flags);
+          inst.push(px, py, P, P, nf.x, nf.y, mv.x, mv.y, L / P, x, y, flags & ~(AUTO.CUT_NW | AUTO.CUT_NE));
+        }
+        // outer corners: a diagonal neighbour of higher priority whose two orthogonal neighbours are not it
+        const cns: [number, number, number][] = [[-1, -1, 0], [1, -1, 1], [1, 1, 2], [-1, 1, 3]];
+        for (const [dx, dy, c] of cns) {
+          const ng = gAt(x + dx, y + dy);
+          if (ng === g || ng === T.VOID || gAt(x + dx, y) === ng || gAt(x, y + dy) === ng) continue;
+          const q = pal(ng);
+          if (q.prio <= p.prio || (p.liquid && q.liquid) || lAt(x + dx, y + dy) !== L || lAt(x + dx, y) !== L || lAt(x, y + dy) !== L) continue;
+          const ngl = get('g:' + ng), mk = get('mc:' + c);
+          if (!ngl || !mk) continue;
+          const nf = ngl[variant(x + dx, y + dy, seed + ng, ngl.length)];
+          const mv = mk[variant(x, y, seed + 5 + c, mk.length)];
+          inst.push(px, py, P, P, nf.x, nf.y, mv.x, mv.y, L / P, x, y, flags & ~(AUTO.CUT_NW | AUTO.CUT_NE));
         }
       }
       // foam where a waterfall lands (the water tile north of this one is higher)
@@ -159,7 +193,9 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
         const fl = get('f:' + g);
         if (fl) {
           const ff = fl[variant(x, y, seed + 11, fl.length)];
-          inst.push(px, py + P, P, L - LS, ff.x, ff.y, -1, -1, L / P, x, y, FLAG.FACE);
+          // face end returns: lit west end, dark east end where the neighbouring face is not as tall
+          const ff2 = FLAG.FACE | (lW < L && !(lAt(x - 1, y + 1) >= L) ? AUTO.FACE_L : 0) | (lE < L && !(lAt(x + 1, y + 1) >= L) ? AUTO.FACE_R : 0);
+          inst.push(px, py + P, P, L - LS, ff.x, ff.y, -1, -1, L / P, x, y, ff2);
         }
       }
     }
@@ -235,6 +271,7 @@ export function objectKey(o: MapObject, done: boolean, sheet: AssetSheet, dim?: 
     case 'entrance': {
       const st = o.kind === 'stairs' && !(o.style || '').startsWith('stairs') ? 'stairs-down' : o.style || 'house';
       k = 'o:ent:' + st;
+      if (st === 'dock') k += ':' + (o.dir || 's');
       if (!sheet.frames.has(k)) k = 'o:ent:house';
       break;
     }

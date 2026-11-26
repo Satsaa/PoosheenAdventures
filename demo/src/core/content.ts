@@ -14,6 +14,7 @@ export const BASE_ITEMS: ItemDef[] = [
   def('hookshot', 'Hookshot', 'tool', '⚓', '#b9c2cc'),
   def('lantern', 'Lantern', 'tool', '✦', '#ffcf5a'),
   def('sundial', 'Sun Dial', 'tool', '◐', '#ffd98a'),
+  def('boat', 'Boat', 'tool', '⛵', '#8fd0ff'),
   def('wallet', 'Big Wallet', 'tool', '▣', '#7ed87e'),
   def('bombs', 'Bombs', 'consumable', '●', '#6f8fd8', { container: 'bombBag', baseCap: 10 }),
   def('arrows', 'Arrows', 'consumable', '↟', '#c9a36a', { container: 'bow', baseCap: 30 }),
@@ -24,7 +25,7 @@ export const BASE_ITEMS: ItemDef[] = [
 ];
 
 /** Tools that can be shuffled into the progression order. */
-export const PROGRESSION_TOOLS: ItemId[] = ['sword', 'glove', 'bombBag', 'bow', 'flippers', 'hookshot', 'lantern', 'sundial'];
+export const PROGRESSION_TOOLS: ItemId[] = ['sword', 'glove', 'bombBag', 'bow', 'flippers', 'hookshot', 'lantern', 'sundial', 'boat'];
 
 /** Things that can beat an enemy, best first. */
 export const WEAPONS: ItemId[] = ['sword', 'bow', 'bombBag'];

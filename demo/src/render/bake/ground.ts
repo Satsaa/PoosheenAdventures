@@ -108,7 +108,8 @@ export function groundTile(g: number, v: number): Sprite {
         }
         case T.STONE:
         case T.CAVEWALL: {
-          const [d1, d2] = voro(x, y, 2, seed + 5);
+          // cave wall tops: one shared cell pattern for every variant, so a thick wall reads as one rock mass
+          const [d1, d2] = voro(x, y, 2, g === T.CAVEWALL ? 11 : seed + 5);
           const e = d2 - d1;
           h = Math.min(e, 2.5) * 0.015;
           st = top * 0.55 + Math.min(e, 3) * 0.2 - 0.3 + (n2 - 0.5) * 0.6;
@@ -141,12 +142,14 @@ export function groundTile(g: number, v: number): Sprite {
           break;
         }
         case T.WALL: {
-          const row = Math.floor(y / 6);
+          // flagstone wall top on an 8 px grid (2 x 2 per tile, rows offset by 4): seamless across tiles,
+          // so thick walls read as one paved mass; the coping rim is added on exposed edges by the composer
+          const row = Math.floor(y / 8);
           const off = (row & 1) * 4;
-          const gx = (x + off) % 8, gy = y % 6;
+          const gx = (x + off) % 8, gy = y % 8;
           const grout = gx === 0 || gy === 0;
-          h = grout ? 0 : 0.03;
-          st = grout ? 0.2 : 1.5 + hashN(Math.floor((x + off) / 8), row, seed) * 1.5 + (n2 - 0.5) * 0.6;
+          h = grout ? 0 : 0.02;
+          st = grout ? 0.6 : 1.6 + hashN(Math.floor((x + off) / 8) + v * 3, row, seed) * 1.1 + (n2 - 0.5) * 0.4;
           break;
         }
         case T.CAVE: {
@@ -288,6 +291,19 @@ export function faceStrip(g: number, v: number): Sprite {
       }
       st = Math.max(0, Math.min(top, Math.round(st)));
       s.set(x, r, rgb(ramp[st]), nx, 1, nz, 0, null, kind === 'cloud' ? MAT.CLOUD : 0);
+    }
+  return s;
+}
+
+/** Corner blend mask: a rounded quarter blob in corner `c` (0 NW, 1 NE, 2 SE, 3 SW) where a diagonal neighbour bleeds in. */
+export function cornerMask(c: number, v: number): Sprite {
+  const s = new Sprite(N, N, 0, 0);
+  const r = 4.5 + hashN(c, v, 95) * 2;
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++) {
+      const u = c === 0 || c === 3 ? x + 0.5 : N - (x + 0.5);
+      const w = c === 0 || c === 1 ? y + 0.5 : N - (y + 0.5);
+      if (Math.hypot(u, w) < r) s.set(x, y, [255, 255, 255], 0, 0, 1, 0, null, 0);
     }
   return s;
 }

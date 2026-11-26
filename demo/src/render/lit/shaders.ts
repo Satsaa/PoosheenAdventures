@@ -98,10 +98,48 @@ void main() {
   float h = face ? vInst.x - float(lp.y) / 16.0 : vInst.x + n.a * 255.0 / 40.0 - 1.0;
   vec3 nn = n.rgb * 2.0 - 1.0;
   if (flip) nn.x = -nn.x;
-  // rims on raised edges: lit lip on north / west, dark seam on east
-  if ((flags & 2) != 0 && lp.y == 0) alb = min(alb * 1.35 + 0.04, 1.0);
-  if ((flags & 4) != 0 && lp.x == 0) { alb = min(alb * 1.2 + 0.02, 1.0); nn = normalize(nn + vec3(-0.8, 0.0, 0.4)); }
-  if ((flags & 8) != 0 && lp.x == int(vSize.x) - 1) alb *= 0.55;
+  // ---- autotiled raised edges (terrain tops): rims / coping on exposed edges, rounded or chamfered
+  // outer corners, lit inner corners; and contact skirting where higher ground meets this tile
+  if (!face && vSrc.z > -1.5 && vSrc.z < -0.5) {
+    float cr = vSrc.w;
+    bool chamfer = cr >= 15.5;
+    if (chamfer) cr -= 16.0;
+    float rw = cr > 0.0 ? 2.0 : 1.0;
+    vec2 pc = vec2(lp) + 0.5;
+    float dLit = 99.0, dDark = 99.0;
+    if ((flags & 2) != 0) dLit = min(dLit, pc.y);
+    if ((flags & 4) != 0) dLit = min(dLit, pc.x);
+    if ((flags & 8) != 0) dDark = min(dDark, 16.0 - pc.x);
+    for (int c = 0; c < 2; c++) {
+      if ((flags & (c == 0 ? 16384 : 32768)) == 0 || cr <= 0.0) continue;
+      vec2 q = vec2(c == 0 ? pc.x : 16.0 - pc.x, pc.y);
+      if (q.x >= cr || q.y >= cr) continue;
+      float inside = chamfer ? (q.x + q.y - cr) * 0.7071 : cr - length(vec2(cr) - q);
+      if (inside < 0.0) discard;
+      // the rim follows the cut: replace the straight edges by the distance to the arc / mitre
+      dLit = min(dLit, max(inside, 0.0));
+      if (c == 1) dDark = 99.0;
+      nn = normalize(nn + vec3(c == 0 ? -0.5 : 0.5, -0.5, 0.3));
+    }
+    if (dLit < rw) { alb = min(alb * 1.32 + 0.05, 1.0); nn = normalize(nn + vec3((flags & 4) != 0 && pc.x < rw ? -0.7 : 0.0, (flags & 2) != 0 && pc.y < rw ? -0.7 : 0.0, 0.3)); }
+    else if (dDark < 1.0) alb *= 0.55;
+    // inner corners: the rim turns the corner (diagonal neighbour lower)
+    if ((flags & 65536) != 0 && pc.x < rw && pc.y < rw) alb = min(alb * 1.32 + 0.05, 1.0);
+    if ((flags & 131072) != 0 && pc.x > 16.0 - rw && pc.y < rw) alb = min(alb * 1.2 + 0.03, 1.0);
+    // contact skirting at the foot of higher ground, with matching inner / outer corners
+    float sk = 0.0;
+    if ((flags & 262144) != 0) sk = max(sk, 1.0 - pc.y / 3.0);
+    if ((flags & 1048576) != 0) sk = max(sk, 1.0 - pc.x / 2.5);
+    if ((flags & 524288) != 0) sk = max(sk, 1.0 - (16.0 - pc.x) / 2.5);
+    if ((flags & 2097152) != 0) sk = max(sk, 1.0 - length(pc) / 3.0);
+    if ((flags & 4194304) != 0) sk = max(sk, 1.0 - length(vec2(16.0 - pc.x, pc.y)) / 3.0);
+    alb *= 1.0 - clamp(sk, 0.0, 1.0) * 0.4;
+  }
+  if (face) {
+    // face end returns: lit west edge, shaded east edge where the face turns a corner
+    if ((flags & 4096) != 0 && lp.x == 0) { alb = min(alb * 1.3 + 0.03, 1.0); nn = normalize(nn + vec3(-0.9, 0.0, 0.0)); }
+    if ((flags & 8192) != 0 && lp.x >= int(vSize.x) - 2) { alb *= lp.x == int(vSize.x) - 1 ? 0.5 : 0.75; nn = normalize(nn + vec3(0.9, 0.0, 0.0)); }
+  }
   oA = vec4(alb, 1.0);
   oN = vec4(nn * 0.5 + 0.5, clamp((h + 1.0) * 40.0 / 255.0, 0.0, 1.0));
   oE = vec4(e.rgb * vTint.a, float(mat) / 255.0);
@@ -152,7 +190,20 @@ void main() {
   vec2 wt = uOrigin + gl_FragCoord.xy / uR;
   ivec2 t = ivec2(floor(wt));
   float L = 0.0;
-  if (t.x >= 0 && t.y >= 0 && t.x < uDim.x && t.y < uDim.y) L = texelFetch(uLift, t, 0).r * 255.0 / 16.0;
+  if (t.x >= 0 && t.y >= 0 && t.x < uDim.x && t.y < uDim.y) {
+    L = texelFetch(uLift, t, 0).r * 255.0 / 16.0;
+    // rounded outer north corners (like the drawn tops), so shadows have no square notch
+    vec2 f = fract(wt);
+    float r = 3.0 / 16.0;
+    for (int c = 0; c < 2; c++) {
+      int sx = c == 0 ? -1 : 1;
+      vec2 q = vec2(c == 0 ? f.x : 1.0 - f.x, f.y);
+      if (q.x >= r || q.y >= r) continue;
+      ivec2 tn = clamp(t + ivec2(0, -1), ivec2(0), uDim - 1), ts = clamp(t + ivec2(sx, 0), ivec2(0), uDim - 1), td = clamp(t + ivec2(sx, -1), ivec2(0), uDim - 1);
+      float a = texelFetch(uLift, tn, 0).r, b = texelFetch(uLift, ts, 0).r, d = texelFetch(uLift, td, 0).r, me = L * 16.0 / 255.0;
+      if (a < me && b < me && d < me && length(vec2(r) - q) > r) L = max(a, b) * 255.0 / 16.0;
+    }
+  }
   // the tile surface is lifted: in ground (x, y) it occupies its own cell
   o = vec4(0.0, clamp(L * 40.0 / 255.0, 0.0, 1.0), 0.0, 0.0);
 }`;
@@ -218,6 +269,9 @@ uniform vec2 uCastSize;
 uniform vec3 uSun;        // direction toward the sun (x east, y south, z up), normalized
 uniform float uShadowMode, uShadowStr, uShadowSoft, uTerrainSh, uContact, uAmbK, uSunK, uPointK, uSea;
 uniform float uFogDark, uFogDesat, uWaterK, uFoamK, uGlintK;
+uniform sampler2D uOvA;
+uniform float uOvP, uOvTop;
+uniform vec2 uOvSize;
 uniform int uLSN;          // how many of the first (strongest) lights cast shadows
 uniform float uLSK, uLSSoft;
 uniform vec4 uGhost0;   // on, ghost top (dim px), ghost overview px per dim px
@@ -322,11 +376,31 @@ void main() {
       vec4 em = texelFetch(uMask, ivec2(cl), 0);
       int ec = int(em.b * 255.0 + 0.5);
       float edist = (int(em.a * 255.0 + 0.5) == 2 && ec >= 16) ? float(ec - 16) : 15.0;
-      vec3 sa = seaAlbedo(wq, edist + length(wq - cl - 0.5), tt, sn);
-      float fo = foamStreak(wq, tt) * uFoamK * 0.4 * smoothstep(0.35, 0.9, uK);
-      sa = mix(sa, vec3(0.62, 0.7, 0.75), fo);
-      float nlk = max(dot(sn, uKeyDir), 0.0);
-      bg = sa * (mix(uAmbBot, uAmbTop, sn.z * 0.5 + 0.5) * uAmbK + uKeyCol * uSunK * toon(nlk));
+      float out = length(wq - cl - 0.5);
+      if (int(em.a * 255.0 + 0.5) == 2) {
+        // beyond a sea edge: open sea
+        vec3 sa = seaAlbedo(wq, edist + out, tt, sn);
+        float fo = foamStreak(wq, tt) * uFoamK * 0.4 * smoothstep(0.35, 0.9, uK);
+        sa = mix(sa, vec3(0.62, 0.7, 0.75), fo);
+        float nlk = max(dot(sn, uKeyDir), 0.0);
+        bg = sa * (mix(uAmbBot, uAmbTop, sn.z * 0.5 + 0.5) * uAmbK + uKeyCol * uSunK * toon(nlk));
+      } else {
+        // beyond a land edge (mountain range, thicket, wastes): continue the edge's terrain as chunky
+        // pixel noise in its own colours, dimmed with distance
+        vec2 ouv = (vec2(cl.x + 0.5, cl.y + 0.5 + uOvTop) * uOvP) / uOvSize;
+        vec3 ec0 = texture(uOvA, ouv).rgb;
+        vec2 g2 = floor(wq * 4.0);
+        float nb = hash(floor(wq * 0.7)) * 0.5 + hash(floor(wq * 1.6)) * 0.3 + hash(g2) * 0.2;
+        vec3 la = ec0 * (0.7 + nb * 0.55);
+        float lift = step(0.62, hash(floor(wq * 1.6) + 7.0));
+        vec3 ln = normalize(vec3(hash(g2 + 1.0) - 0.5, hash(g2 + 2.0) - 0.5 - lift * 0.4, 1.0));
+        float dim2 = mix(1.0, 0.45, 1.0 - exp(-out / 14.0));
+        bg = la * dim2 * (mix(uAmbBot, uAmbTop, ln.z * 0.5 + 0.5) * uAmbK + uKeyCol * uSunK * toon(max(dot(ln, uKeyDir), 0.0)));
+      }
+      if (em.r > 0.5) {
+        float l = dot(bg, vec3(0.3, 0.59, 0.11));
+        bg = mix(bg * (1.0 - uFogDark), vec3(l) * uFogTint * (1.0 - uFogDark) * 1.6, uFogDesat);
+      }
     }
     if (uRock > 0.0) {
       float n = hash(floor(dp / 5.0)) * 0.45 + hash(floor(dp / 23.0)) * 0.55;

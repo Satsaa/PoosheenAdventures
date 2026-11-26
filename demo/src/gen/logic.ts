@@ -9,7 +9,7 @@ import { makePlan, type Plan } from './plan';
 import { buildStack, localSource, placeItem } from './regions';
 import { singleRoom } from './dungeon';
 import { addNpcs } from './npcs';
-import { growRegions, landMask, splitByRivers, traceRivers, type Partition } from './spatial';
+import { FILL, fillers, growRegions, landMask, splitByRivers, traceRivers, type Partition } from './spatial';
 import { oneWaySafe, requiredTable } from './validate';
 import { landScreens, screensPerRegion, type GenSettings } from '../core/settings';
 
@@ -40,11 +40,20 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   for (const id of ['bombs', 'arrows', 'rupees']) ctx.items[id].baseCap = S.items[id]?.cap ?? ctx.items[id].baseCap;
   ctx.items.rupees.upgrades![0].cap = S.items.wallet?.cap ?? 300;
   const rng = new Rng(childSeed(seed, 'world'));
+
+  // 0. the shape of the world. Every seed has its own islandiness: each side of the map is sea
+  //    with probability 1 - landlocked, so 0 is a full island and 1 has no ocean at all.
+  const srng = new Rng(childSeed(seed, 'shape'));
+  const landlocked = S.coastFromSeed ? srng.next() : S.landlocked;
+  const sea = { n: srng.next() >= landlocked, e: srng.next() >= landlocked, s: srng.next() >= landlocked, w: srng.next() >= landlocked };
+  ctx.shape = { landlocked, sea };
+  const land = landMask(childSeed(seed, 'land'), GW, GH, landScreens(S), sea);
+  //    what is not land is a filler region: ocean toward sea sides, ranges, thicket or wastes elsewhere
+  const fill = fillers(childSeed(seed, 'fill'), GW, GH, land, sea);
+  ctx.hasOcean = fill.list.some((f) => f.kind === FILL.OCEAN);
   const plan = makePlan(new Rng(childSeed(seed, 'plan')), ctx);
 
   // 1. worlds: partition space first
-  //    (the land need not fill the rectangle: what is left over becomes sea and mountain range)
-  const land = landMask(childSeed(seed, 'land'), GW, GH, landScreens(S));
   const isLand = (s: number) => land[s] === 1;
   let landCount = 0;
   for (let s = 0; s < land.length; s++) landCount += land[s];
@@ -72,7 +81,7 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
     const cut = splitByRivers(base, rs);
     return cut.part.regions.every((screens, i) => screens.length >= Math.min(minBank, base.regions[cut.origin[i]].length));
   };
-  const rivers = S.rivers > 0 ? traceRivers(new Rng(childSeed(seed, 'rivers')), base, (r) => baseThemes[r].elev, S.rivers, roomyBanks) : [];
+  const rivers = S.rivers > 0 ? traceRivers(new Rng(childSeed(seed, 'rivers')), base, (r) => baseThemes[r].elev, S.rivers, roomyBanks, (s) => fill.kind[s] === FILL.OCEAN) : [];
   const { part, origin } = splitByRivers(base, rivers);
   const entryRegion = part.cell[startScreen];
   // a split region's parts are named after where they lie: "north bank", "east bank", ...
@@ -131,7 +140,7 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
 
   const over = buildStack(ctx, {
     id: 'over', kind: 'overworld', name: 'Overworld', stack: 0, part, seed: childSeed(seed, 'overw'), payloads: plan.over,
-    entryRegion, entryCaps: [], entryPayloads: plan.gifts, theme: (i) => themes[i], onPortal, rivers,
+    entryRegion, entryCaps: [], entryPayloads: plan.gifts, theme: (i) => themes[i], onPortal, rivers, fill,
   });
   game.children = ctx.stacks.map((s) => s.hnode);
   const start = over.regions[entryRegion];
@@ -167,7 +176,7 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
   for (const e of ctx.edges) reqItems(e.req, asked);
   const drng = new Rng(childSeed(seed, 'dead'));
   for (const t of S.everyToolUsed ? plan.tools : []) {
-    if (t === 'sundial' && !S.timeDoors) continue;
+    if (!GATES[t] || (t === 'sundial' && !S.timeDoors)) continue;
     const spent = GATES[t].spends;
     if (asked.has(t) || (spent && asked.has(spent))) continue;
     placeItem(ctx, drng, drng.pick(roomy), 'heart', [t], false, true);

@@ -3,7 +3,7 @@
 import type {
   Check, DimId, DimKind, Edge, GateKind, HKind, HNode, ItemDef, ItemId, LocId, MapObject, Npc, Quest, Req, Source,
 } from '../core/types';
-import type { Partition, River } from './spatial';
+import type { Fill, Partition, River, WorldShape } from './spatial';
 import { NONE } from '../core/req';
 import type { GenSettings } from '../core/settings';
 
@@ -56,6 +56,8 @@ export interface StackBP {
   regions: RegionBP[];
   openings: OpeningBP[];
   hnode: HNode;
+  /** what lies outside the land: ocean, ranges, thicket, wastes (overworld only) */
+  fill?: Fill;
   /** river courses on the screen lattice; realised as water bands by the tile pass */
   rivers?: River[];
   /** touching region pairs the tree did not use: candidates for loops and ledges */
@@ -106,6 +108,10 @@ export class Ctx {
   interiors: InteriorBP[] = [];
   /** item -> zone where it is obtained, for NPCs that follow the player's progress */
   itemHome = new Map<ItemId, LocId>();
+  /** how the world meets the map edge */
+  shape: WorldShape = { landlocked: 0, sea: { n: true, e: true, s: true, w: true } };
+  /** false when no side of this world is sea: nothing to sail, so no boat */
+  hasOcean = false;
   /** the zone the player starts in */
   start: LocId = '';
   /** what the player is guaranteed to own when the sanctum is placed */

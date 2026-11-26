@@ -37,7 +37,7 @@ export function realiseTiles(bp: Blueprint, seed: number): TileResult {
   const sts = new Map<DimId, ST>();
   for (const s of bp.ctx.stacks) {
     const S = bp.ctx.settings;
-    const st = initStack(s, S.worldW, S.worldH, seed, S.borderWobble, S.scenery, S.riverWidth, S.edgeMountains);
+    const st = initStack(s, S.worldW, S.worldH, seed, S.borderWobble, S.scenery, S.riverWidth);
     carveOpenings(st, drop);
     sts.set(s.id, st);
   }

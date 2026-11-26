@@ -19,8 +19,15 @@ function attempt(seedStr: string, S: GenSettings, n: number, t0: number): World 
     id: 'tiles', label: 'Tile maps match the logic graph (zones, gates, objects)', ok: tiles.problems.length === 0,
     detail: tiles.problems.length ? tiles.problems.slice(0, 4).join('; ') : `${tiles.dims.length} tile maps, ${bp.graph.edges.length} edges realised`,
   });
+  const sh = bp.ctx.shape;
+  const sides = (['n', 'e', 's', 'w'] as const).map((k) => ({ k, name: { n: 'north', e: 'east', s: 'south', w: 'west' }[k], sea: sh.sea[k] }));
+  const seaSides = sides.filter((x) => x.sea).map((x) => x.name), landSides = sides.filter((x) => !x.sea).map((x) => x.name);
+  lints.push({
+    id: 'shape', label: 'World shape (from the seed unless set)', ok: true,
+    detail: `landlocked ${Math.round(sh.landlocked * 100)}%: ` + (seaSides.length === 4 ? 'a full island, sea on every side' : seaSides.length === 0 ? 'fully landlocked, no ocean' : `sea to the ${seaSides.join(', ')}; the land goes on to the ${landSides.join(', ')}`),
+  });
   return {
-    seed: seedStr, settings: S, items: bp.ctx.items, dims: tiles.dims, tree: bp.tree, graph: bp.graph, npcs: bp.ctx.npcs, quests: bp.ctx.quests,
+    seed: seedStr, settings: S, shape: sh, items: bp.ctx.items, dims: tiles.dims, tree: bp.tree, graph: bp.graph, npcs: bp.ctx.npcs, quests: bp.ctx.quests,
     solution, lints, ok: lints.every((l) => l.ok), stats: { attempts: n + 1, ms: Date.now() - t0 },
   };
 }

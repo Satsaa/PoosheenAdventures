@@ -30,7 +30,7 @@ export function makePlan(rng: Rng, ctx: Ctx): Plan {
   const plain = (p: Payload) => (p.kind === 'item' || p.kind === 'dungeon') && !p.data?.fixed;
 
   // 1. item settings decide which tools exist and roughly when they show up
-  const enabled = PROGRESSION_TOOLS.filter((t) => S.items[t]?.enabled !== false);
+  const enabled = PROGRESSION_TOOLS.filter((t) => S.items[t]?.enabled !== false && (t !== 'boat' || ctx.hasOcean));
   const starters = enabled.filter((t) => S.items[t]?.order === 'start');
   const rest = enabled
     .filter((t) => !starters.includes(t))

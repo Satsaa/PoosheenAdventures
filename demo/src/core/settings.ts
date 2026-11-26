@@ -17,7 +17,8 @@ export interface ItemSetting {
 }
 
 export interface GenSettings {
-  worldW: number; worldH: number; regions: number; borderWobble: number; cliffs: boolean; scenery: number; landCoverage: number; edgeMountains: number;
+  worldW: number; worldH: number; regions: number; borderWobble: number; cliffs: boolean; scenery: number; landCoverage: number; coastFromSeed: boolean; landlocked: number;
+  docks: number; ferries: number; ferryFare: number; islets: number;
   rivers: number; riverWidth: number; riverCaves: number;
   underworld: boolean; underworldSize: number; underworldRegions: number; sky: boolean; skySize: number;
   dungeons: number; sealMedallions: number; lockDensity: number; linearity: number; secrets: number; everyToolUsed: boolean;
@@ -59,13 +60,19 @@ export const SETTING_DEFS: SettingDef[] = [
   num('regions', 'World', 'Regions', 'int', 1, 96, 1, 7, 'How many biomes the overworld is split into. Limited by the map size, the border wobble and the river width, so each region keeps room for its places.', 'biomes areas count'),
   num('borderWobble', 'World', 'Border wobble', 'float', 0, 8, 0.5, 4.5, 'How far region borders stray from the screen grid, in tiles. 0 gives straight, blocky borders. A screen is 12×10 tiles, so more than 8 would tear small regions apart.', 'warp noise organic shape'),
   num('landCoverage', 'World', 'Land coverage', 'float', 0.3, 1, 0.02, 0.8, 'Share of the map rectangle that is land. Below 1 the world gets an irregular outline, with open sea or mountain ranges filling the rest. 1 fills the whole rectangle.', 'shape island coast outline rectangle ocean'),
-  num('edgeMountains', 'World', 'Mountain borders', 'float', 0, 1, 0.05, 0.3, 'How much of the area outside the land is impassable mountain range instead of open sea.', 'edge ocean sea peaks'),
+  flag('coastFromSeed', 'World', 'Coast from the seed', true, 'Each seed decides how landlocked its world is: a low value gives a full island, a high value a world whose land runs on past the map edge on every side. Off uses the value below instead.', 'island islandiness landlocked ocean edge'),
+  num('landlocked', 'World', 'Landlocked', 'float', 0, 1, 0.05, 0.5, 'Used when the coast does not come from the seed. Each side of the map is sea with probability 1 minus this: 0 is always a full island, 1 is fully landlocked with no ocean at all.', 'island islandiness coast ocean edge'),
   flag('cliffs', 'World', 'Height differences', true, 'Regions sit at different heights, which makes cliffs, stairs and one-way ledges. Off puts everything on one level.', 'elevation layers cliffs flat'),
   num('scenery', 'World', 'Scenery density', 'float', 0, 5, 0.25, 1, 'Multiplier for trees, rocks and ponds inside regions. Scenery can never block a path.', 'trees rocks decoration props'),
 
   num('rivers', 'Rivers', 'Rivers', 'int', 0, 12, 1, 2, 'How many rivers cross the overworld. They flow downhill along the lines between screens, follow region borders or cut straight through a region, and drop over waterfalls where the land steps down.', 'water stream waterfall'),
   num('riverWidth', 'Rivers', 'River width', 'int', 1, 3, 1, 1, 'Half-width of the water band: 1 gives a river two tiles wide, 3 gives six.', 'water wide'),
   num('riverCaves', 'Rivers', 'Underground rivers', 'float', 0, 1, 0.05, 0.4, 'Chance that a cave has a river running through it, with its treasure on the far bank. Needs the Swim Gear in the world.', 'cave water place interior'),
+
+  num('docks', 'Ocean', 'Docks', 'float', 0, 1, 0.05, 0.7, 'Chance that a region on the coast gets a dock. With the Boat, every dock on the same sea is connected.', 'boat pier harbour sailing port'),
+  num('ferries', 'Ocean', 'Ferrymen', 'float', 0, 1, 0.05, 0.5, 'Chance that a dock has a ferryman, who sails you to any other ferry dock on that sea for a fare, no Boat needed.', 'boat merchant travel passage npc'),
+  num('ferryFare', 'Ocean', 'Ferry fare', 'int', 0, 999, 1, 30, 'Rupees per crossing.', 'boat price cost rupees'),
+  num('islets', 'Ocean', 'Islets', 'int', 0, 12, 1, 3, 'Small islands with a chest, out on each sea that has a dock.', 'island treasure secret boat'),
 
   flag('underworld', 'Layers', 'Underworld', true, 'A cave layer under the overworld, reached by stairs. Its caves take their theme from the land above.', 'caves subworld below'),
   num('underworldSize', 'Layers', 'Underworld size', 'int', 1, 512, 1, 12, 'How many screens of cave exist.', 'caves'),
@@ -130,6 +137,7 @@ export const ITEM_SETTING_DEFS: ItemSettingDef[] = [
   tool('flippers', 'Lets you enter rivers and swim along them, wade through deep-water gates and cross underground rivers. Without it in the world, rivers are plain barriers.'),
   tool('hookshot', 'Crosses chasms.'),
   tool('lantern', 'Lights pitch-dark passages and caves.'),
+  tool('boat', 'Sails the open sea from any dock: every dock on the same sea becomes one hop away, and islets can be reached. Left out of worlds that have no sea.'),
   { ...tool('sundial', 'Sets the time of day at will, so nothing tied to day or night means waiting. Where time stands still it is the only way to reach the night.'), default: { enabled: true, order: 'early', home: 'any' } },
   { id: 'bombs', fields: ['cap'], default: { cap: 10 }, capRange: [1, 999], help: 'Carried in the Bomb Bag. Never counted by the logic: renewable or unusable.' },
   { id: 'arrows', fields: ['cap'], default: { cap: 30 }, capRange: [1, 999], help: 'Carried with the Bow.' },

@@ -560,6 +560,18 @@ export function objectModels(): ObjSpec[] {
     [(x, y, z) => capsule(x, y, z, 0.5, 0.92, 0.25, 0.5, 0.98, 0.45, 0.04), 0],
     [(x, y, z) => ellip(x, y, z, 0.5, 0.97, 0.56, 0.06, 0.05, 0.1), 1],
   ], { zMax: 0.7, padX: 0, outline: 0.8 }));
+  // dock: a mooring post with a lantern and a small boat tied up, pointing out to sea (dir)
+  for (const dir of ['n', 'e', 's', 'w'] as const) {
+    const can = (x: number, y: number): [number, number] => dir === 's' ? [x, y] : dir === 'n' ? [1 - x, 1 - y] : dir === 'e' ? [1 - y, x] : [y, 1 - x];
+    const hullM: Mat = { ramp: ['#3a2210', '#5a3618', '#7c4e24', '#9c6a34'], bias: 0.3 };
+    const parts: Part[] = [
+      [(x, y, z) => { const [u, v] = can(x, y); return cylZ(u, v, z, 0.25, 0.25, 0, 0.62, 0.06); }, 0],
+      [(x, y, z) => { const [u, v] = can(x, y); return Math.max(ellip(u, v, z, 0.62, 0.78, 0.0, 0.2, 0.42, 0.16), -ellip(u, v, z, 0.62, 0.78, 0.07, 0.15, 0.36, 0.12), -z - 0.04); }, 1],
+      [(x, y, z) => { const [u, v] = can(x, y); return box(u, v, z, 0.62, 0.78, 0.05, 0.14, 0.03, 0.015); }, 0],
+      [(x, y, z) => { const [u, v] = can(x, y); return sph(u, v, z, 0.25, 0.25, 0.68, 0.06); }, 2],
+    ];
+    add('o:ent:dock:' + dir, model([{ ramp: R.wood }, hullM, { ramp: R.ember, emit: [255, 170, 70] }], parts, { zMax: 0.78, padX: 0.35, fh: 1.3 }));
+  }
   // open archways in a wall line: a lintel with jambs where the wall ends (mask 1 = west end, 2 = east end)
   const lintelM: Mat = { ramp: ['#2c2838', '#3f394d', '#554e67', '#6d6582'], bias: 0.4 };
   for (let mask = 0; mask < 4; mask++) {

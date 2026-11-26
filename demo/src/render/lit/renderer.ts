@@ -429,8 +429,7 @@ export class LitRenderer {
     const d = this.prepare(dim, meta);
     const m = d.maskData;
     for (let i = 0, n = dim.w * dim.h; i < n; i++) {
-      // open sea far from land is never fogged (it continues seamlessly past the map edge)
-      m[i * 4] = fogged(i) && !(m[i * 4 + 3] === 2 && m[i * 4 + 2] >= 19) ? 255 : 0;
+      m[i * 4] = fogged(i) ? 255 : 0;
       m[i * 4 + 1] = fresh(i) ? 255 : 0;
     }
     const gl = this.gl;
@@ -839,6 +838,12 @@ export class LitRenderer {
     gl.uniform1f(pl.u.uSunK, G.sunStrength);
     gl.uniform1f(pl.u.uPointK, G.pointLights * (0.5 + 0.7 * night));
     gl.uniform1f(pl.u.uSea, f.dim.kind === 'overworld' ? 1 : 0);
+    gl.activeTexture(gl.TEXTURE7);
+    gl.bindTexture(gl.TEXTURE_2D, d.ovTex[0]);
+    gl.uniform1i(pl.u.uOvA, 7);
+    gl.uniform1f(pl.u.uOvP, d.ov.opx);
+    gl.uniform1f(pl.u.uOvTop, d.ov.topT);
+    gl.uniform2f(pl.u.uOvSize, d.ov.w, d.ov.h);
     gl.uniform1f(pl.u.uFogDark, G.fogDarkness);
     gl.uniform1f(pl.u.uFogDesat, G.fogDesaturation);
     gl.uniform1f(pl.u.uWaterK, G.water);

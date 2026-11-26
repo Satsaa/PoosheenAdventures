@@ -76,6 +76,7 @@ const ENT_LIGHT: Record<string, [number, [number, number, number], number]> = {
   shop: [2.6, [1.05, 0.7, 0.32], 0],
   dungeon: [2.6, [1.2, 0.5, 0.25], 4],
   cave: [2.0, [0.7, 0.45, 0.3], 0],
+  dock: [2.6, [1.3, 0.85, 0.4], 0.6],
   shrine: [3.0, [1.4, 1.1, 0.45], 1.5],
   sanctum: [3.6, [0.45, 0.75, 1.8], 1.5],
   'stairs-down': [1.8, [0.6, 0.45, 0.8], 0],

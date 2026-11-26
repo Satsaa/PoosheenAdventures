@@ -118,25 +118,104 @@ export function growBlob(rng: Rng, gw: number, gh: number, start: number, count:
  * screen that is closest to the centre after a noise nudge, so the land is one piece with an
  * irregular coast. Everything else becomes sea or mountain range.
  */
-export function landMask(seed: number, gw: number, gh: number, count: number): Uint8Array {
+export type Side = 'n' | 'e' | 's' | 'w';
+
+/** How the world meets the edge of the map. */
+export interface WorldShape {
+  /** 0 = always a full island, 1 = fully landlocked; each side is sea with probability 1 - landlocked */
+  landlocked: number;
+  sea: Record<Side, boolean>;
+}
+
+const sideDist = (gw: number, gh: number, s: number): Record<Side, number> => {
+  const x = s % gw, y = (s / gw) | 0;
+  return { n: y, e: gw - 1 - x, s: gh - 1 - y, w: x };
+};
+
+export function landMask(seed: number, gw: number, gh: number, count: number, sea: Record<Side, boolean>): Uint8Array {
   const total = gw * gh;
   const mask = new Uint8Array(total);
   if (count >= total) return mask.fill(1);
+  const sides: Side[] = ['n', 'e', 's', 'w'];
+  const span = (k: Side) => (k === 'n' || k === 's' ? gh : gw);
+  // a sea side keeps one screen of water between the land and the map edge, when the map has the room
+  const allowed = (s: number) => {
+    const d = sideDist(gw, gh, s);
+    return sides.every((k) => !sea[k] || span(k) < 5 || d[k] >= 1);
+  };
   const score = (s: number) => {
     const x = ((s % gw) + 0.5) / gw - 0.5, y = (((s / gw) | 0) + 0.5) / gh - 0.5;
-    return Math.hypot(x, y) * 2 + (valueNoise(seed, (s % gw) * 0.37, ((s / gw) | 0) * 0.37) - 0.5) * 0.9;
+    let v = Math.hypot(x, y) * 2 + (valueNoise(seed, (s % gw) * 0.37, ((s / gw) | 0) * 0.37) - 0.5) * 0.9;
+    // where the world goes on beyond the map, the land is drawn toward that edge and reaches it
+    const d = sideDist(gw, gh, s);
+    for (const k of sides) if (!sea[k]) v -= 0.5 * Math.max(0, 1 - d[k] / (span(k) * 0.5));
+    return v;
   };
-  const start = (gh >> 1) * gw + (gw >> 1);
+  let start = -1, startScore = Infinity;
+  for (let s = 0; s < total; s++) { if (!allowed(s)) continue; const v = score(s); if (v < startScore) { startScore = v; start = s; } }
+  if (start < 0) return mask.fill(1);
   mask[start] = 1;
-  const frontier = new Set(neighbours(gw, gh, start));
+  const frontier = new Set(neighbours(gw, gh, start).filter(allowed));
   for (let n = 1; n < count && frontier.size; n++) {
     let best = -1, bestScore = Infinity;
     for (const s of frontier) { const v = score(s); if (v < bestScore) { bestScore = v; best = s; } }
     frontier.delete(best);
     mask[best] = 1;
-    for (const t of neighbours(gw, gh, best)) if (!mask[t]) frontier.add(t);
+    for (const t of neighbours(gw, gh, best)) if (!mask[t] && allowed(t)) frontier.add(t);
   }
   return mask;
+}
+
+/** What lies outside the land. */
+export const FILL = { LAND: 0, OCEAN: 1, RANGE: 2, THICKET: 3, WASTES: 4 } as const;
+
+export interface Filler {
+  kind: number;
+  screens: number[];
+}
+
+export interface Fill {
+  /** FILL.* per screen */
+  kind: Int8Array;
+  /** index into list per screen, -1 on land */
+  of: Int16Array;
+  list: Filler[];
+}
+
+/**
+ * Filler regions: every screen that is not land belongs to one. Toward a sea side it is ocean;
+ * toward a side where the world continues it is a mountain range, an impenetrable thicket or
+ * barren wastes. Connected screens of one kind form one named region.
+ */
+export function fillers(seed: number, gw: number, gh: number, land: Uint8Array, sea: Record<Side, boolean>): Fill {
+  const total = gw * gh;
+  const kind = new Int8Array(total), of = new Int16Array(total).fill(-1);
+  const sides: Side[] = ['n', 'e', 's', 'w'];
+  for (let s = 0; s < total; s++) {
+    if (land[s]) continue;
+    const d = sideDist(gw, gh, s);
+    let near: Side = 'n';
+    for (const k of sides) if (d[k] < d[near] || (d[k] === d[near] && sea[k] && !sea[near])) near = k;
+    if (sea[near]) kind[s] = FILL.OCEAN;
+    else {
+      const v = valueNoise(seed, (s % gw) * 0.31, ((s / gw) | 0) * 0.31);
+      kind[s] = v < 0.5 ? FILL.RANGE : v < 0.78 ? FILL.THICKET : FILL.WASTES;
+    }
+  }
+  const list: Filler[] = [];
+  for (let s = 0; s < total; s++) {
+    if (!kind[s] || of[s] >= 0) continue;
+    const f: Filler = { kind: kind[s], screens: [] };
+    const stack = [s];
+    of[s] = list.length;
+    while (stack.length) {
+      const u = stack.pop()!;
+      f.screens.push(u);
+      for (const v of neighbours(gw, gh, u)) if (kind[v] === kind[s] && of[v] < 0) { of[v] = list.length; stack.push(v); }
+    }
+    list.push(f);
+  }
+  return { kind, of, list };
 }
 
 // ---------------------------------------------------------------- rivers
@@ -161,6 +240,8 @@ export function traceRivers(
   rng: Rng, part: Partition, elevOf: (region: number) => number, count: number,
   /** a course is kept only if the world still works with it, e.g. it cuts off no bank too small to use */
   accept: (rivers: River[]) => boolean = () => true,
+  /** screens that are open sea: a river may end there (default: anything that is not land) */
+  isSea: (screen: number) => boolean = (s) => part.cell[s] < 0,
 ): River[] {
   const { gw, gh } = part;
   const cw = gw + 1;
@@ -169,7 +250,7 @@ export function traceRivers(
   // the river ends where it meets the sea: the map edge, or a corner that touches a screen outside the land
   const edge = (cx: number, cy: number) => {
     if (cx === 0 || cy === 0 || cx === gw || cy === gh) return true;
-    for (const [ox, oy] of [[-1, -1], [0, -1], [-1, 0], [0, 0]]) if (part.cell[(cy + oy) * gw + cx + ox] < 0) return true;
+    for (const [ox, oy] of [[-1, -1], [0, -1], [-1, 0], [0, 0]]) if (isSea((cy + oy) * gw + cx + ox)) return true;
     return false;
   };
   /** a river bed needs land on both sides */

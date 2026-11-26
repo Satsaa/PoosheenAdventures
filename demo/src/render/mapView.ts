@@ -661,7 +661,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       if (x < -200 || x > W + 200 || y < -50 || y > Hh + 50) continue;
       const sa = size ? smoothstep(2500, 6500, size * cam.s * cam.s) : 1;
       if (sa <= 0.02) continue;
-      const river = r.biome === 'river';
+      const river = r.biome === 'river' || r.biome === 'ocean' || r.biome === 'range' || r.biome === 'thicket' || r.biome === 'wastes';
       ctx.font = river ? `italic 600 ${Math.max(10, fs - 2)}px ${FONT}` : `700 ${fs}px ${FONT}`;
       (ctx as unknown as { letterSpacing: string }).letterSpacing = river ? '0.5px' : '1.5px';
       const txt = river ? r.name : r.name.toUpperCase();
