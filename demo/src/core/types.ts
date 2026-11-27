@@ -220,6 +220,8 @@ export interface Dimension {
    * wall face (low walls, parapets, kerbs). Its south face is drawn as usual.
    */
   lip?: Uint8Array;
+  /** per tile: 1 = a corner of raised ground cut at 45 degrees (the wall runs diagonally across the tile) */
+  cut?: Uint8Array;
   /** which way river water flows on each tile: 0 = still, 1 = north, 2 = east, 3 = south, 4 = west */
   flow?: Uint8Array;
   region: Int16Array; // index into regions, -1 = none

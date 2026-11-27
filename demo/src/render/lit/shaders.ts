@@ -20,7 +20,7 @@ void main() {
 // slope that rises away from the viewer shows a long face, one that rises toward the viewer a short
 // one, and with the right runs every side of a room shows its wall. The same function shapes the
 // drawn terrain and the height map that shadows are cast over, so light and picture agree.
-//   uLift: R = lift of the tile in px, G = kind (0 ground, 1 void, 2 liquid; +4 lip; +8 has slopes; +16 walkable),
+//   uLift: R = lift of the tile in px, G = kind (0 ground, 1 void, 2 liquid; +4 lip; +8 has slopes; +16 walkable; +32 corner cut at 45 degrees),
 //          B, A = how much the tile's faces are scaled sideways / up-down so a top is always left
 //   uWallP / uWallL: the pattern and its "lip" variant: (sBase, sK, eN, eEW) in px, where the run
 //   toward lower ground to the south is max(0, sBase - sK * dL), to the north eN + dL, sideways eEW.
@@ -43,17 +43,18 @@ void loadNb(ivec2 t) {
 float runOf(bool sideways, bool south, float kq, float dL, bool lip, bool walk) {
   if (kq > 1.5 && (walk || sideways || !south || dL <= 4.0)) return 4.0;   // a bank into water or lava
   vec4 W = (lip || kq > 1.5) ? uWallL : uWallP;
-  return sideways ? W.w : min(32.0, south ? max(0.0, W.x - W.y * dL) : W.z + dL);
+  return sideways ? min(16.0, W.w) : south ? min(32.0, max(0.0, W.x - W.y * dL)) : min(16.0, W.z + dL);
 }
 // Surface lift (px) at point p (px, relative to the centre tile's corner) of the loaded tile.
-// dir: 0 top, 1 faces south, 2 faces north, 3 faces west, 4 faces east; lowL: the ground it rises from.
+// dir: 0 top, 1 faces south, 2 faces north, 3 faces west, 4 faces east, 5..8 a 45 degree cut that
+// faces NE, SE, SW, NW; lowL: the ground it rises from.
 // (the twin of rawSurface() in core/shape.ts. How much a tile's faces are scaled so that a top
 // is always left is worked out there, once per tile, and arrives in the lift texture.)
 float terrH(vec2 p, out int dir, out float lowL, out float run) {
   float L = nbL[12], K = nbK[12];
   dir = 0; lowL = L; run = 0.0;
   if (mod(K, 4.0) > 0.5) return L;
-  bool walk = K >= 15.5;   // walkable ground: only banks into liquid beside it
+  bool walk = mod(K, 32.0) >= 15.5;   // walkable ground: only banks into liquid beside it
   bool lip = mod(K, 8.0) >= 3.5;
   float sx = nbFit.x, sy = nbFit.y;
   float h = L;
@@ -76,6 +77,19 @@ float terrH(vec2 p, out int dir, out float lowL, out float run) {
     if (hq < h) {
       h = hq; lowL = Lq;
       if (dx >= dy) { dir = i < 2 ? 3 : 4; run = rx; } else { dir = j > 2 ? 1 : 2; run = ry; }
+    }
+  }
+  if (K >= 31.5) {
+    // a corner cut at 45 degrees (the twin of the CUT lows in core/shape.ts)
+    for (int c = 0; c < 4; c++) {
+      int sx = c < 2 ? 1 : -1, sy = (c == 1 || c == 2) ? 1 : -1;
+      int na = 12 + sx, nb = 12 + sy * 5;
+      float ka = mod(nbK[na], 4.0), kb = mod(nbK[nb], 4.0);
+      if ((ka > 0.5 && ka < 1.5) || (kb > 0.5 && kb < 1.5) || nbL[na] >= L || nbL[nb] >= L) continue;
+      float Lq = max(nbL[na], nbL[nb]);
+      vec2 cp = vec2(sx > 0 ? 16.0 : 0.0, sy > 0 ? 16.0 : 0.0);
+      float hq = Lq + (L - Lq) * min((abs(p.x - cp.x) + abs(p.y - cp.y)) / 16.0, 1.0);
+      if (hq < h) { h = hq; lowL = Lq; dir = 5 + c; run = 11.3; }
     }
   }
   return h;
@@ -164,6 +178,8 @@ void main() {
     float dL = max(L - lowL, 0.01);
     float frac = clamp((hh - lowL) / dL, 0.0, 1.0);
     // how long the face is on screen, to lay the texture down it at an even scale
+    int cutDir = dir;                              // 5 NE, 6 SE, 7 SW, 8 NW: laid out like the south or north face they lean toward
+    if (dir >= 5) dir = (dir == 6 || dir == 7) ? 1 : 2;
     float ext = dir == 1 ? run + dL : dir == 2 ? max(run - dL, 3.0) : max(run, dL);
     float down = (1.0 - frac) * ext;
     float py2 = ys + hh;
@@ -179,6 +195,7 @@ void main() {
     else if (down < 2.5 && ext > 6.0) alb2 *= 0.7;
     if (frac * ext < 1.5) alb2 *= 0.72;                           // where it meets the floor
     vec3 pn = dir == 1 ? vec3(0.0, dL, run) : dir == 2 ? vec3(0.0, -dL, run) : dir == 3 ? vec3(-dL, 0.0, run) : vec3(dL, 0.0, run);
+    if (cutDir >= 5) pn = vec3((cutDir <= 6 ? 0.707 : -0.707) * dL, ((cutDir == 6 || cutDir == 7) ? 0.707 : -0.707) * dL, run);
     vec3 det = (n2.rgb * 2.0 - 1.0) - vec3(0.0, 1.0, 0.0);
     det = dir == 1 ? det : dir == 2 ? vec3(-det.x, -det.y, det.z) : dir == 3 ? vec3(-det.y, det.x, det.z) : vec3(det.y, -det.x, det.z);
     vec3 nn2 = normalize(normalize(pn) + det * 0.6);
@@ -448,6 +465,7 @@ uniform sampler2D uCast;
 uniform vec2 uCastO;      // caster map origin (world tiles)
 uniform float uCastR;     // caster px per tile
 uniform vec2 uCastSize;
+uniform vec3 uSeaAvg;     // average colour of the deep-water tile texture
 uniform vec3 uSun;        // direction toward the sun (x east, y south, z up), normalized
 uniform float uShadowMode, uShadowStr, uShadowSoft, uTerrainSh, uContact, uAmbK, uSunK, uPointK, uSea;
 uniform float uFogDark, uFogDesat, uWaterK, uFoamK, uGlintK, uGlintPL;
@@ -627,7 +645,9 @@ void main() {
       // deep sea: dark readable blue, broad slow swells, rare foam streaks; darker far from land
       float dist = flowC >= 16 ? float(flowC - 16) : 0.0;
       vec3 sn;
-      A.rgb = seaAlbedo(P.xy, dist, t, sn);
+      // the tile's own texture carries the detail; the swell model sets tone and shading, the same
+      // as for the open sea past the map's edge (whose flat colour is this texture's average)
+      A.rgb = A.rgb / max(uSeaAvg, vec3(0.004)) * seaAlbedo(P.xy, dist, t, sn);
       N = sn;
       float fo = foamStreak(P.xy, t) * uFoamK * zf * (1.0 - smoothstep(2.0, 10.0, dist) * 0.6);
       A.rgb = mix(A.rgb, vec3(0.62, 0.7, 0.75), fo);

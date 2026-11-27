@@ -67,8 +67,10 @@ const expect = (name: string, d: Dimension, wants: RegExp, fixable: boolean) => 
 }
 {
   const d = over(fresh());
-  const i = find(d, (k) => !d.solid[k] && d.ground[k] === T.GRASS && !d.objects.some((o) => Math.abs(o.x - (k % d.w)) < 2 && Math.abs(o.y - ((k / d.w) | 0)) < 2));
-  d.ground[i] = T.FLOOR; d.elev[i]++; d.solid[i] = 1;
+  // (a block of four: raised ground one tile wide is tidied away, which is another rule's business)
+  const free = (k: number) => !d.solid[k] && d.ground[k] === T.GRASS && !d.objects.some((o) => Math.abs(o.x - (k % d.w)) < 3 && Math.abs(o.y - ((k / d.w) | 0)) < 3);
+  const i = find(d, (k) => [k, k + 1, k + d.w, k + d.w + 1].every(free));
+  for (const k of [i, i + 1, i + d.w, i + d.w + 1]) { d.ground[k] = T.FLOOR; d.elev[k]++; d.solid[k] = 1; }
   expect('a dungeon tile raised outdoors', d, /^Dungeon floor needs outdoor wall faces/, false);
   expect('a dungeon tile on the overworld', d, /^Dungeon floor needs to be on a map it belongs on/, false);
 }

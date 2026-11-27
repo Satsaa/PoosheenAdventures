@@ -887,6 +887,7 @@ export class LitRenderer {
     gl.uniform1f(pl.u.uSunK, G.sunStrength);
     gl.uniform1f(pl.u.uPointK, G.pointLights * (0.5 + 0.7 * night));
     gl.uniform1f(pl.u.uSea, f.dim.kind === 'overworld' ? 1 : 0);
+    gl.uniform3fv(pl.u.uSeaAvg, this.seaAvg());
     gl.activeTexture(gl.TEXTURE7);
     gl.bindTexture(gl.TEXTURE_2D, d.ovTex[0]);
     gl.uniform1i(pl.u.uOvA, 7);
@@ -1117,6 +1118,21 @@ export class LitRenderer {
     sh.frames.clear();
     sh.cursor = { x: 0, y: 0, rowH: 0 };
     sh.full = false;
+  }
+
+  private seaAvgAt: [AssetSheet | null, number[]] = [null, [0.03, 0.1, 0.25]];
+  /** average colour of the deep-water tile texture (0..1) */
+  private seaAvg(): number[] {
+    const s = this.sheet;
+    if (this.seaAvgAt[0] === s) return this.seaAvgAt[1];
+    let r = 0, g = 0, b = 0, n = 0;
+    for (const f of s.frames.get('g:' + T.DEEP) ?? [])
+      for (let y = 0; y < f.h * f.s; y++) for (let x = 0; x < f.w * f.s; x++) {
+        const o = ((f.y + y) * s.w + f.x + x) * 4;
+        r += s.albedo[o]; g += s.albedo[o + 1]; b += s.albedo[o + 2]; n++;
+      }
+    this.seaAvgAt = [s, n ? [r / n / 255, g / n / 255, b / n / 255] : [0.03, 0.1, 0.25]];
+    return this.seaAvgAt[1];
   }
 
   /** bake a few deferred sprites and upload what changed in the main atlas */

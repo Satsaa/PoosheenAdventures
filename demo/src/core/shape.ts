@@ -58,7 +58,7 @@ export function patternsFor(kind: DimKind, s: WallShape = DEFAULT_WALLS): WallPa
 }
 
 // ---------------------------------------------------------------- tile kinds
-export const KIND = { GROUND: 0, VOID: 1, LIQUID: 2, LIP: 4, SLOPED: 8, WALK: 16 } as const;
+export const KIND = { GROUND: 0, VOID: 1, LIQUID: 2, LIP: 4, SLOPED: 8, WALK: 16, CUT: 32 } as const;
 /**
  * Two guarantees of the model, so that no tile can lose its top however faces crowd it:
  *  - a tile that can be walked on is level where things stand on it: no face ever runs across it.
@@ -71,7 +71,7 @@ export const MIN_TOP = 4;
 export const isLiquidG = (g: number): boolean => g === T.WATER || g === T.DEEP || g === T.LAVA;
 /** What a tile is for the shape: ground, nothing, liquid; plus the lip flag. */
 export const kindAt = (dim: Dimension, i: number): number =>
-  dim.ground[i] === T.VOID ? KIND.VOID : isLiquidG(dim.ground[i]) ? KIND.LIQUID : (dim.lip?.[i] ? KIND.LIP : KIND.GROUND) | (dim.solid[i] ? 0 : KIND.WALK);
+  dim.ground[i] === T.VOID ? KIND.VOID : isLiquidG(dim.ground[i]) ? KIND.LIQUID : (dim.lip?.[i] ? KIND.LIP : KIND.GROUND) | (dim.solid[i] ? (dim.cut?.[i] ? KIND.CUT : 0) : KIND.WALK);
 
 /** Per tile: its kind, and whether it has lower ground within reach of a slope (precomputed for drawing). */
 export function tileKinds(dim: Dimension, liftPx: ArrayLike<number>): Uint8Array {
@@ -110,11 +110,21 @@ function runOf(F: Field, lip: boolean, sideways: boolean, south: boolean, kq: nu
   // into water or lava: a bank, except where a cliff of some height looks south over it
   if (kq === KIND.LIQUID && (walk || sideways || !south || dL <= BANK_STEP)) return BANK_RUN;
   const W = lip || kq === KIND.LIQUID ? F.pat.lip : F.pat.main;
-  return sideways ? W[3] : Math.min(32, south ? Math.max(0, W[0] - W[1] * dL) : W[2] + dL);
+  // a face that looks south may take two tiles, any other one tile, whatever the height of the step
+  return sideways ? Math.min(16, W[3]) : south ? Math.min(32, Math.max(0, W[0] - W[1] * dL)) : Math.min(16, W[2] + dL);
 }
 
 /** One lower neighbour of a tile, as far as the tile's surface is concerned. */
-interface Low { ox: number; oy: number; Lq: number; dL: number; rx: number; ry: number }
+interface Low { ox: number; oy: number; Lq: number; dL: number; rx: number; ry: number; /** a 45 degree cut: the tile corner (px) it is measured from */ cx?: number; cy?: number }
+/** the four corners of a tile: which way they point, and the corner point in px */
+export const CORNERS: [number, number][] = [[1, -1], [1, 1], [-1, 1], [-1, -1]];
+
+/** The lift of tile (x, y) if it is ground or liquid lower than L; -1 otherwise. */
+function lowBeside(F: Field, x: number, y: number, L: number): number {
+  if (x < 0 || y < 0 || x >= F.w || y >= F.h) return -1;
+  const q = y * F.w + x;
+  return (F.kind(q) & 3) === KIND.VOID || F.lift(q) >= L ? -1 : F.lift(q);
+}
 
 /** Everything lower than tile (x, y) within a face's reach, looked up once. */
 function lowsOf(F: Field, x: number, y: number): Low[] {
@@ -130,6 +140,16 @@ function lowsOf(F: Field, x: number, y: number): Low[] {
     if (Lq >= L) continue;
     out.push({ ox: k * 16, oy: j * 16, Lq, dL: L - Lq, rx: runOf(F, lip, true, false, kq, L - Lq, walk), ry: runOf(F, lip, false, j > 0, kq, L - Lq, walk) });
   }
+  if (F.kind(i) & KIND.CUT) {
+    // a corner cut at 45 degrees: where the ground beside it is lower on two sides that meet, the
+    // wall runs along the tile's diagonal and its face falls from there to the corner point
+    for (const [sx, sy] of CORNERS) {
+      const a = lowBeside(F, x + sx, y, L), b = lowBeside(F, x, y + sy, L);
+      if (a < 0 || b < 0) continue;
+      const Lq = Math.max(a, b);
+      out.push({ ox: 0, oy: 0, Lq, dL: L - Lq, rx: 0, ry: 0, cx: sx > 0 ? 16 : 0, cy: sy > 0 ? 16 : 0 });
+    }
+  }
   return out;
 }
 
@@ -137,6 +157,11 @@ function lowsOf(F: Field, x: number, y: number): Low[] {
 function over(L: number, lows: Low[], px: number, py: number, sx: number, sy: number): number {
   let out = L;
   for (const q of lows) {
+    if (q.cx !== undefined) {
+      const hq = q.Lq + q.dL * Math.min((Math.abs(px - q.cx) + Math.abs(py - q.cy!)) / 16, 1);
+      if (hq < out) out = hq;
+      continue;
+    }
     const gx = Math.max(q.ox - px, px - (q.ox + 16), 0), gy = Math.max(q.oy - py, py - (q.oy + 16), 0);
     const rx = q.rx * sx, ry = q.ry * sy;
     const dx = gx <= 0 ? 0 : rx < 0.25 ? 9 : gx / rx, dy = gy <= 0 ? 0 : ry < 0.25 ? 9 : gy / ry;
@@ -265,6 +290,39 @@ export function levelAt(dim: Dimension, i: number): boolean {
   const F = fieldOf(dim), x = i % dim.w, y = (i / dim.w) | 0, L = liftAt(dim, i);
   const lows = lowsOf(F, x, y), [sx, sy] = fitOf(F, x, y, lows);
   return FOOTPRINT.every(([px, py]) => over(L, lows, px, py, sx, sy) >= L - 0.5);
+}
+
+/**
+ * Is this raised ground only one tile wide: lower ground on two opposite sides of it? Its faces
+ * would have no room. (Water or lava a bank's height below does not count: a bank is narrow.
+ * Walkable ground has no faces and does not count either.)
+ */
+export function thinAt(dim: Dimension, i: number): boolean {
+  if (kindAt(dim, i) & (3 | KIND.WALK)) return false;
+  const { w, h } = dim, x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
+  const low = (xx: number, yy: number): boolean => {
+    if (xx < 0 || yy < 0 || xx >= w || yy >= h) return false;
+    const j = yy * w + xx, k = kindAt(dim, j) & 3;
+    return k !== KIND.VOID && liftAt(dim, j) < L - (k === KIND.LIQUID ? BANK_STEP : 0);
+  };
+  return (low(x - 1, y) && low(x + 1, y)) || (low(x, y - 1) && low(x, y + 1));
+}
+
+/**
+ * Can this tile be cut at 45 degrees: solid raised ground with lower ground on exactly two sides
+ * that meet, and ground at least as high on the other two (so the half that stays joins the rest)?
+ */
+export function cornerAt(dim: Dimension, i: number): boolean {
+  if (kindAt(dim, i) & (3 | KIND.WALK)) return false;
+  const { w, h } = dim, x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
+  const side = (xx: number, yy: number): number => {   // 1 lower, 0 as high or higher, -1 nothing
+    if (xx < 0 || yy < 0 || xx >= w || yy >= h) return -1;
+    const j = yy * w + xx;
+    return (kindAt(dim, j) & 3) === KIND.VOID ? -1 : liftAt(dim, j) < L ? 1 : 0;
+  };
+  const n = side(x, y - 1), e = side(x + 1, y), s = side(x, y + 1), wst = side(x - 1, y);
+  return (n === 1 && e === 1 && s === 0 && wst === 0) || (e === 1 && s === 1 && wst === 0 && n === 0) ||
+    (s === 1 && wst === 1 && n === 0 && e === 0) || (wst === 1 && n === 1 && e === 0 && s === 0);
 }
 
 /** Does the tile show a face at all: is anything beside it lower? (Walkable ground and liquid never do.) */

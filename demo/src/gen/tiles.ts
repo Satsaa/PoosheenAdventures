@@ -74,7 +74,7 @@ export function realiseTiles(bp: Blueprint, seed: number): TileResult {
     finishTree(bp.tree, bp.ctx);
   }
   // props and walls get what the tile table says they need (the checker then confirms it)
-  for (const l of layers) settleTiles(l.dim);
+  for (const l of layers) settleTiles(l.dim, (i) => l.barriers.has(i) || l.anchors.has(i));
   verify(layers, bp.graph, problems, wet);
 
   // coordinates the rest of the app wants
