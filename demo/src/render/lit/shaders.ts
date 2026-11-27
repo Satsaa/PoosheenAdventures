@@ -211,6 +211,12 @@ void main() {
   // The area averaged is whichever is larger: what one screen pixel covers when zoomed out, or
   // one block of the sprite's own grid when the sprite resolution is set below what it was baked at.
   bool mipd = false; vec4 nM = vec4(0.0); vec4 eM = vec4(0.0);
+  // Silhouette rim: the bake marks a sprite's edge texels (albedo alpha below full), one px of the
+  // tile grid wide at any resolution. They are darkened as they are read, so the mip average below
+  // is taken of the finished, outlined sprite.
+  float rimK = (flags & 512) != 0 ? uOutline.x : (flags & 1024) != 0 ? uOutline.y : (flags & 2048) != 0 ? uOutline.z : 0.0;
+  if (face || uOccOn != 1) rimK = 0.0;
+  vec3 rimMul = vec3(1.0 - rimK, 1.0 - rimK, 1.0 - rimK * 0.85);
   float fMip = uMip > 0.5 ? uS / uK : 1.0;
   float foot = max(fMip, uBlock);
   if (uBlock > 1.001 && uBlock >= fMip && !face) {
@@ -231,6 +237,7 @@ void main() {
       ivec2 sq = ivec2(vSrc.xy) + q;
       vec4 t = texelFetch(uA, sq, 0);
       if (t.a < 0.5) continue;
+      if (t.a < 0.9) t.rgb *= rimMul;
       vec4 tn = texelFetch(uN, sq, 0), te = texelFetch(uE, sq, 0);
       sum += t.rgb; nM += tn; eM.rgb += te.rgb; cov += 1.0;
       if (!gotMat) { eM.a = te.a; gotMat = true; }   // a material id cannot be averaged: the first texel's stands
@@ -241,6 +248,7 @@ void main() {
     mipd = true;
   }
   if (a.a < 0.5) discard;
+  if (!mipd && a.a < 0.9) a.rgb *= rimMul;
   float fadeA = uFade * (vSrc.z < -1.5 ? vSrc.w : 1.0);   // per-instance fade (hidden / done changes)
   if (fadeA < 1.0) {
     ivec2 p = ivec2(gl_FragCoord.xy);
@@ -263,18 +271,6 @@ void main() {
   vec3 alb = a.rgb;
   // wall-foot base piece (corner texture): an albedo multiplier whose frame travels in the tint
   if ((flags & 8388608) != 0) alb *= texelFetch(uA, ivec2(vTint.rg) + lp, 0).rgb;
-  float rimK = (flags & 512) != 0 ? uOutline.x : (flags & 1024) != 0 ? uOutline.y : (flags & 2048) != 0 ? uOutline.z : 0.0;
-  if (rimK > 0.0 && !face && uOccOn == 1) {
-    // 1 px silhouette rim: a darker shade of the sprite's own edge colour
-    bool rim = false;
-    for (int k = 0; k < 4; k++) {
-      ivec2 o = k == 0 ? ivec2(1, 0) : k == 1 ? ivec2(-1, 0) : k == 2 ? ivec2(0, 1) : ivec2(0, -1);
-      ivec2 q = lq + o;
-      // only real silhouette edges: a frame border is not an edge (modular building pieces continue there)
-      if (q.x >= 0 && q.y >= 0 && q.x < tSize.x && q.y < tSize.y && texelFetch(uA, ivec2(vSrc.xy) + q, 0).a < 0.5) { rim = true; break; }
-    }
-    if (rim) alb *= vec3(1.0 - rimK, 1.0 - rimK, 1.0 - rimK * 0.85);
-  }
   if (mat == 6) { alb *= vTint.rgb; mat = 0; }
   else if ((flags & 32) != 0) alb *= vTint.rgb;
   float h = face ? vInst.x - (float(lp.y) + 0.5) / (16.0 * uS) + 0.5 / 16.0 : vInst.x + n.a * 255.0 / 40.0 - 1.0;

@@ -242,5 +242,6 @@ export function renderModel(m: Model, seed = 1, scale = 1): Sprite {
       shadeAt(i, j, sx, ys / n, zs / n, best, nx, ny, nz);
     }
   if (m.outline !== undefined && m.outline !== 0 && m.outline < 0.5) s.outline(m.outline);
+  s.markRim();
   return s;
 }

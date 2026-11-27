@@ -7,7 +7,7 @@
 // and the renderer does not change.
 //
 // Layer layout (all RGBA8, same size, same frame rectangles):
-//   albedo   : RGB = flat base colour (sRGB), A = coverage (0 = empty, 255 = solid; no AA)
+//   albedo   : RGB = flat base colour (sRGB), A = coverage (0 = empty, 255 = solid, 200 = solid silhouette edge; no AA)
 //   normal   : RGB = world-space normal * 0.5 + 0.5 (x = east, y = south, z = up),
 //              A = surface height above the tile's ground in tiles, encoded (h + HEIGHT_OFF) * HEIGHT_SCALE
 //   emissive : RGB = emitted colour (added after lighting, feeds bloom), A = material id (MAT.*)
@@ -23,6 +23,8 @@ export const TILE_PX = 16;
 export const ELEV_PX = TILE_PX * 0.4;
 export const HEIGHT_SCALE = 40;
 export const HEIGHT_OFF = 1;
+/** albedo alpha of a silhouette edge texel (solid, but outlined when the renderer is asked to) */
+export const RIM_ALPHA = 200;
 
 export const MAT = {
   DIFFUSE: 0,
@@ -154,6 +156,26 @@ export class Sprite {
         if (on) edge.push(i);
       }
     for (const i of edge) { alb[i] *= k; alb[i + 1] *= k; alb[i + 2] *= k * 1.05; }
+    return this;
+  }
+  /**
+   * Mark the silhouette's edge texels for the renderer's outline: albedo alpha RIM_ALPHA instead of 255
+   * (still solid). The band is 1 px of the tile grid wide at any bake scale. The sprite's own border is
+   * not an edge: modular pieces continue there.
+   */
+  markRim() {
+    const { w, h, alb } = this, reach = this.scale;
+    const empty = (x: number, y: number) => x >= 0 && y >= 0 && x < w && y < h && !alb[(y * w + x) * 4 + 3];
+    const edge: number[] = [];
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        if (!alb[i + 3]) continue;
+        let on = false;
+        for (let d = 1; d <= reach && !on; d++) on = empty(x - d, y) || empty(x + d, y) || empty(x, y - d) || empty(x, y + d);
+        if (on) edge.push(i);
+      }
+    for (const i of edge) alb[i + 3] = RIM_ALPHA;
     return this;
   }
 }
