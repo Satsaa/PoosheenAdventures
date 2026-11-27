@@ -149,9 +149,9 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
     return out;
   };
   const widen = (): void => {
+  const cand = nearSteps(); // (once per call: what a pass changes lies well inside the margin around the steps there were)
   for (let pass = 0; pass < 8; pass++) {
     let changed = false;
-    const cand = nearSteps();
     for (let i = 0; i < n; i++) {
       if (!cand[i]) continue;
       for (const [pa, pb, missing] of thinPairs(dim, i)) {
@@ -204,9 +204,9 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   const DIRS4: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
   const deepen = (): boolean => {
     let any = false;
+  const cand = nearSteps();
   for (let pass = 0; pass < 3; pass++) {
     let changed = false;
-    const cand = nearSteps();
     for (let i = 0; i < n; i++) {
       if (!cand[i] || dim.ground[i] === T.VOID) continue;
       if (!dim.solid[i]) {

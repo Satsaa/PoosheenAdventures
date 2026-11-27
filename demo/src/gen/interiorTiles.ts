@@ -193,16 +193,16 @@ export function realiseInterior(bp: InteriorBP, seed: number): InteriorTiles {
         for (const y of rows) for (let x = R.x0; x <= R.x1; x++) if (taken.has(at(x, y))) clear = false;
         if (clear) {
           const E = elevOf(ri), sx = rng.range(R.x0 + 1, R.x1 - 1), edge = R.y0 + 2;
-          for (let y = R.y0; y <= edge; y++) for (let x = R.x0; x <= R.x1; x++) dim.elev[at(x, y)] = E + 1;
-          for (let x = R.x0; x <= R.x1; x++) { dim.solid[at(x, edge)] = 1; taken.add(at(x, edge)); }
-          // the stairs: a walkable gap in the edge, at the lower level
-          dim.solid[at(sx, edge)] = 0;
-          dim.elev[at(sx, edge)] = E;
+          // (the edge is two rows deep: the ledge's face looks south into the room, and that is two tiles)
+          for (let y = R.y0; y <= edge + 1; y++) for (let x = R.x0; x <= R.x1; x++) dim.elev[at(x, y)] = E + 1;
+          for (const ey of [edge, edge + 1]) for (let x = R.x0; x <= R.x1; x++) { dim.solid[at(x, ey)] = 1; taken.add(at(x, ey)); }
+          // the stairs: a walkable gap through the edge, at the lower level
+          for (const ey of [edge, edge + 1]) { dim.solid[at(sx, ey)] = 0; dim.elev[at(sx, ey)] = E; }
           // the walls behind it rise with it
           for (let y = R.y0 - WT; y <= R.y0 + 2; y++) for (let x = R.x0 - WT; x <= R.x1 + WT; x++) { const i = at(x, y); if (dim.ground[i] === st.wall) dim.elev[i] = Math.max(dim.elev[i], E + 2); }
           dim.objects.push({ id: `s.ledge.${ri}`, kind: 'stairs', x: sx, y: edge, label: 'Stairs', dir: 'n' });
           taken.add(at(sx, edge - 1));
-          taken.add(at(sx, edge + 1));
+          taken.add(at(sx, edge + 2));
         }
       } else if (kind === 'corners') {
         // cut corners make an eight-sided room
@@ -248,5 +248,10 @@ export function realiseInterior(bp: InteriorBP, seed: number): InteriorTiles {
     if (room.far) { drop(room.objs, riverRow + 2, R.y1 - 1); drop(room.far.objs, R.y0, riverRow - 1); }
     else drop(room.objs, R.y0 + (rh > 3 ? 1 : 0), R.y1 - (rh > 3 ? 1 : 0));
   });
+  // walls stand at one height all through a building or a cave, above its highest floor: walls of
+  // rooms on different levels are then one wall, not a stack of narrow steps
+  let top = 0;
+  for (let i = 0; i < n; i++) if (dim.ground[i] === st.wall && dim.elev[i] > top) top = dim.elev[i];
+  for (let i = 0; i < n; i++) if (dim.ground[i] === st.wall) dim.elev[i] = top;
   return { dim, exit, exits, barriers, anchors };
 }

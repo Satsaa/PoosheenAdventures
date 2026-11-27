@@ -422,21 +422,29 @@ export function thinPairs(dim: Dimension, i: number): [number, number, number][]
   if (kindAt(dim, i) & (3 | KIND.WALK)) return [];
   const { w, h } = dim, x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
   const out: [number, number, number][] = [];
+  const g = dim.ground, el = dim.elev;
   for (const [dx, dy] of [[1, 0], [0, 1]]) {
-    // walk to both ends of the ground that is at least this high; -1: it ends at nothing
+    // (face depths do not depend on the height of the step: the size a place needs is known up front)
+    const need = faceDepth(dim, -dx, -dy) + 1 + faceDepth(dim, dx, dy);
+    // walk to both ends of the ground that is at least this high; -1: it ends at nothing, or it is
+    // long enough this way alone
     const end = (s: number): [number, number] => {
-      for (let k = 1; ; k++) {
+      for (let k = 1; k < need; k++) {
         const xx = x + dx * k * s, yy = y + dy * k * s;
         if (xx < 0 || yy < 0 || xx >= w || yy >= h) return [-1, k - 1];
-        const j = yy * w + xx, kj = kindAt(dim, j) & 3;
-        if (kj === KIND.VOID) return [-1, k - 1];
-        if (liftAt(dim, j) < L - (kj === KIND.LIQUID ? BANK_STEP : 0)) return [j, k - 1];
-        if (k > 6) return [-1, k]; // plenty
+        const j = yy * w + xx, gj = g[j];
+        if (gj === T.VOID) return [-1, k - 1];
+        // (the same height as liftAt gives, without the rounding: only the comparison matters here)
+        const liquid = gj === T.WATER || gj === T.DEEP || gj === T.LAVA;
+        if (el[j] === el[i] && gj === g[i]) continue;
+        if (liftAt(dim, j) < L - (liquid ? BANK_STEP : 0)) return [j, k - 1];
       }
+      return [-1, need];
     };
-    const [a, na] = end(-1), [b, nb] = end(1);
-    if (a < 0 || b < 0) continue;
-    const need = faceDepth(dim, -dx, -dy, L - liftAt(dim, a)) + 1 + faceDepth(dim, dx, dy, L - liftAt(dim, b));
+    const [a, na] = end(-1);
+    if (a < 0) continue;
+    const [b, nb] = end(1);
+    if (b < 0) continue;
     if (na + nb + 1 < need) out.push([b, a, need - (na + nb + 1)]);
   }
   return out;

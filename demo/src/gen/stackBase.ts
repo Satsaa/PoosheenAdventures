@@ -146,6 +146,15 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
     }
     if (st.river[i]) st.border[i] = 1; // water is not land: it bounds the walkable area like a rim does
   }
+  // a cave's wall against the rock outside it is two tiles thick: room for the full face that looks into the cave
+  if (bp.kind === 'underworld') for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    if (reg[i] < 0 || st.border[i]) continue;
+    for (let dy = -2; dy <= 2 && !st.border[i]; dy++) for (let dx = -2; dx <= 2; dx++) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h || reg[ny * w + nx] < 0) { st.border[i] = 1; break; }
+    }
+  }
   // built walls are thick enough to carry their faces, and every outward corner carries a tower
   const tower = new Uint8Array(anyBlocky ? n : 0);
   if (anyBlocky) {
@@ -207,6 +216,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
   });
 
   // 4. base paint
+  const caveTop = Math.max(...bp.regions.map((r) => r.elev)) + 1;
   for (let i = 0; i < n; i++) {
     const r = reg[i];
     dim.region[i] = r;
@@ -244,7 +254,9 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
     if (!st.border[i]) { dim.solid[i] = 0; continue; }
     if (style.rimGround !== undefined) {
       dim.ground[i] = style.rimGround;
-      if (style.rimGround === T.CAVEWALL) dim.elev[i] = region.elev + 1;
+      // (cave walls stand at one height all through a cave, above its highest floor: two regions' walls
+      // side by side are then one wall, deep enough for a full face on either side)
+      if (style.rimGround === T.CAVEWALL) dim.elev[i] = caveTop;
       // (corner towers are part of the wall, at its height: a tower a level higher would be a raised
       // place of its own, too small to carry walls)
       if (style.rimRise) dim.elev[i] = region.elev + style.rimRise;

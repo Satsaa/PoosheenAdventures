@@ -3,7 +3,7 @@
 // generator has a fix for it, the tidy-up must make the report go away again.
 import { generateWorld } from './gen/index';
 import { checkTiles, summariseIssues, tileCtx } from './core/tileset';
-import { facedAt, levelAt, liftAt, reachesTop } from './core/shape';
+import { facedAt, fieldOf, kindAt, levelAt, liftAt, reachesTop, surface } from './core/shape';
 import { settleTiles } from './gen/settle';
 import { D, T, type Dimension } from './core/types';
 import { useSmallDefaults } from './core/settings';
@@ -20,10 +20,39 @@ const fail = (msg: string) => { failed++; console.log('FAILED:', msg); };
 // checker reports each of them, and this test holds the number down until the generator stops.
 const WALKWAY = /a wall under its edge|deep behind its wall face/;
 let warned = 0, walkways = 0, docks = 0, badDocks = 0;
+// every straight stretch of wall in every world, measured from the terrain model: how deep is its face?
+const depth = new Map<string, Map<number, number>>();
+const tally = (k: string, d: number) => { const m = depth.get(k) ?? depth.set(k, new Map()).get(k)!; m.set(d, (m.get(d) ?? 0) + 1); };
 for (let i = 0; i < N; i++) {
   const w = generateWorld('tiles' + i);
   const all = w.dims.flatMap((d) => checkTiles(d));
   walkways += all.filter((x) => WALKWAY.test(x.lacks)).length;
+  for (const d of w.dims) {
+    const F = fieldOf(d), room = d.kind === 'interior' || d.kind === 'underworld';
+    const low = (j: number, L: number) => { const k = kindAt(d, j) & 3; return k !== 1 && liftAt(d, j) < L - (k === 2 ? 4 : 0); };
+    for (let y = 4; y < d.h - 4; y++) for (let x = 4; x < d.w - 4; x++) {
+      const t = y * d.w + x;
+      if (!d.solid[t] || (kindAt(d, t) & 3) || d.cut?.[t] || d.lip?.[t]) continue;
+      const L = liftAt(d, t);
+      for (const [dx, dy, name] of [[0, 1, 'south'], [0, -1, 'north'], [1, 0, 'east'], [-1, 0, 'west']] as const) {
+        const f = t + dx + dy * d.w, sx = dy !== 0 ? 1 : 0, sy = dx !== 0 ? 1 : 0;
+        if (!low(f, L)) continue;
+        // a straight stretch: the tiles two to either side along the wall are the same wall, uncut
+        let straight = true;
+        for (const k of [-2, -1, 1, 2]) { const q = t + (sx + sy * d.w) * k; if (liftAt(d, q) !== L || !d.solid[q] || d.cut?.[q] || !low(q + dx + dy * d.w, L) || liftAt(d, q + dx + dy * d.w) !== liftAt(d, f)) straight = false; }
+        if (!straight) continue;
+        // walk in from the edge along the middle of the tile until the surface is at full height
+        let px = 0;
+        for (; px < 64; px++) {
+          const k = Math.floor(px / 16), xx = x - dx * k, yy = y - dy * k, q = yy * d.w + xx;
+          if (liftAt(d, q) !== L || (kindAt(d, q) & 3)) break;
+          const u = px - k * 16 + 0.5, lx = dx > 0 ? 16 - u : dx < 0 ? u : 8, ly = dy > 0 ? 16 - u : dy < 0 ? u : 8;
+          if (surface(F, xx, yy, lx, ly) >= L - 0.01) break;
+        }
+        tally((room ? 'rooms and caves' : 'outdoors') + ', facing ' + name, Math.round(px / 4) / 4);
+      }
+    }
+  }
   // a jetty stands on the water's level or one above it, never on a cliff
   for (const d of w.dims) for (const o of d.objects.filter((q) => q.style === 'dock')) {
     let sea = -1;
@@ -41,6 +70,15 @@ for (let i = 0; i < N; i++) {
   if (issues.length && warned++ < 3) console.log('  tiles' + i, summariseIssues(issues).join('; '));
 }
 console.log(`generated worlds with warnings: ${warned}/${N}`);
+// what the wall table promises: outdoors two tiles facing south and one tile the other ways; two tiles all round in rooms and caves
+console.log('wall face depth in tiles, every straight stretch of wall in these worlds (depth: how many):');
+let offSize = 0, allFaces = 0;
+for (const [k, m] of [...depth].sort()) {
+  const want = k.startsWith('rooms') || k.endsWith('south') ? 2 : 1, total = [...m.values()].reduce((a, b) => a + b, 0), ok = m.get(want) ?? 0;
+  allFaces += total; offSize += total - ok;
+  console.log(`  ${k.padEnd(32)} wanted ${want}: ${ok} of ${total} (${((ok / total) * 100).toFixed(1)}%)` + (ok < total ? '  others: ' + [...m].filter(([q]) => q !== want).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([q, c]) => `${q} x${c}`).join(', ') : ''));
+}
+if (offSize / Math.max(1, allFaces) > 0.005) fail('wall faces are not the size the wall table gives');
 console.log(`walkways along a drop that could not be given a wall: ${(walkways / N).toFixed(1)} per world`);
 console.log(`docks: ${docks}, of which more than one level above their water (or below it): ${badDocks}`);
 if (badDocks) fail('a dock stands on a cliff');
