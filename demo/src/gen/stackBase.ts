@@ -245,7 +245,9 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
     if (style.rimGround !== undefined) {
       dim.ground[i] = style.rimGround;
       if (style.rimGround === T.CAVEWALL) dim.elev[i] = region.elev + 1;
-      if (style.rimRise) dim.elev[i] = region.elev + style.rimRise + (tower[i] ? 1 : 0);
+      // (corner towers are part of the wall, at its height: a tower a level higher would be a raised
+      // place of its own, too small to carry walls)
+      if (style.rimRise) dim.elev[i] = region.elev + style.rimRise;
       if (style.rimGround === T.VOID) dim.region[i] = -1; // sky islands simply end
     } else dim.deco[i] = st.rng.pick(style.rim);
   }

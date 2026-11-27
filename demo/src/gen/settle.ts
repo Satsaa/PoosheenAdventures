@@ -253,6 +253,16 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
       if (xx >= 0 && yy >= 0 && xx < w && yy < h && dim.solid[j] && liftAt(dim, j) === L) lip[j] = 1;
     }
   }
+  // (the sides of a gap one tile wide stay square: a gateway or a doorway through a wall has upright jambs)
+  const jamb = (i: number): boolean => {
+    const L = liftAt(dim, i);
+    for (const d of [1, -1, w, -w]) {
+      const t = i + d, u = t + d;
+      if (t < 0 || t >= n || u < 0 || u >= n) continue;
+      if (dim.ground[t] !== T.VOID && liftAt(dim, t) < L && dim.ground[u] !== T.VOID && liftAt(dim, u) >= L) return true;
+    }
+    return false;
+  };
   // (a building is placed whole and stands on level ground: no diagonal wall comes within its reach)
   const nearHouse = (i: number): boolean => {
     const x = i % w, y = (i / w) | 0;
@@ -263,9 +273,18 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
     return false;
   };
   // (settling again keeps the cuts there are, where they still are corners)
+  const jambLate = (i: number): boolean => {
+    const L = liftAt(dim, i);
+    for (const d of [1, -1, w, -w]) {
+      const t = i + d, u = t + d;
+      if (t < 0 || t >= n || u < 0 || u >= n) continue;
+      if (dim.ground[t] !== T.VOID && liftAt(dim, t) < L && dim.ground[u] !== T.VOID && liftAt(dim, u) >= L) return true;
+    }
+    return false;
+  };
   const was = dim.cut;
   const cut = (dim.cut = new Uint8Array(n));
-  if (was) for (let i = 0; i < n; i++) if (was[i]) { dim.cut[i] = 0; if (cornerAt(dim, i)) cut[i] = 1; }
+  if (was) for (let i = 0; i < n; i++) if (was[i]) { dim.cut[i] = 0; if (cornerAt(dim, i) && !jambLate(i)) cut[i] = 1; }
   if (dim.kind === 'interior' || dim.kind === 'underworld') {
     const fills: [number, number][] = [];
     // a floor tile in the corner of a room: wall on two sides that meet, floor on the other two
@@ -293,7 +312,7 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   for (let i = 0; i < n; i++) {
     // (which walls are cut is the wall table's business: core/shape.ts)
     // closed ground and walkable shores alike: any tile can be cut (what may be is cornerAt's business)
-    if (!cornerAt(dim, i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || thinAt(dim, i) || nearHouse(i)) continue;
+    if (!cornerAt(dim, i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || jamb(i) || thinAt(dim, i) || nearHouse(i)) continue;
     cut[i] = 1;
   }
   // A diagonal wall is as deep as the straight walls it joins, so the edge of the top above it is
@@ -330,7 +349,7 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
     if (!changed) break;
     // closing tiles can make new corners
     for (let i = 0; i < n; i++) {
-      if (cut[i] || !cornerAt(dim, i) || square.has(i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || thinAt(dim, i) || nearHouse(i)) continue;
+      if (cut[i] || !cornerAt(dim, i) || square.has(i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || jamb(i) || thinAt(dim, i) || nearHouse(i)) continue;
       cut[i] = 1;
     }
   }
