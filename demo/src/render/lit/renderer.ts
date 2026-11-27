@@ -462,21 +462,6 @@ export class LitRenderer {
       m[i * 4] = fogged(i) ? 255 : 0;
       m[i * 4 + 1] = fresh(i) ? 255 : 0;
     }
-    // A wall belongs to the ground it faces as much as to the ground on top of it: closed ground is
-    // clear as soon as any ground one can walk on within a wall's reach of it is clear. Otherwise a
-    // wall stays dark in front of a place already seen.
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      const i = y * w + x;
-      if (!m[i * 4] || !dim.solid[i] || dim.ground[i] === T.VOID) continue;
-      let clear = false;
-      for (let dy = -3; dy <= 3 && !clear; dy++) for (let dx = -3; dx <= 3; dx++) {
-        const xx = x + dx, yy = y + dy;
-        if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
-        const j = yy * w + xx;
-        if (!dim.solid[j] && !fogged(j)) { clear = true; break; }
-      }
-      if (clear) m[i * 4] = 0;
-    }
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, d.mask);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, dim.w, dim.h, gl.RGBA, gl.UNSIGNED_BYTE, m);

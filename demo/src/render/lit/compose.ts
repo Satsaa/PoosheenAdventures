@@ -131,6 +131,8 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
   const under = dim.kind === 'underworld' || dim.kind === 'interior';
   const get = (k: string) => fr.get(k);
   const lavaTint = [1.0, 0.55, 0.2];
+  /** the ground whose face texture a wall under ground g shows: earth under anything that grows or is trodden */
+  const faceGround = (g: number): number => (g === T.PATH || g === T.DIRT || g === T.SWAMP ? T.GRASS : g === T.SNOW ? T.STONE : g);
   /** which corners of tile (x, y) are another ground's, cut at 45 degrees (bit 0 NE, 1 SE, 2 SW, 3 NW) */
   const flatCuts = (x: number, y: number): number => {
     const g = gAt(x, y);
@@ -176,27 +178,17 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
       const sloped = !!lay.kind && (lay.kind[i] & KIND.SLOPED) !== 0 && !!get('f:' + g);
       // the wall faces on this tile: a baked sprite, shared by every tile with the same surroundings.
       // (Only if the sheet has no room left are they drawn straight from the model.)
-      let wf: Frame | null = null, faceF: Frame | null = null, lowF: Frame | null = null, lowL = -1;
+      let wf: Frame | null = null, faceF: Frame | null = null;
       if (sloped) {
-        const fl = get('f:' + g)!, fv = variant(x, y, seed + 11, fl.length);
+        // one face material along a wall, whatever ground lies on top of it (a path, a patch of sand)
+        const fg = faceGround(g), fl = get('f:' + fg) ?? get('f:' + g)!, fv = variant(x, y, seed + 11, fl.length);
         faceF = fl[fv];
-        let lowKey = '';
-        if (lay.kind![i] & KIND.CUT) {
-          // a tile cut at 45 degrees: its cut half is the lower ground beside it (land or water)
-          let lg = -1;
-          for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
-            const xx = x + dx, yy = y + dy;
-            if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
-            const j = yy * w + xx;
-            if (ground[j] !== T.VOID && liftPx[j] < L && liftPx[j] > lowL) { lowL = liftPx[j]; lg = ground[j]; }
-          }
-          const lfs = lg >= 0 ? get('g:' + lg) : undefined;
-          if (lfs) { lowF = lfs[0]; lowKey = ':' + lg; }
-        }
-        wf = wallSprite(sheet, dim, { liftPx, kind: lay.kind!, fits: lay.fits!, walls: lay.walls! }, x, y, faceF, g + ':' + fv + lowKey, lowF);
+        wf = wallSprite(sheet, dim, { liftPx, kind: lay.kind!, fits: lay.fits!, walls: lay.walls! }, x, y, faceF, fg + ':' + fv);
       }
       let flags = sloped && !wf ? FLAG.SLOPED : 0;
-      const lN = lAt(x, y - 1), lW = lAt(x - 1, y), lE = lAt(x + 1, y), lNW = lAt(x - 1, y - 1), lNE = lAt(x + 1, y - 1);
+      // (the void beside a map is not lower ground: no rim, no corner cut and no wall foot toward it)
+      const lv = (xx: number, yy: number) => (gAt(xx, yy) === T.VOID ? L : lAt(xx, yy));
+      const lN = lv(x, y - 1), lW = lv(x - 1, y), lE = lv(x + 1, y), lNW = lv(x - 1, y - 1), lNE = lv(x + 1, y - 1);
       if (!p.liquid && !sloped) {
         // raised edges: rims, outer corner cuts and inner corners from the 8-neighbourhood
         if (lN < L) flags |= FLAG.BEV_N;
@@ -213,11 +205,10 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
         if (lN <= L && lW <= L && lNW > L) flags |= AUTO.SK_NW;
         if (lN <= L && lE <= L && lNE > L) flags |= AUTO.SK_NE;
       }
-      if (!wf && lowF) inst.push(px, py, P, P, lowF.x, lowF.y, -1, 0, lowL / P, x, y, 0);
       const f0 = gl[variant(x, y, seed + g, gl.length)];
       let flip = g !== T.FLOOR && g !== T.WALL && g !== T.PLANK && g !== T.CAVEWALL && hash2(x, y, seed + 13) < 0.5 ? 128 : 0;
       // corner textures from the sheet (fallback: shader rims from the flags above)
-      const lS = lAt(x, y + 1), lSW = lAt(x - 1, y + 1), lSE = lAt(x + 1, y + 1);
+      const lS = lv(x, y + 1), lSW = lv(x - 1, y + 1), lSE = lv(x + 1, y + 1);
       let topMaskF: Frame | null = null;
       const rims: Frame[] = [];
       if (art && !p.liquid && !sloped) {
@@ -254,12 +245,7 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
           if (ng === g || ng === T.VOID) continue;
           const q = pal(ng);
           if (lAt(nx, ny) !== L) {
-            // surf at the foot of higher land (coasts sit a step below the beach)
-            if (p.liquid && !q.liquid && lAt(nx, ny) > L && dir !== 2) {
-              const fm = get('fm:' + dir)!;
-              const mv = fm[variant(Math.min(x, nx), Math.min(y, ny), seed + 7 + dir, fm.length)];
-              inst.push(px, py, P, P, mv.x, mv.y, -1, -1, L / P, x, y, FLAG.TINTALL, g === T.LAVA ? 1 : 1, g === T.LAVA ? 0.55 : 1, g === T.LAVA ? 0.2 : 1, 1);
-            }
+            // (no surf against a wall: the wall's own foot is the shore there)
             continue;
           }
           if (p.liquid && !q.liquid && cutToward(nx, ny, x, y)) continue; // the shore there is the diagonal
@@ -331,7 +317,30 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
           if (xx < 0 || yy < 0 || xx >= w || yy >= h || (lay.kind![yy * w + xx] & 3) === KIND.VOID) continue;
           low = Math.min(low, liftPx[yy * w + xx]);
         }
-        if (wf) inst.push(px, py, P, P, wf.x, wf.y, -1, 0, L / P, x, y, 0);
+        if (lay.kind![i] & KIND.CUT) {
+          // a tile cut at 45 degrees: the cut half is the lower ground beside it (land or water). It is
+          // drawn as that neighbour's ground and counts as that neighbour's tile (its fog, its water).
+          for (let c = 0; c < 4; c++) {
+            const sx = c < 2 ? 1 : -1, sy = c === 1 || c === 2 ? 1 : -1;
+            const la = lAt(x + sx, y), lb = lAt(x, y + sy), ga = gAt(x + sx, y), gb = gAt(x, y + sy);
+            if (ga === T.VOID || gb === T.VOID || la >= L || lb >= L) continue;
+            const [nx, ny, lg, ll] = la >= lb ? [x + sx, y, ga, la] : [x, y + sy, gb, lb];
+            const lfs = get('g:' + lg), mk = get('dg:' + c);
+            if (lfs && mk) { const f = lfs[variant(nx, ny, seed + lg, lfs.length)]; inst.push(px, py, P, P, f.x, f.y, mk[0].x, mk[0].y, ll / P, nx, ny, 0); }
+          }
+        }
+        if (wf) {
+          // a wall face is seen from the lower ground it looks at: it counts as that ground's tile, so
+          // it clears of fog with the place in front of it, while the top above keeps its own
+          let fx = x, fy = y;
+          for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0], [0, 2], [1, 1], [-1, 1], [1, -1], [-1, -1], [0, -2], [2, 0], [-2, 0], [1, 2], [-1, 2], [0, 3]]) {
+            const xx = x + dx, yy = y + dy;
+            if (xx < 0 || yy < 0 || xx >= w || yy >= h || ground[yy * w + xx] === T.VOID || liftPx[yy * w + xx] >= L) continue;
+            fx = xx; fy = yy;
+            break;
+          }
+          inst.push(px, py, P, P, wf.x, wf.y, -1, 0, L / P, fx, fy, 0);
+        }
         else inst.push(px, py, P, P, faceF!.x, faceF!.y, -3, 1, L / P, x, y, 0, low, 1, 1, 1);
       }
       // (no upright faces below a tile: in a flat grid a wall is the tiles it stands on)

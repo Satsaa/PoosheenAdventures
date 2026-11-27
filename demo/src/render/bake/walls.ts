@@ -17,7 +17,7 @@ export interface WallShapeData { liftPx: ArrayLike<number>; kind: Uint8Array; fi
 const sig = (lows: Low[], L: number): string => lows.map((q) => `${q.ox / 16},${q.oy / 16},${L - q.Lq},${q.rx},${q.ry}${q.cx !== undefined ? `,${q.cx / 16},${q.cy! / 16}` : ''}`).join(';');
 
 /** The baked sprite of the wall faces on tile (x, y), or null when the tile has none or the sheet is full. */
-export function wallSprite(sheet: AssetSheet, dim: Dimension, sh: WallShapeData, x: number, y: number, face: Frame, faceKey: string, lowGround: Frame | null = null): Frame | null {
+export function wallSprite(sheet: AssetSheet, dim: Dimension, sh: WallShapeData, x: number, y: number, face: Frame, faceKey: string): Frame | null {
   if (!sheet.cursor) return null;
   const i = y * dim.w + x, L = sh.liftPx[i];
   const F: Field = { w: dim.w, h: dim.h, lift: (j) => sh.liftPx[j], kind: (j) => sh.kind[j], pat: sh.walls };
@@ -36,15 +36,7 @@ export function wallSprite(sheet: AssetSheet, dim: Dimension, sh: WallShapeData,
     const o = overInfo(L, lows, px, py, sx, sy);
     if (o.h >= L - 0.3) continue;                    // the top: the ground tile shows
     const dL = Math.max(L - o.lowL, 0.01), frac = Math.min(1, Math.max(0, (o.h - o.lowL) / dL));
-    if (o.dir >= 5 && frac < 0.02) {
-      // the cut half of a diagonal tile: the lower ground itself (land or water), at its own height
-      if (!lowGround) continue;
-      const lo = ((lowGround.y + ty) * W + lowGround.x + tx) * 4, d = (ty * N + tx) * 4;
-      for (let c = 0; c < 4; c++) { s.alb[d + c] = sheet.albedo[lo + c]; s.nrm[d + c] = sheet.normal[lo + c]; s.emi[d + c] = sheet.emissive[lo + c]; }
-      s.nrm[d + 3] = Math.max(0, Math.min(255, sheet.normal[lo + 3] + Math.round(((o.lowL - L) / 16) * 40)));
-      any = true;
-      continue;
-    }
+    if (o.dir >= 5 && frac < 0.02) continue;         // the cut half of a diagonal tile: the lower ground shows (drawn under this)
     const cut = o.dir, dir = o.dir >= 5 ? (o.dir === 6 || o.dir === 7 ? 1 : 2) : o.dir;
     const ext = Math.max(o.run, 2), down = (1 - frac) * ext;
     // lay the face texture down the face at an even scale: across it along the wall, down it from the top edge

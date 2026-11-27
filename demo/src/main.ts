@@ -254,7 +254,7 @@ function scene(rows: string[], opts: { settle?: boolean; kind?: 'overworld' | 'i
   showDim(dim.id);
   map.fitAll();
 }
-(window as unknown as Record<string, unknown>).poosheen = { show: (id: DimId) => { showDim(id); map.fitAll(); }, world: () => world, time: (h: number) => view.setTime?.(h), scene };
+(window as unknown as Record<string, unknown>).poosheen = { show: (id: DimId) => { showDim(id); map.fitAll(); }, world: () => world, time: (h: number) => view.setTime?.(h), scene, focus: (id: DimId, x: number, y: number) => showDim(id, { x, y }) };
 
 // fullscreen for the map: the browser's own where it is allowed, otherwise the stage fills the page
 const stage = document.querySelector('.stage') as HTMLElement;
