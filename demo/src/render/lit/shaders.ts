@@ -85,7 +85,8 @@ float terrH(vec2 p, out int dir, out float lowL, out float run) {
       int sx = c < 2 ? 1 : -1, sy = (c == 1 || c == 2) ? 1 : -1;
       int na = 12 + sx, nb = 12 + sy * 5;
       float ka = mod(nbK[na], 4.0), kb = mod(nbK[nb], 4.0);
-      if ((ka > 0.5 && ka < 1.5) || (kb > 0.5 && kb < 1.5) || nbL[na] >= L || nbL[nb] >= L) continue;
+      // (a bank into water or lava is not a wall: it is never cut)
+      if ((ka > 0.5 && ka < 1.5) || (kb > 0.5 && kb < 1.5) || nbL[na] >= L - (ka > 1.5 ? 4.0 : 0.0) || nbL[nb] >= L - (kb > 1.5 ? 4.0 : 0.0)) continue;
       float Lq = max(nbL[na], nbL[nb]);
       vec2 cp = vec2(sx > 0 ? 16.0 : 0.0, sy > 0 ? 16.0 : 0.0);
       float hq = Lq + (L - Lq) * min((abs(p.x - cp.x) + abs(p.y - cp.y)) / 16.0, 1.0);

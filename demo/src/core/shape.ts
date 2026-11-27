@@ -119,11 +119,13 @@ interface Low { ox: number; oy: number; Lq: number; dL: number; rx: number; ry: 
 /** the four corners of a tile: which way they point, and the corner point in px */
 export const CORNERS: [number, number][] = [[1, -1], [1, 1], [-1, 1], [-1, -1]];
 
-/** The lift of tile (x, y) if it is ground or liquid lower than L; -1 otherwise. */
+/** The lift of tile (x, y) if it is ground or liquid lower than L, as a cut sees it; -1 otherwise. */
 function lowBeside(F: Field, x: number, y: number, L: number): number {
   if (x < 0 || y < 0 || x >= F.w || y >= F.h) return -1;
   const q = y * F.w + x;
-  return (F.kind(q) & 3) === KIND.VOID || F.lift(q) >= L ? -1 : F.lift(q);
+  const k = F.kind(q) & 3;
+  // (a bank into water or lava is not a wall: it is never cut)
+  return k === KIND.VOID || F.lift(q) >= L - (k === KIND.LIQUID ? BANK_STEP : 0) ? -1 : F.lift(q);
 }
 
 /** Everything lower than tile (x, y) within a face's reach, looked up once. */
