@@ -124,13 +124,15 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
     }
     if (st.river[i]) st.border[i] = 1; // water is not land: it bounds the walkable area like a rim does
   }
-  // built walls are two tiles thick, and every outward corner carries a tower
+  // built walls are thick enough to carry their faces, and every outward corner carries a tower
   const tower = new Uint8Array(anyBlocky ? n : 0);
   if (anyBlocky) {
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const i = y * w + x;
       if (reg[i] < 0 || !blocky[reg[i]] || st.border[i]) continue;
-      for (let dy = -2; dy <= 2 && !st.border[i]; dy++) for (let dx = -2; dx <= 2; dx++) {
+      // (three tiles across and four up and down: a wall face on each side and a tile of top between, the
+      // smallest a raised place may be; see the wall table in core/shape.ts)
+      for (let dy = -4; dy <= 4 && !st.border[i]; dy++) for (let dx = -3; dx <= 3; dx++) {
         const nx = x + dx, ny = y + dy;
         if (nx < 0 || ny < 0 || nx >= w || ny >= h || reg[ny * w + nx] !== reg[i]) { st.border[i] = 1; break; }
       }

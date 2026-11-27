@@ -44,7 +44,7 @@ export function realiseTiles(bp: Blueprint, seed: number): TileResult {
     carveOpenings(st, drop);
     // the walls are settled now, on the bare terrain, before anything is placed: every building,
     // object and prop then goes onto ground that already has its final shape
-    settleShape(st.dim, (i) => st.barriers.has(i));
+    settleShape(st.dim, (i) => st.barriers.has(i), (i) => st.barriers.has(i));
     sts.set(s.id, st);
   }
   const S0 = bp.ctx.settings;
@@ -77,7 +77,7 @@ export function realiseTiles(bp: Blueprint, seed: number): TileResult {
     finishTree(bp.tree, bp.ctx);
   }
   // props and walls get what the tile table says they need (the checker then confirms it)
-  for (const l of layers) settleTiles(l.dim, (i) => l.barriers.has(i) || l.anchors.has(i));
+  for (const l of layers) settleTiles(l.dim, (i) => l.barriers.has(i) || l.anchors.has(i), (i) => l.barriers.has(i));
   verify(layers, bp.graph, problems, wet);
 
   // coordinates the rest of the app wants

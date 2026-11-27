@@ -13,10 +13,14 @@ import { bareEdge, cornerAt, cutsOf, diagDepth, fieldOf, isWallG, levelAt, liftA
  * it, so no path anywhere can have depended on c. (Steps of height are not walked without
  * stairs, and tiles with stairs are never offered here, so only equal heights count as joined.)
  */
+let gateAt: (i: number) => boolean = () => false;
 function spare(dim: Dimension, c: number, _keep: (i: number) => boolean): boolean {
   const { w, h } = dim, x = c % w, y = (c / w) | 0, R = 3;
   if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) return false; // the map's edge: leave it alone
-  const sides = [c - w, c + 1, c + w, c - 1].filter((j) => !dim.solid[j]);
+  // (a gate's tile joins nothing: the ground on its two sides is two places)
+  const sides = [c - w, c + 1, c + w, c - 1].filter((j) => !dim.solid[j] && !gateAt(j));
+  // (nor is the ground right at a gate ever given up: it is the way to it)
+  if (gateAt(c) || gateAt(c - w) || gateAt(c + 1) || gateAt(c + w) || gateAt(c - 1)) return false;
   if (sides.length <= 1) return true;
   const seen = new Set<number>([sides[0]]);
   const todo = [sides[0]];
@@ -26,7 +30,7 @@ function spare(dim: Dimension, c: number, _keep: (i: number) => boolean): boolea
       const xx = kx + dx, yy = ky + dy;
       if (xx < 0 || yy < 0 || xx >= w || yy >= h || Math.abs(xx - x) > R || Math.abs(yy - y) > R) continue;
       const m = yy * w + xx;
-      if (m === c || seen.has(m) || dim.solid[m] || dim.elev[m] !== dim.elev[k]) continue;
+      if (m === c || seen.has(m) || dim.solid[m] || gateAt(m) || dim.elev[m] !== dim.elev[k]) continue;
       seen.add(m); todo.push(m);
     }
   }
@@ -120,7 +124,8 @@ function raise(dim: Dimension, c: number, i: number): void {
  *    (dungeons, houses) stay square.
  * `keep` names tiles that must stay as they are (gates, anchors of the logic, anything with an object).
  */
-export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = () => false): void {
+export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = () => false, gate: (i: number) => boolean = () => false): void {
+  gateAt = gate;
   const { w, h } = dim, n = w * h;
   const held = new Set(dim.objects.map((o) => o.y * w + o.x));
   const keep = (i: number) => held.has(i) || keepTile(i) || dim.deco[i] === D.HOUSE;
@@ -300,7 +305,12 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
         }
       }
       if (!ok) { cut[i] = 0; square.add(i); changed = true; continue; }
-      for (const t of close) { if (dim.solid[t]) continue; dim.solid[t] = 1; dim.zone[t] = -1; dim.deco[t] = D.NONE; changed = true; }
+      // (one at a time, asking again each time: two tiles that can each be spared may not both be)
+      for (const t of close) {
+        if (dim.solid[t]) continue;
+        if (!spare(dim, t, keep)) { cut[i] = 0; square.add(i); break; }
+        dim.solid[t] = 1; dim.zone[t] = -1; dim.deco[t] = D.NONE; changed = true;
+      }
     }
     if (!changed) break;
     // closing tiles can make new corners
@@ -312,8 +322,8 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   for (let i = 0; i < n; i++) if (cut[i] && !cornerAt(dim, i)) cut[i] = 0;
 }
 
-export function settleTiles(dim: Dimension, keepTile?: (i: number) => boolean): void {
-  settleShape(dim, keepTile);
+export function settleTiles(dim: Dimension, keepTile?: (i: number) => boolean, gate?: (i: number) => boolean): void {
+  settleShape(dim, keepTile, gate);
   const c = tileCtx(dim);
   const n = dim.w * dim.h;
   for (let i = 0; i < n; i++) {
