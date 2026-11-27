@@ -318,7 +318,9 @@ export function cornerAt(dim: Dimension, i: number): boolean {
   const side = (xx: number, yy: number): number => {   // 1 lower, 0 as high or higher, -1 nothing
     if (xx < 0 || yy < 0 || xx >= w || yy >= h) return -1;
     const j = yy * w + xx;
-    return (kindAt(dim, j) & 3) === KIND.VOID ? -1 : liftAt(dim, j) < L ? 1 : 0;
+    const k = kindAt(dim, j) & 3;
+    // (a bank into water or lava is not a wall: it is never cut)
+    return k === KIND.VOID ? -1 : liftAt(dim, j) < L - (k === KIND.LIQUID ? BANK_STEP : 0) ? 1 : 0;
   };
   const n = side(x, y - 1), e = side(x + 1, y), s = side(x, y + 1), wst = side(x - 1, y);
   return (n === 1 && e === 1 && s === 0 && wst === 0) || (e === 1 && s === 1 && wst === 0 && n === 0) ||

@@ -117,10 +117,10 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
         lowered.add(i);
         const d = pair.filter((j) => !liquid(j)).sort((a, b) => liftAt(dim, b) - liftAt(dim, a))[0];
         if (d === undefined) {
-          // a sliver with water or lava on both sides: it goes under
+          // a sliver with water or lava on both sides: it comes down to the water's level, a bank on each side
           const q = liftAt(dim, pair[0]) >= liftAt(dim, pair[1]) ? pair[0] : pair[1];
-          dim.ground[i] = dim.ground[q]; dim.elev[i] = dim.elev[q]; dim.deco[i] = D.NONE;
-          if (dim.flow) dim.flow[i] = 0;
+          dim.elev[i] = dim.elev[q];
+          if (isWallG(dim.ground[i])) dim.ground[i] = dim.kind === 'overworld' ? T.STONE : T.CAVE;
           if (dim.lip) dim.lip[i] = 0;
           changed = true;
           continue;
