@@ -2,6 +2,8 @@
 import { generateWorld } from './gen/index';
 import { requiredFor, solve } from './core/solver';
 import { T } from './core/types';
+import { useSmallDefaults } from './core/settings';
+useSmallDefaults();
 const N = Number(process.argv[2] ?? 150);
 const regionTiles = (d: { region: Int16Array; regions: { id: string }[] }, id: string) => { const k = d.regions.findIndex((r) => r.id === id); let n = 0; for (let t = 0; t < d.region.length; t++) if (d.region[t] === k) n++; return n; };
 const run = (name: string, settings: Record<string, unknown>, expect: (s: Record<string, number>) => string | null) => {

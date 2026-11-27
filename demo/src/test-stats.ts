@@ -2,6 +2,8 @@ import { generateWorld } from './gen/index';
 import { reqItems } from './core/req';
 import { requiredFor } from './core/solver';
 import { PROGRESSION_TOOLS } from './core/content';
+import { useSmallDefaults } from './core/settings';
+useSmallDefaults();
 const N = 150; let dead = 0, notReq = 0, edges = 0, open = 0, loops = 0, verticals = 0;
 const gates = new Map<string, number>();
 for (let i = 0; i < N; i++) {

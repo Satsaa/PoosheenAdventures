@@ -56,9 +56,9 @@ const flag = (key: SettingKey, group: string, label: string, def: boolean, help:
 
 export const SETTING_DEFS: SettingDef[] = [
   // Tested up to 64×48 screens (768×480 tiles): generation takes about 2 s there, and the map view draws it in chunks.
-  num('worldW', 'World', 'World width', 'int', 3, 64, 1, 8, 'Overworld width in screens. One screen is 12×10 tiles. Very large worlds take a second or two to generate.', 'size map columns'),
-  num('worldH', 'World', 'World height', 'int', 3, 48, 1, 6, 'Overworld height in screens.', 'size map rows'),
-  num('regions', 'World', 'Regions', 'int', 1, 96, 1, 7, 'How many biomes the overworld is split into. Limited by the map size, the border wobble and the river width, so each region keeps room for its places.', 'biomes areas count'),
+  num('worldW', 'World', 'World width', 'int', 3, 64, 1, 51, 'Overworld width in screens. One screen is 12×10 tiles. Very large worlds take a second or two to generate.', 'size map columns'),
+  num('worldH', 'World', 'World height', 'int', 3, 48, 1, 38, 'Overworld height in screens.', 'size map rows'),
+  num('regions', 'World', 'Regions', 'int', 1, 96, 1, 21, 'How many biomes the overworld is split into. Limited by the map size, the border wobble and the river width, so each region keeps room for its places.', 'biomes areas count'),
   num('borderWobble', 'World', 'Border wobble', 'float', 0, 8, 0.5, 4.5, 'How far region borders stray from the screen grid, in tiles. 0 gives straight, blocky borders. A screen is 12×10 tiles, so more than 8 would tear small regions apart.', 'warp noise organic shape'),
   num('landCoverage', 'World', 'Land coverage', 'float', 0.3, 1, 0.02, 0.8, 'Share of the map rectangle that is land. Below 1 the world gets an irregular outline, with open sea or mountain ranges filling the rest. 1 fills the whole rectangle.', 'shape island coast outline rectangle ocean'),
   flag('coastFromSeed', 'World', 'Coast from the seed', true, 'Each seed decides how landlocked its world is: a low value gives a full island, a high value a world whose land runs on past the map edge on every side. Off uses the value below instead.', 'island islandiness landlocked ocean edge'),
@@ -89,22 +89,22 @@ export const SETTING_DEFS: SettingDef[] = [
   num('townHouses', 'Places', 'Town houses', 'int', 0, 24, 1, 9, 'How many houses the town has. Built only where they fit.', 'village city buildings'),
 
   flag('underworld', 'Layers', 'Underworld', true, 'A cave layer under the overworld, reached by stairs. Its caves take their theme from the land above.', 'caves subworld below'),
-  num('underworldSize', 'Layers', 'Underworld size', 'int', 1, 512, 1, 12, 'How many screens of cave exist.', 'caves'),
-  num('underworldRegions', 'Layers', 'Underworld regions', 'int', 1, 16, 1, 3, 'Upper limit for separate cave systems.', 'caves'),
+  num('underworldSize', 'Layers', 'Underworld size', 'int', 1, 512, 1, 53, 'How many screens of cave exist.', 'caves'),
+  num('underworldRegions', 'Layers', 'Underworld regions', 'int', 1, 16, 1, 10, 'Upper limit for separate cave systems.', 'caves'),
   flag('sky', 'Layers', 'Sky', true, 'Cloud islands above the overworld, reached by a beanstalk.', 'clouds islands subworld above'),
-  num('skySize', 'Layers', 'Sky size', 'int', 1, 512, 1, 7, 'How many screens of cloud exist.', 'clouds islands'),
+  num('skySize', 'Layers', 'Sky size', 'int', 1, 512, 1, 88, 'How many screens of cloud exist.', 'clouds islands'),
 
-  num('dungeons', 'Progression', 'Dungeons', 'int', 0, 24, 1, 3, 'Each dungeon holds a medallion and, if a tool is left, a tool. With none, the sanctum has no seal.', 'temples castles count'),
-  num('sealMedallions', 'Progression', 'Medallions for the seal', 'int', 0, 24, 1, 3, 'How many medallions open the final sanctum. Never more than there are dungeons.', 'goal ending requirement'),
+  num('dungeons', 'Progression', 'Dungeons', 'int', 0, 24, 1, 10, 'Each dungeon holds a medallion and, if a tool is left, a tool. With none, the sanctum has no seal.', 'temples castles count'),
+  num('sealMedallions', 'Progression', 'Medallions for the seal', 'int', 0, 24, 1, 10, 'How many medallions open the final sanctum. Never more than there are dungeons.', 'goal ending requirement'),
   num('lockDensity', 'Progression', 'Lock density', 'float', 0, 1, 0.05, 0.75, 'Chance that a filler border between regions is gated. Borders on the critical path are always gated.', 'gates free open'),
   num('linearity', 'Progression', 'Linearity', 'float', 0, 5, 0.1, 0.7, 'Higher values attach new regions to the newest ones (one long chain). Lower values branch out from the start.', 'depth bias chain bushy tree'),
   num('secrets', 'Progression', 'Secrets', 'float', 0, 1, 0.05, 0.75, 'Chance per region of an optional heart piece hidden behind a tool from anywhere in the progression.', 'optional hidden hearts backtracking'),
   flag('everyToolUsed', 'Progression', 'Every tool opens something', true, 'A tool that no gate asks for gets its own secret alcove.', 'dead items unused'),
 
-  num('dungeonRooms', 'Dungeons', 'Dungeon rooms', 'int', 2, 64, 1, 8, 'Typical room count; each dungeon varies by one. The room grid grows to fit.', 'size chambers'),
-  num('smallKeys', 'Dungeons', 'Small keys', 'int', 0, 12, 1, 2, 'Upper limit of locked doors per dungeon. Doors always chain, so no order of opening can waste a key.', 'locked doors'),
+  num('dungeonRooms', 'Dungeons', 'Dungeon rooms', 'int', 2, 64, 1, 26, 'Typical room count; each dungeon varies by one. The room grid grows to fit.', 'size chambers'),
+  num('smallKeys', 'Dungeons', 'Small keys', 'int', 0, 12, 1, 5, 'Upper limit of locked doors per dungeon. Doors always chain, so no order of opening can waste a key.', 'locked doors'),
   num('dungeonFloors', 'Dungeons', 'Dungeon floors', 'int', 1, 5, 1, 2, 'Upper limit of floors per dungeon. Floors lie exactly above one another and are joined by stairs; a dungeon either climbs (2F, 3F) or digs down (B1, B2).', 'layers levels storeys basement tower stairs'),
-  num('dungeonLoops', 'Dungeons', 'Dungeon loops', 'float', 0, 1, 0.05, 0.3, 'Chance that two neighbouring rooms on the same side of every locked door get an extra doorway.', 'cycles shortcuts'),
+  num('dungeonLoops', 'Dungeons', 'Dungeon loops', 'float', 0, 1, 0.05, 0.5, 'Chance that two neighbouring rooms on the same side of every locked door get an extra doorway.', 'cycles shortcuts'),
 
   num('shortcuts', 'Loops', 'Shortcuts and ledges', 'float', 0, 1, 0.05, 0.75, 'Chance that two touching regions the tree did not connect get a gated shortcut, or a one-way ledge if heights differ.', 'cycles loops'),
   flag('ledges', 'Loops', 'One-way ledges', true, 'Allow drops from high ground. Each one is checked so it can never trap the player.', 'softlock drops jump'),
@@ -130,7 +130,7 @@ export const SETTING_DEFS: SettingDef[] = [
   num('priceHeart', 'Economy', 'Shop heart price', 'int', 0, 999, 1, 200, 'Above the base wallet (99) this needs the Big Wallet.', 'shop cost rupees wallet'),
   num('pricePeddlerHeart', 'Economy', 'Peddler heart price', 'int', 0, 999, 1, 80, 'The travelling peddler sells one heart piece.', 'shop cost rupees merchant'),
 
-  num('maxAttempts', 'Advanced', 'Generation attempts', 'int', 1, 50, 1, 12, 'If the tile pass cannot fit a feature, the world is regenerated from a derived seed, up to this many times.', 'retry'),
+  num('maxAttempts', 'Advanced', 'Generation attempts', 'int', 1, 50, 1, 47, 'If the tile pass cannot fit a feature, the world is regenerated from a derived seed, up to this many times.', 'retry'),
 ];
 
 export interface ItemSettingDef {
@@ -181,6 +181,15 @@ export function landScreens(s: GenSettings): number {
 /** Screens a region needs so its places fit: more with wobbly borders and wide rivers. */
 export function screensPerRegion(s: GenSettings): number {
   return 3 + s.borderWobble / 2 + (s.rivers > 0 ? (s.riverWidth - 1) * 1.5 : 0);
+}
+
+/**
+ * The small world the test suites were written for (the shipped defaults are a large world,
+ * which would make hundreds of test worlds take minutes). Tests call this once at the top.
+ */
+export function useSmallDefaults(): void {
+  const small: Partial<Record<SettingKey, number>> = { worldW: 8, worldH: 6, regions: 7, underworldSize: 12, underworldRegions: 3, skySize: 7, dungeons: 3, sealMedallions: 3, dungeonRooms: 8, smallKeys: 2, dungeonLoops: 0.3, maxAttempts: 12 };
+  for (const d of SETTING_DEFS) if (small[d.key] !== undefined) d.default = small[d.key]!;
 }
 
 export function defaultSettings(): GenSettings {

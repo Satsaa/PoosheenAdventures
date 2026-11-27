@@ -1,5 +1,7 @@
 import { generateWorld } from './gen/index';
 import { T } from './core/types';
+import { useSmallDefaults } from './core/settings';
+useSmallDefaults();
 const N = Number(process.argv[2] ?? 200);
 let bad = 0, att = 0, rv = 0, shores = 0, falls = 0, ladders = 0, bridges = 0, split = 0, caves = 0, thrown = 0;
 const why = new Map<string, number>();

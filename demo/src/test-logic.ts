@@ -4,6 +4,8 @@ import { fmtReq } from './core/req';
 import { buildBlueprint } from './gen/logic';
 import { runLints } from './gen/validate';
 import { defaultSettings } from './core/settings';
+import { useSmallDefaults } from './core/settings';
+useSmallDefaults();
 
 let fail = 0, thrown = 0;
 const N = Number(process.argv[2] ?? 300);

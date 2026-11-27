@@ -2,6 +2,8 @@
 import { generateWorld } from './gen/index';
 import { Rng } from './core/rng';
 import { ITEM_SETTING_DEFS, SETTING_DEFS, defaultSettings, normalizeSettings, type GenSettings, type ItemHome, type ItemOrder } from './core/settings';
+import { useSmallDefaults } from './core/settings';
+useSmallDefaults();
 
 const N = Number(process.argv[2] ?? 300);
 const rng = new Rng(12345);

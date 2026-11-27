@@ -6,6 +6,8 @@ import { checkTiles, summariseIssues, tileCtx } from './core/tileset';
 import { facedAt, levelAt, liftAt, reachesTop } from './core/shape';
 import { settleTiles } from './gen/settle';
 import { D, T, type Dimension } from './core/types';
+import { useSmallDefaults } from './core/settings';
+useSmallDefaults();
 
 declare const process: { argv: string[]; exitCode?: number };
 const N = Number(process.argv[2] ?? 120);

@@ -1,4 +1,6 @@
 import { generateWorld } from './gen/index';
+import { useSmallDefaults } from './core/settings';
+useSmallDefaults();
 const cases: [string, Record<string, number | boolean>][] = [
   ['default 8x6', {}],
   ['16x12, 20 regions', { worldW: 16, worldH: 12, regions: 20, underworldSize: 40, skySize: 20, dungeons: 5 }],

@@ -1,5 +1,7 @@
 import { generateWorld } from './gen/index';
 import { T } from './core/types';
+import { useSmallDefaults } from './core/settings';
+useSmallDefaults();
 
 const N = Number(process.argv[2] ?? 100);
 const t0 = Date.now();

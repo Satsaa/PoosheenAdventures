@@ -1,5 +1,7 @@
 import { generateWorld } from './gen/index';
 import { T, D } from './core/types';
+import { useSmallDefaults } from './core/settings';
+useSmallDefaults();
 const N = Number(process.argv[2] ?? 200); let bad = 0; const why = new Map<string, number>();
 for (let i = 0; i < N; i++) {
   const w = generateWorld('dng' + i, JSON.parse(process.argv[3] ?? '{}'));
