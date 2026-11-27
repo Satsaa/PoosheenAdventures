@@ -22,8 +22,8 @@ void main() {
 // drawn terrain and the height map that shadows are cast over, so light and picture agree.
 //   uLift: R = lift of the tile in px, G = kind (0 ground, 1 void, 2 liquid; +4 lip; +8 has slopes; +16 walkable; +32 corner cut at 45 degrees),
 //          B, A = how much the tile's faces are scaled sideways / up-down so a top is always left
-//   uWallP / uWallL: the pattern and its "lip" variant: (sBase, sK, eN, eEW) in px, where the run
-//   toward lower ground to the south is max(0, sBase - sK * dL), to the north eN + dL, sideways eEW.
+//   uWallP / uWallL: the pattern and its "lip" variant: (south, unused, north, sideways), how far
+//   into the raised ground each face reaches, in px.
 const TERRAIN_SHAPE = `
 uniform sampler2D uLift;
 uniform vec4 uWallP, uWallL;
@@ -43,7 +43,7 @@ void loadNb(ivec2 t) {
 float runOf(bool sideways, bool south, float kq, float dL, bool lip, bool walk) {
   if (kq > 1.5 && (walk || sideways || !south || dL <= 4.0)) return 4.0;   // a bank into water or lava
   vec4 W = (lip || kq > 1.5) ? uWallL : uWallP;
-  return sideways ? min(32.0, W.w) : south ? min(32.0, max(0.0, W.x - W.y * dL)) : min(32.0, W.z + dL);
+  return min(32.0, sideways ? W.w : south ? W.x : W.z);
 }
 // Surface lift (px) at point p (px, relative to the centre tile's corner) of the loaded tile.
 // dir: 0 top, 1 faces south, 2 faces north, 3 faces west, 4 faces east, 5..8 a 45 degree cut that

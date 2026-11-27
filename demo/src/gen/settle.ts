@@ -5,7 +5,7 @@
 // fits faces to the room they have, see core/shape.ts.)
 import { D, T, type Dimension } from '../core/types';
 import { NEEDS, PROPS, tileCtx } from '../core/tileset';
-import { cornerAt, isWallG, liftAt, thinAt } from '../core/shape';
+import { cornerAt, isWallG, liftAt, shortFace, thinAt, thinPairs } from '../core/shape';
 
 /**
  * Would closing walkable tile c leave everything around it as connected as before? True when the
@@ -80,9 +80,10 @@ function raise(dim: Dimension, c: number, i: number): void {
  * The shape of raised ground, before anything is checked:
  *  - raised ground is never one tile wide: where it is, the lower ground on one side of it is
  *    raised to match, if that changes nothing about where one can walk;
- *  - rooms get corners at 45 degrees (a floor corner becomes wall, cut diagonally);
- *  - every outward corner of raised ground, built or natural, is cut at 45 degrees, which turns
- *    a staircase of tiles into one diagonal wall.
+ *  - caves get inner corners at 45 degrees (a floor corner becomes cave wall, cut diagonally);
+ *  - every outward corner of raised ground is cut at 45 degrees, so a raised place ends up
+ *    eight-sided and a staircase of tiles becomes one diagonal wall. Built walls indoors
+ *    (dungeons, houses) stay square.
  * `keep` names tiles that must stay as they are (gates, anchors of the logic, anything with an object).
  */
 export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = () => false): void {
@@ -92,22 +93,19 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   const liquid = (j: number) => dim.ground[j] === T.WATER || dim.ground[j] === T.DEEP || dim.ground[j] === T.LAVA;
   seaLevel(dim);
   const lowered = new Set<number>(); // what came down is not raised again, so this always settles
+  const widen = (): void => {
   for (let pass = 0; pass < 8; pass++) {
     let changed = false;
     for (let i = 0; i < n; i++) {
-      if (!thinAt(dim, i)) continue;
-      const x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
-      const lower = (j: number) => dim.ground[j] !== T.VOID && liftAt(dim, j) < L;
-      const pairs: [number, number][] = [];
-      if (x > 0 && x < w - 1 && lower(i - 1) && lower(i + 1)) pairs.push([i + 1, i - 1]);
-      if (y > 0 && y < h - 1 && lower(i - w) && lower(i + w)) pairs.push([i - w, i + w]);
-      for (const pair of pairs) {
-        const c = pair.find((j) => !keep(j) && !lowered.has(j) && !liquid(j) && (dim.solid[j] ? true : spare(dim, j, keep)));
+      for (const [pa, pb, missing] of thinPairs(dim, i)) {
+        const pair = [pa, pb];
+        // one tile short: it grows by one; shorter than that it is no place at all and comes down
+        const c = missing > 1 && !keep(i) ? undefined : pair.find((j) => !keep(j) && !lowered.has(j) && !liquid(j) && (dim.solid[j] ? true : spare(dim, j, keep)));
         if (c !== undefined) {
           // widen it, unless the new tile would itself stand alone
           const was = [dim.ground[c], dim.elev[c], dim.solid[c], dim.deco[c], dim.zone[c], dim.lip ? dim.lip[c] : 0];
           raise(dim, c, i);
-          if (keep(i) || (!thinAt(dim, c) && !thinAt(dim, i))) { changed = true; continue; }
+          if (keep(i) || !thinAt(dim, i)) { changed = true; continue; }
           dim.ground[c] = was[0]; dim.elev[c] = was[1]; dim.solid[c] = was[2]; dim.deco[c] = was[3]; dim.zone[c] = was[4];
           if (dim.lip) dim.lip[c] = was[5];
         }
@@ -142,6 +140,42 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
     }
     if (!changed) break;
   }
+  };
+  // every face gets the depth of closed ground it needs behind its edge (two tiles for a face
+  // that looks south and for every face indoors, one otherwise): the walkable tile behind it is
+  // closed, or failing that the wall moves a tile outward
+  const DIRS4: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+  const deepen = (): boolean => {
+    let any = false;
+  for (let pass = 0; pass < 3; pass++) {
+    let changed = false;
+    for (let i = 0; i < n; i++) {
+      if (!dim.solid[i] || dim.ground[i] === T.VOID) continue;
+      for (const [dx, dy] of DIRS4) {
+        const b = shortFace(dim, i, dx, dy);
+        if (b < 0) continue;
+        if (!keep(b) && spare(dim, b, keep)) { raise(dim, b, i); changed = true; continue; }
+        const f = i + dx + dy * w;
+        if (!(keep(f) || liquid(f) || lowered.has(f) || !(dim.solid[f] || spare(dim, f, keep)))) { raise(dim, f, i); changed = true; continue; }
+        // neither: the edge itself comes down to the ground in front of it and stays closed, so
+        // the step is a plain upright drop at the walkable tile behind
+        if (keep(i)) continue; // (coming down again is fine: each time it ends lower, so this stops)
+        if (!liquid(f)) dim.ground[i] = dim.ground[f];
+        else if (isWallG(dim.ground[i])) dim.ground[i] = dim.kind === 'overworld' ? T.STONE : T.CAVE;
+        dim.elev[i] = dim.elev[f];
+        if (dim.lip) dim.lip[i] = 0;
+        if (dim.kind !== 'sky' && !liquid(f)) dim.deco[i] = D.ROCK;
+        lowered.add(i);
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) break;
+    any = true;
+  }
+    return any;
+  };
+  for (let round = 0; round < 10; round++) { widen(); if (!deepen()) break; }
   // (settling again keeps the cuts there are, where they still are corners)
   const was = dim.cut;
   const cut = (dim.cut = new Uint8Array(n));
@@ -154,7 +188,7 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
       if (dim.solid[i] || dim.deco[i] || dim.zone[i] < 0 || keep(i)) continue;
       for (const [sx, sy] of [[1, -1], [1, 1], [-1, 1], [-1, -1]]) {
         const a = i + sx, b = i + sy * w, c = i + sx + sy * w, oa = i - sx, ob = i - sy * w, oc = i - sx - sy * w;
-        if (!isWallG(dim.ground[a]) || !isWallG(dim.ground[b]) || !isWallG(dim.ground[c]) || dim.ground[a] !== dim.ground[b]) continue;
+        if (dim.ground[a] !== T.CAVEWALL || dim.ground[b] !== T.CAVEWALL || dim.ground[c] !== T.CAVEWALL) continue;
         if (dim.solid[oa] || dim.solid[ob] || dim.solid[oc] || dim.elev[oa] !== dim.elev[i] || dim.elev[ob] !== dim.elev[i] || dim.elev[oc] !== dim.elev[i]) continue;
         fills.push([i, a]);
         break;
@@ -171,7 +205,8 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
     }
   }
   for (let i = 0; i < n; i++) {
-    if (keep(i) || !dim.solid[i]) continue;
+    // (built walls indoors stay square: dungeons and houses are rectangular)
+    if (keep(i) || !dim.solid[i] || (dim.ground[i] === T.WALL && dim.kind === 'interior')) continue;
     if (cornerAt(dim, i) && !thinAt(dim, i)) cut[i] = 1;
   }
 }

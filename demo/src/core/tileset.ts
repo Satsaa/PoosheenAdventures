@@ -9,7 +9,7 @@
 //     fix the table names (remove the prop, or swap it for a low one).
 // The Rust port can load the same table.
 import { D, T, type Dimension, type DimKind, type MapObject } from './types';
-import { WALL_MODE, cornerAt, facedAt, kindAt, levelAt, liftAt, reachesTop, thinAt, type WallMode } from './shape';
+import { WALL_MODE, faceDepth, shortFace, cornerAt, facedAt, kindAt, levelAt, liftAt, reachesTop, thinAt, type WallMode } from './shape';
 
 export { WALL_MODE, type WallMode } from './shape';
 
@@ -165,6 +165,7 @@ export function checkTiles(dim: Dimension): TileIssue[] {
   const { w, h, ground, deco, elev, solid } = dim;
   const out: TileIssue[] = [];
   const say = (i: number, what: string, lacks: string) => out.push({ dim: dim.name, x: i % w, y: (i / w) | 0, what, lacks });
+  const held = new Set(dim.objects.map((o) => o.y * w + o.x));
   const where = dim.kind === 'interior' ? 'an interior' : dim.kind === 'overworld' ? 'the overworld' : dim.kind === 'underworld' ? 'the underworld' : 'the sky';
   for (let i = 0; i < w * h; i++) {
     const g = GROUNDS[ground[i]];
@@ -177,7 +178,13 @@ export function checkTiles(dim: Dimension): TileIssue[] {
       if (!g.faces.includes(c.mode)) say(i, g.name, `${c.mode} wall faces: it stands above its neighbours in ${where}`);
       if (!reachesTop(dim, i)) say(i, g.name, 'a top: it is marked higher than what is beside it, but its faces leave none of it at that height');
     }
-    if (g.is !== 'liquid' && thinAt(dim, i)) say(i, g.name, 'to be at least two tiles wide: raised ground one tile wide has no room for its faces');
+    if (g.is !== 'liquid' && thinAt(dim, i)) say(i, g.name, 'to be a place of its own: raised ground is at least its walls plus one tile of top across, and up and down');
+    if (g.is !== 'liquid' && solid[i]) for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+      // (where something stands right behind the edge, stairs or a chest, the face gives way to it)
+      const b = shortFace(dim, i, dx, dy);
+      // (so does a gate's own tile: closed ground that belongs to a zone)
+      if (b >= 0 && !held.has(b) && !held.has(i) && dim.zone[i] < 0) { say(i, g.name, `closed ground ${faceDepth(dim, dx, dy)} tiles deep behind its wall face: walkable ground begins before the face ends`); break; }
+    }
     if (dim.cut?.[i] && !cornerAt(dim, i)) say(i, g.name, 'an outward corner to be cut at 45 degrees: lower ground on two sides that meet, and not on the other two');
     // a step between two walkable tiles is only passable, and only drawn right, with something that joins them
     if (!solid[i] && g.is === 'floor') {

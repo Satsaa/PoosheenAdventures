@@ -36,14 +36,14 @@ export type WallMode = 'room' | 'outdoor';
 export const WALL_MODE: Record<DimKind, WallMode> = { overworld: 'outdoor', sky: 'outdoor', underworld: 'room', interior: 'room' };
 
 /**
- * (sBase, sK, eN, eEW) in px. Toward lower ground to the south the run is max(0, sBase - sK * dL),
- * to the north eN + dL, sideways eEW, where dL is the height of the step in px.
+ * (south, unused, north, sideways): how far into the raised ground each face reaches, in px.
+ * A footprint, not a size on screen: it is the same whatever the height of the step.
  */
 export type WallPattern = [number, number, number, number];
 export interface WallPatterns { main: WallPattern; lip: WallPattern }
 /** Face sizes in px (a tile is 16). */
 export interface WallShape { room: number; south: number; north: number; side: number; lip: number }
-/** indoors every face is two tiles on screen; outdoors the one that looks south is two, the others one */
+/** indoors every face is two tiles deep; outdoors the one that looks south is two, the others one */
 export const DEFAULT_WALLS: WallShape = { room: 32, south: 32, north: 16, side: 16, lip: 1.5 };
 
 /**
@@ -54,7 +54,7 @@ export const DEFAULT_WALLS: WallShape = { room: 32, south: 32, north: 16, side: 
  * Every map has pattern 1 or 2; a tile can ask for the lip, and steps down to water use it.
  */
 export function patternsFor(kind: DimKind, s: WallShape = DEFAULT_WALLS): WallPatterns {
-  const main: WallPattern = WALL_MODE[kind] === 'room' ? [s.room, 1, s.room, s.room] : [s.south, 1, s.north, s.side];
+  const main: WallPattern = WALL_MODE[kind] === 'room' ? [s.room, 0, s.room, s.room] : [s.south, 0, s.north, s.side];
   return { main, lip: [main[0], main[1], s.lip, s.lip] };
 }
 
@@ -111,8 +111,7 @@ function runOf(F: Field, lip: boolean, sideways: boolean, south: boolean, kq: nu
   // into water or lava: a bank, except where a cliff of some height looks south over it
   if (kq === KIND.LIQUID && (walk || sideways || !south || dL <= BANK_STEP)) return BANK_RUN;
   const W = lip || kq === KIND.LIQUID ? F.pat.lip : F.pat.main;
-  // no face reaches further than two tiles into the ground it belongs to, whatever the height of the step
-  return sideways ? Math.min(32, W[3]) : south ? Math.min(32, Math.max(0, W[0] - W[1] * dL)) : Math.min(32, W[2] + dL);
+  return Math.min(32, sideways ? W[3] : south ? W[0] : W[2]);
 }
 
 /** One lower neighbour of a tile, as far as the tile's surface is concerned. */
@@ -200,7 +199,8 @@ function axisFit(F: Field, x: number, y: number): [number, number] {
   };
   const fit = (a: { k: number; run: number } | null, b: { k: number; run: number } | null): number => {
     if (!a || !b || a.run + b.run <= 0) return 1;
-    const room = (a.k + b.k - 1) * 16 - MIN_TOP;
+    // (ground that ends at the void or the map's edge needs no top there: the face may run right up to it)
+    const room = (a.k + b.k - 1) * 16 - (a.run > 0 && b.run > 0 ? MIN_TOP : 0);
     return a.run + b.run > room ? Math.max(room, 0) / (a.run + b.run) : 1;
   };
   return [fit(end(-1, 0), end(1, 0)), fit(end(0, -1), end(0, 1))];
@@ -221,8 +221,9 @@ export function fitOf(F: Field, x: number, y: number, lows: Low[] = lowsOf(F, x,
   for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     for (let k = 1; k <= 2; k++) {
       const xx = x + dx * k, yy = y + dy * k;
-      if (xx < 0 || yy < 0 || xx >= w || yy >= h) break;
+      if (xx < 0 || yy < 0 || xx >= w || yy >= h) return [sx, sy]; // it ends at the map's edge
       const j = yy * w + xx;
+      if ((F.kind(j) & 3) === KIND.VOID) return [sx, sy];             // or at the void: no top needed
       if ((F.kind(j) & 3) || F.lift(j) < L) break;
       if (F.kind(j) & KIND.WALK) return [sx, sy];
       const [ax, ay] = axisFit(F, xx, yy);
@@ -296,19 +297,67 @@ export function levelAt(dim: Dimension, i: number): boolean {
 }
 
 /**
- * Is this raised ground only one tile wide: lower ground on two opposite sides of it? Its faces
- * would have no room. (Water or lava a bank's height below does not count: a bank is narrow.
- * Walkable ground has no faces and does not count either.)
+ * A raised place is never smaller than its walls plus one tile of top: across, the west face,
+ * a tile of top and the east face; up and down, the north face, a tile of top and the south
+ * face. Outdoors that is 3 by 4 tiles (the south face is two tiles), indoors 5 by 5.
+ * For the raised ground tile i is part of, this gives each direction in which it falls short:
+ * the two lower tiles just beyond its ends, and how many tiles are missing. Ground that ends at
+ * the void or the map's edge on one side has no face there and is not measured. Water or lava a
+ * bank's height below is not "lower": a bank is not a wall.
  */
-export function thinAt(dim: Dimension, i: number): boolean {
-  if (kindAt(dim, i) & (3 | KIND.WALK)) return false;
+export function thinPairs(dim: Dimension, i: number): [number, number, number][] {
+  if (kindAt(dim, i) & (3 | KIND.WALK)) return [];
   const { w, h } = dim, x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
-  const low = (xx: number, yy: number): boolean => {
-    if (xx < 0 || yy < 0 || xx >= w || yy >= h) return false;
-    const j = yy * w + xx, k = kindAt(dim, j) & 3;
-    return k !== KIND.VOID && liftAt(dim, j) < L - (k === KIND.LIQUID ? BANK_STEP : 0);
-  };
-  return (low(x - 1, y) && low(x + 1, y)) || (low(x, y - 1) && low(x, y + 1));
+  const out: [number, number, number][] = [];
+  for (const [dx, dy] of [[1, 0], [0, 1]]) {
+    // walk to both ends of the ground that is at least this high; -1: it ends at nothing
+    const end = (s: number): [number, number] => {
+      for (let k = 1; ; k++) {
+        const xx = x + dx * k * s, yy = y + dy * k * s;
+        if (xx < 0 || yy < 0 || xx >= w || yy >= h) return [-1, k - 1];
+        const j = yy * w + xx, kj = kindAt(dim, j) & 3;
+        if (kj === KIND.VOID) return [-1, k - 1];
+        if (liftAt(dim, j) < L - (kj === KIND.LIQUID ? BANK_STEP : 0)) return [j, k - 1];
+        if (k > 6) return [-1, k]; // plenty
+      }
+    };
+    const [a, na] = end(-1), [b, nb] = end(1);
+    if (a < 0 || b < 0) continue;
+    const need = faceDepth(dim, -dx, -dy) + 1 + faceDepth(dim, dx, dy);
+    if (na + nb + 1 < need) out.push([b, a, need - (na + nb + 1)]);
+  }
+  return out;
+}
+export const thinAt = (dim: Dimension, i: number): boolean => thinPairs(dim, i).length > 0;
+
+/** How many tiles of closed raised ground a face needs behind its edge: its footprint in whole tiles. */
+export function faceDepth(dim: Dimension, dx: number, dy: number): number {
+  const W = GAME_WALLS[dim.kind].main;
+  return Math.ceil(Math.min(32, dx !== 0 ? W[3] : dy > 0 ? W[0] : W[2]) / 16 - 1e-6);
+}
+
+/**
+ * Is the face that tile i shows toward (dx, dy) cut short: does walkable ground begin behind the
+ * edge before the face has the depth it needs? (Raised ground that is simply thin is `thinAt`'s
+ * business; the void and the map's edge end a wall without spoiling its face.)
+ * Returns the tile that would have to be closed for the face to fit, or -1.
+ */
+export function shortFace(dim: Dimension, i: number, dx: number, dy: number): number {
+  if (kindAt(dim, i) & (3 | KIND.WALK)) return -1;
+  const { w, h } = dim, x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
+  const fx = x + dx, fy = y + dy;
+  if (fx < 0 || fy < 0 || fx >= w || fy >= h) return -1;
+  const f = fy * w + fx, kf = kindAt(dim, f) & 3;
+  if (kf === KIND.VOID || liftAt(dim, f) >= L - (kf === KIND.LIQUID ? BANK_STEP : 0)) return -1; // no face this way
+  for (let k = 1; k < faceDepth(dim, dx, dy); k++) {
+    const bx = x - dx * k, by = y - dy * k;
+    if (bx < 0 || by < 0 || bx >= w || by >= h) return -1;
+    const b = by * w + bx, kb = kindAt(dim, b);
+    if ((kb & 3) === KIND.VOID) return -1;
+    if ((kb & KIND.WALK) && liftAt(dim, b) >= L - 0.5) return b;
+    if ((kb & 3) || liftAt(dim, b) < L) return -1;
+  }
+  return -1;
 }
 
 /**
@@ -361,8 +410,9 @@ export function reachesTop(dim: Dimension, i: number): boolean {
   for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     for (let k = 1; k <= 2; k++) {
       const xx = x + dx * k, yy = y + dy * k;
-      if (xx < 0 || yy < 0 || xx >= w || yy >= h) break;
+      if (xx < 0 || yy < 0 || xx >= w || yy >= h) return true;
       const j = yy * w + xx;
+      if ((kindAt(dim, j) & 3) === KIND.VOID) return true;
       if ((kindAt(dim, j) & 3) || liftAt(dim, j) < L) break;
       if (topOn(xx, yy)) return true;
     }
