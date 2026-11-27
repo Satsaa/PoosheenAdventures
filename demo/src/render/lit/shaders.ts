@@ -108,6 +108,8 @@ uniform sampler2D uOcc;          // terrain tile ids of the screen (copied)
 uniform int uOccOn;
 ` + TERRAIN_SHAPE + `
 uniform float uFade;             // detail fade (dithered)
+uniform float uMip;              // 1: average the texels under a screen pixel when zoomed out
+uniform float uK;
 uniform float uDepthOn;
 uniform vec3 uOutline;          // rim strength: creatures, objects, props
 in vec2 vLocal;
@@ -192,6 +194,21 @@ void main() {
   ivec2 st = ivec2(vSrc.xy) + lq;
   if (face && lp.y >= 48) st = ivec2(vSrc.xy) + ivec2(lp.x, 4 + (lp.y - 4) % 44);
   vec4 a = texelFetch(uA, st, 0);
+  if (uMip > 0.5 && uK < 0.75 && !face) {
+    // zoomed out: a screen pixel covers several texels of the sprite. Average the ones that are
+    // part of it (what a mipmap would hold) and keep the pixel if at least a third of them are.
+    int nS = uK < 0.3 ? 4 : uK < 0.45 ? 3 : 2;
+    vec3 sum = vec3(0.0); float cov = 0.0;
+    for (int sy = 0; sy < 4; sy++) for (int sx = 0; sx < 4; sx++) {
+      if (sx >= nS || sy >= nS) continue;
+      ivec2 q = clamp(ivec2(floor(vLocal + (vec2(float(sx), float(sy)) + 0.5) / float(nS) / uK - 0.5 / uK)), ivec2(0), ivec2(vSize) - 1);
+      if (flip) q.x = int(vSize.x) - 1 - q.x;
+      vec4 t = texelFetch(uA, ivec2(vSrc.xy) + q, 0);
+      if (t.a >= 0.5) { sum += t.rgb; cov += 1.0; }
+    }
+    if (cov < float(nS * nS) * 0.34) discard;
+    a = vec4(sum / cov, 1.0);
+  }
   if (a.a < 0.5) discard;
   float fadeA = uFade * (vSrc.z < -1.5 ? vSrc.w : 1.0);   // per-instance fade (hidden / done changes)
   if (fadeA < 1.0) {

@@ -44,6 +44,7 @@ export const GRAPHICS_DEFS: GraphicsDef[] = [
   // detail
   { key: 'detailDistance', label: 'Detail distance', group: DT, type: 'float', min: 2, max: 24, step: 0.5, default: 4, help: 'Zoom level (pixels per tile) below which the low-resolution overview replaces full-detail tiles and sprites.', keywords: 'dither lod overview distance' },
   { key: 'detailFade', label: 'Detail fade', group: DT, type: 'float', min: 0, max: 12, step: 0.5, default: 4, help: 'How many pixels per tile the cross-fade between overview and full detail lasts.', keywords: 'dither lod' },
+  { key: 'mipmaps', label: 'Mipmaps', group: DT, type: 'bool', default: true, help: 'When zoomed out, average the pixels that fall on one screen pixel instead of picking one. Stops terrain, trees and props from shimmering while the view moves; off is crisper but noisier.', keywords: 'mip aliasing shimmer flicker zoom out filter smooth' },
   { key: 'dither', label: 'Dithered fade', group: DT, type: 'bool', default: true, help: 'Cross-fade with an ordered pixel dither (on) or switch hard at the detail distance (off).', keywords: 'dither lod transition' },
   { key: 'outlineCreatures', label: 'Outline: creatures', group: DT, type: 'enum', options: [{ value: 'off', label: 'Off' }, { value: 'subtle', label: 'Subtle' }, { value: 'strong', label: 'Strong' }], default: 'subtle', help: 'A 1 px darker rim (a darker shade of the sprite\'s own edge colour) around enemies, NPCs, bosses and the start marker.', keywords: 'outline edge readability enemies npc' },
   { key: 'outlineObjects', label: 'Outline: objects', group: DT, type: 'enum', options: [{ value: 'off', label: 'Off' }, { value: 'subtle', label: 'Subtle' }, { value: 'strong', label: 'Strong' }], default: 'subtle', help: 'Rim around chests, gates, entrances, sources and stairs.', keywords: 'outline edge readability chest gate' },
@@ -107,7 +108,7 @@ export interface Gfx {
   exposure: number; toneMap: string; ambient: number; sunStrength: number; pointLights: number; maxLights: number;
   bloom: number; bloomThreshold: number; bloomRadius: number;
   shadows: 'baked' | 'flat' | 'off'; shadowStrength: number; shadowSoftness: number; terrainShadows: boolean; contactShadows: number;
-  detailDistance: number; detailFade: number; dither: boolean; renderScale: number; maxPixels: number;
+  detailDistance: number; detailFade: number; dither: boolean; mipmaps: boolean; renderScale: number; maxPixels: number;
   particles: number; water: number; waterFoam: number; animation: boolean;
   wallRoom: number; wallSouth: number; wallSide: number; wallNorth: number; wallLip: number;
   waterGlint: number; waterGlintDensity: number; waterGlintSize: number; waterGlintCrest: number; waterGlintLowSun: number; waterGlintLights: number;

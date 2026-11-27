@@ -150,6 +150,8 @@ export class LitRenderer {
   private colorsUnder!: OverviewColors;
   private pSprite!: Prog;
   private pBlit!: Prog;
+  /** average sprite texels when zoomed out (graphics setting) */
+  private mipSprites = true;
   private pLight!: Prog;
   private pPoint!: Prog;
   private pBright!: Prog;
@@ -465,6 +467,7 @@ export class LitRenderer {
     gl.uniform1i(p.u.uOccOn, occ ? 1 : 0);
     gl.uniform1f(p.u.uDepthOn, occ ? 1 : 0);
     gl.uniform1f(p.u.uFade, fade);
+    gl.uniform1f(p.u.uMip, occ && this.mipSprites ? 1 : 0);
     gl.uniform3f(p.u.uOutline, this.outlineK[0], this.outlineK[1], this.outlineK[2]);
     if (occ) {
       gl.activeTexture(gl.TEXTURE3);
@@ -523,6 +526,8 @@ export class LitRenderer {
     gl.clear(gl.COLOR_BUFFER_BIT);
     this.drawSprites(this.chunkInst, 1, -cx * CPX, -cy * CPX, CPX, CPX, this.atlas, null, 1, { lift: d.liftTex, walls: lay.walls! });
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    // mipmaps of albedo, normal + height and emission, for zoomed-out views (the tile ids are never filtered)
+    for (let i = 0; i < 3; i++) { gl.bindTexture(gl.TEXTURE_2D, tex[i]); gl.generateMipmap(gl.TEXTURE_2D); }
     const c: Chunk = { dim: d.id, cx, cy, tex, fbo, lastUse: performance.now() };
     d.chunks.set(cx + cy * 4096, c);
     push(litStats.chunkMs, performance.now() - t0);
@@ -676,13 +681,19 @@ export class LitRenderer {
     gl.viewport(0, 0, iw, ih);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
+    this.mipSprites = G.mipmaps;
     const pb = this.pBlit;
     gl.useProgram(pb.p);
     gl.uniform1i(pb.u.uA, 0); gl.uniform1i(pb.u.uN, 1); gl.uniform1i(pb.u.uE, 2); gl.uniform1i(pb.u.uT, 3);
     gl.bindVertexArray(this.vaoEmpty);
     const ovK = k * TILE_PX / d.ov.opx;
     if (fade < 1 || missing.length) this.blitLayer(d.ovTex, offX, offY, ovK, d.ov.w, d.ov.h, 1, iw, ih);
-    if (fade > 0) for (const c of visible) this.blitLayer(c.tex, offX + c.cx * CPX * k, offY + c.cy * CPX * k, k, CPX, CPX, fade, iw, ih);
+    if (fade > 0) for (const c of visible) {
+      // mipmapped only while minified and wanted; otherwise exactly the pixels that were composed
+      const min = G.mipmaps && k < 1 ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR;
+      for (let i = 0; i < 3; i++) { gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, c.tex[i]); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, min); }
+      this.blitLayer(c.tex, offX + c.cx * CPX * k, offY + c.cy * CPX * k, k, CPX, CPX, fade, iw, ih);
+    }
     // copy the terrain tile ids: sprites test against them for occlusion by raised ground further south
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.gFbo);
     gl.readBuffer(gl.COLOR_ATTACHMENT3);
