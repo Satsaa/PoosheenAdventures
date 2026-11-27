@@ -110,6 +110,7 @@ uniform int uOccOn;
 uniform float uFade;             // detail fade (dithered)
 uniform float uMip;              // 1: average the texels under a screen pixel when zoomed out
 uniform float uBlock;            // texels of the sprite per drawn sprite pixel (1 = as baked)
+uniform float uS;                // texels per px of the sprites in this draw (terrain pieces: 1)
 uniform float uK;
 uniform float uDepthOn;
 uniform vec3 uOutline;          // rim strength: creatures, objects, props
@@ -185,13 +186,17 @@ void main() {
   }
   bool face = (flags & 1) != 0;
   bool flip = (flags & 128) != 0;
+  // from here on in the sprite's own texels: a sprite baked finer than the tile grid has uS of them per px
+  vec2 tLocal = vLocal * uS;
+  ivec2 tSize = ivec2(vSize * uS + 0.5);
+  lp = clamp(ivec2(floor(tLocal)), ivec2(0), tSize - 1);
   if ((flags & 16) != 0 && !face) {
     // the top of a tile with sloped sides: only where the surface really is at the top
     loadNb(ivec2(int(vInst.y + 0.5), int(vInst.z + 0.5)));
     int d3; float l3, r3;
     if (terrH(vec2(lp) + 0.5, d3, l3, r3) < nbL[12] - 0.3) discard;
   }
-  ivec2 lq = flip ? ivec2(int(vSize.x) - 1 - lp.x, lp.y) : lp;
+  ivec2 lq = flip ? ivec2(tSize.x - 1 - lp.x, lp.y) : lp;
   ivec2 st = ivec2(vSrc.xy) + lq;
   if (face && lp.y >= 48) st = ivec2(vSrc.xy) + ivec2(lp.x, 4 + (lp.y - 4) % 44);
   vec4 a = texelFetch(uA, st, 0);
@@ -202,16 +207,23 @@ void main() {
   // The area averaged is whichever is larger: what one screen pixel covers when zoomed out, or
   // one block of the sprite's own grid when the sprite resolution is set below what it was baked at.
   bool mipd = false; vec4 nM = vec4(0.0); vec4 eM = vec4(0.0);
-  float fMip = uMip > 0.5 ? 1.0 / uK : 1.0;
+  float fMip = uMip > 0.5 ? uS / uK : 1.0;
   float foot = max(fMip, uBlock);
-  if (foot > 1.001 && !face) {
-    vec2 org = uBlock >= fMip ? floor(vLocal / uBlock) * uBlock : vLocal - 0.5 * foot;
+  if (uBlock > 1.001 && uBlock >= fMip && !face) {
+    // sprite resolution below the bake: one texel stands for its whole block (crisp, not blurred)
+    ivec2 q = clamp(ivec2(floor((floor(tLocal / uBlock) + 0.5) * uBlock)), ivec2(0), tSize - 1);
+    lp = q;
+    lq = flip ? ivec2(tSize.x - 1 - q.x, q.y) : q;
+    st = ivec2(vSrc.xy) + lq;
+    a = texelFetch(uA, st, 0);
+  } else if (foot > 1.001 && !face) {
+    vec2 org = tLocal - 0.5 * foot;
     int nS = foot > 3.3 ? 4 : foot > 2.2 ? 3 : 2;
     vec3 sum = vec3(0.0); float cov = 0.0; bool gotMat = false;
     for (int sy = 0; sy < 4; sy++) for (int sx = 0; sx < 4; sx++) {
       if (sx >= nS || sy >= nS) continue;
-      ivec2 q = clamp(ivec2(floor(org + (vec2(float(sx), float(sy)) + 0.5) / float(nS) * foot)), ivec2(0), ivec2(vSize) - 1);
-      if (flip) q.x = int(vSize.x) - 1 - q.x;
+      ivec2 q = clamp(ivec2(floor(org + (vec2(float(sx), float(sy)) + 0.5) / float(nS) * foot)), ivec2(0), tSize - 1);
+      if (flip) q.x = tSize.x - 1 - q.x;
       ivec2 sq = ivec2(vSrc.xy) + q;
       vec4 t = texelFetch(uA, sq, 0);
       if (t.a < 0.5) continue;
@@ -255,7 +267,7 @@ void main() {
       ivec2 o = k == 0 ? ivec2(1, 0) : k == 1 ? ivec2(-1, 0) : k == 2 ? ivec2(0, 1) : ivec2(0, -1);
       ivec2 q = lq + o;
       // only real silhouette edges: a frame border is not an edge (modular building pieces continue there)
-      if (q.x >= 0 && q.y >= 0 && q.x < int(vSize.x) && q.y < int(vSize.y) && texelFetch(uA, ivec2(vSrc.xy) + q, 0).a < 0.5) { rim = true; break; }
+      if (q.x >= 0 && q.y >= 0 && q.x < tSize.x && q.y < tSize.y && texelFetch(uA, ivec2(vSrc.xy) + q, 0).a < 0.5) { rim = true; break; }
     }
     if (rim) alb *= vec3(1.0 - rimK, 1.0 - rimK, 1.0 - rimK * 0.85);
   }
@@ -320,6 +332,7 @@ void main() {
 // with dst in ground px (16 per tile), mapped into the caster map.
 export const CASTER_FS = HDR + `
 uniform sampler2D uTop, uA;
+uniform float uS;   // texels per px of the sprites in this draw
 in vec2 vLocal;
 flat in vec4 vSrc;
 flat in vec4 vInst;
@@ -329,16 +342,17 @@ out vec4 o;
 void main() {
   int flags = int(vInst.w + 0.5);
   bool flip = (flags & 128) != 0;
-  ivec2 lp = clamp(ivec2(floor(vLocal)), ivec2(0), ivec2(vSize) - 1);
-  int lx = flip ? int(vSize.x) - 1 - lp.x : lp.x;
+  ivec2 tSize = ivec2(vSize * uS + 0.5);
+  ivec2 lp = clamp(ivec2(floor(vLocal * uS)), ivec2(0), tSize - 1);
+  int lx = flip ? tSize.x - 1 - lp.x : lp.x;
   float hh;
   if ((flags & 256) != 0) {
     // flat card: the silhouette column above this base pixel, as a vertical card
-    int oy = int(vSrc.z + 0.5), fh = int(vSrc.w + 0.5);
+    int oy = int(vSrc.z * uS + 0.5);
     int r = 0;
-    for (; r < 96; r++) { if (r >= oy || texelFetch(uA, ivec2(vSrc.xy) + ivec2(lx, r), 0).a > 0.5) break; }
+    for (; r < 320; r++) { if (r >= oy || texelFetch(uA, ivec2(vSrc.xy) + ivec2(lx, r), 0).a > 0.5) break; }
     if (r >= oy) discard;
-    hh = float(oy - r) / 16.0;
+    hh = float(oy - r) / (16.0 * uS);
   } else {
     float v = texelFetch(uTop, ivec2(vSrc.xy) + ivec2(lx, lp.y), 0).r * 255.0;
     if (v < 0.5) discard;

@@ -18,6 +18,12 @@
 // So a 1x1 tile footprint covers pixels [ox, ox+16) x [oy, oy+16) and anything taller rises above it.
 
 export const TILE_PX = 16;
+/**
+ * Standing sprites (trees, props, objects, buildings) are baked this many texels per px of the
+ * tile grid: 2 = 32 texels per tile. Everything that places a sprite keeps working in px; a
+ * frame's w, h, ox, oy and ty are in px, and only its x, y point at texels in the sheet.
+ */
+export const SPRITE_SCALE = 2;
 /** pixels per elevation step (0.4 tile), rounded per level when composing */
 export const ELEV_PX = TILE_PX * 0.4;
 export const HEIGHT_SCALE = 40;
@@ -48,6 +54,8 @@ export interface Frame {
   /** pivot: tile north-west ground corner inside the frame */
   ox: number;
   oy: number;
+  /** texels per px this frame was baked at (1 for the terrain's own pieces) */
+  s: number;
   /** top-down height map origin row: ground point (gx, gy) tiles -> (x + ox + gx*16, y + ty + gy*16) in the `top` layer */
   ty: number;
 }
@@ -99,7 +107,7 @@ export function addToSheet(sheet: AssetSheet, key: string, s: Sprite): boolean {
   c.rowH = Math.max(c.rowH, s.h);
   let list = sheet.frames.get(key);
   if (!list) sheet.frames.set(key, (list = []));
-  list.push({ x: px, y: py, w: s.w, h: s.h, ox: s.ox, oy: s.oy, ty: s.ty });
+  list.push({ x: px, y: py, w: s.w / s.scale, h: s.h / s.scale, ox: s.ox / s.scale, oy: s.oy / s.scale, ty: s.ty / s.scale, s: s.scale });
   sheet.dirty!.push({ x: px, y: py, w: s.w, h: s.h });
   sheet.version = (sheet.version || 0) + 1;
   return true;
@@ -113,6 +121,8 @@ export class Sprite {
   readonly top: Uint8Array;
   /** top map ground origin row */
   ty = 0;
+  /** texels per px (all of w, h, ox, oy, ty are in texels and multiples of this) */
+  scale = 1;
   constructor(readonly w: number, readonly h: number, readonly ox: number, readonly oy: number) {
     this.top = new Uint8Array(w * h);
     this.alb = new Uint8ClampedArray(w * h * 4);
@@ -138,12 +148,15 @@ export class Sprite {
   outline(k = 0.55) {
     const { w, h, alb } = this;
     const edge: number[] = [];
+    const reach = this.scale; // the outline stays 1 px of the tile grid wide, however fine the bake
     for (let y = 0; y < h; y++)
       for (let x = 0; x < w; x++) {
         const i = (y * w + x) * 4;
         if (!alb[i + 3]) continue;
         const e = (xx: number, yy: number) => xx < 0 || yy < 0 || xx >= w || yy >= h || !alb[(yy * w + xx) * 4 + 3];
-        if (e(x - 1, y) || e(x + 1, y) || e(x, y - 1) || e(x, y + 1)) edge.push(i);
+        let on = false;
+        for (let d = 1; d <= reach && !on; d++) on = e(x - d, y) || e(x + d, y) || e(x, y - d) || e(x, y + d);
+        if (on) edge.push(i);
       }
     for (const i of edge) { alb[i] *= k; alb[i + 1] *= k; alb[i + 2] *= k * 1.05; }
     return this;
@@ -180,7 +193,7 @@ export function packSheet(sprites: Map<string, Sprite[]>, width = 1024, minH = 1
     }
     let list = frames.get(it.key);
     if (!list) frames.set(it.key, (list = []));
-    list[it.idx] = { x: px, y: py, w: s.w, h: s.h, ox: s.ox, oy: s.oy, ty: s.ty };
+    list[it.idx] = { x: px, y: py, w: s.w / s.scale, h: s.h / s.scale, ox: s.ox / s.scale, oy: s.oy / s.scale, ty: s.ty / s.scale, s: s.scale };
   });
   return { w: width, h, albedo, normal, emissive, top, frames, anims: new Map(), cursor: { x: 0, y: y + rowH + 1, rowH: 0 }, dirty: [], version: 0 };
 }

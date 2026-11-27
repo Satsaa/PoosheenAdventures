@@ -16,7 +16,7 @@ import { bakeAtlas, bakeStep, lastBakeMs } from '../bake/index';
 import { groundMat } from '../bake/ground';
 import { CRYSTAL_LIGHT } from '../bake/models';
 import type { AssetSheet } from '../bake/sheet';
-import { TILE_PX } from '../bake/sheet';
+import { SPRITE_SCALE, TILE_PX } from '../bake/sheet';
 import type { Particles } from '../particles';
 import { npcColor } from '../objects';
 import { type Overview, type OverviewColors, type RGB, buildOverview, overviewPx } from '../overview';
@@ -152,8 +152,8 @@ export class LitRenderer {
   private pBlit!: Prog;
   /** average sprite texels when zoomed out (graphics setting) */
   private mipSprites = true;
-  /** texels of a sprite per drawn sprite pixel (16 / the sprite resolution setting) */
-  private spriteBlock = 1;
+  /** px per tile that sprites are drawn with (the sprite resolution setting) */
+  private spriteRes = 16;
   private pLight!: Prog;
   private pPoint!: Prog;
   private pBright!: Prog;
@@ -312,8 +312,9 @@ export class LitRenderer {
       let r = 0, g = 0, b = 0, n = 0;
       if (f) {
         const src = layer === 'alb' ? s.albedo : s.emissive;
-        for (let y = rows ? rows[0] : 0; y < (rows ? Math.min(f.h, rows[1]) : f.h); y++)
-          for (let x = 0; x < f.w; x++) {
+        // (a frame's size is in px; its texels are f.s times as many)
+        for (let y = (rows ? rows[0] : 0) * f.s; y < (rows ? Math.min(f.h, rows[1]) : f.h) * f.s; y++)
+          for (let x = 0; x < f.w * f.s; x++) {
             const o = ((f.y + y) * s.w + f.x + x) * 4;
             if (!s.albedo[o + 3]) continue;
             r += src[o]; g += src[o + 1]; b += src[o + 2]; n++;
@@ -455,7 +456,7 @@ export class LitRenderer {
   }
 
   private drawSprites(inst: InstBuf, k: number, ox: number, oy: number, tw: number, th: number,
-    tex: WebGLTexture[] = this.atlas, occ: { lift: WebGLTexture } | null = null, fade = 1, shape: { lift: WebGLTexture; walls: WallPatterns } | null = null) {
+    tex: WebGLTexture[] = this.atlas, occ: { lift: WebGLTexture } | null = null, fade = 1, shape: { lift: WebGLTexture; walls: WallPatterns } | null = null, texelsPerPx = 1) {
     if (!inst.n) return;
     const gl = this.gl, p = this.pSprite;
     gl.useProgram(p.p);
@@ -470,7 +471,9 @@ export class LitRenderer {
     gl.uniform1f(p.u.uDepthOn, occ ? 1 : 0);
     gl.uniform1f(p.u.uFade, fade);
     gl.uniform1f(p.u.uMip, occ && this.mipSprites ? 1 : 0);
-    gl.uniform1f(p.u.uBlock, occ ? this.spriteBlock : 1);
+    gl.uniform1f(p.u.uS, texelsPerPx);
+    // the resolution slider is in px per tile; a block is how many of the sprite's texels one of those px takes
+    gl.uniform1f(p.u.uBlock, occ ? Math.max(1, (16 * texelsPerPx) / this.spriteRes) : 1);
     gl.uniform3f(p.u.uOutline, this.outlineK[0], this.outlineK[1], this.outlineK[2]);
     if (occ) {
       gl.activeTexture(gl.TEXTURE3);
@@ -685,7 +688,7 @@ export class LitRenderer {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     this.mipSprites = G.mipmaps;
-    this.spriteBlock = 16 / Math.max(4, Math.min(16, G.spriteResolution || 16));
+    this.spriteRes = Math.max(4, G.spriteResolution || 16);
     const pb = this.pBlit;
     gl.useProgram(pb.p);
     gl.uniform1i(pb.u.uA, 0); gl.uniform1i(pb.u.uN, 1); gl.uniform1i(pb.u.uE, 2); gl.uniform1i(pb.u.uT, 3);
@@ -782,7 +785,7 @@ export class LitRenderer {
       gl.depthFunc(gl.LESS);
       gl.depthMask(true);
       gl.clear(gl.DEPTH_BUFFER_BIT);
-      this.drawSprites(pi, k, offX, offY, iw, ih, this.atlas, { lift: d.liftTex }, fade);
+      this.drawSprites(pi, k, offX, offY, iw, ih, this.atlas, { lift: d.liftTex }, fade, null, SPRITE_SCALE);
       this.drawSprites(ai, k, offX, offY, iw, ih, this.charTex, { lift: d.liftTex }, fade);
       gl.disable(gl.DEPTH_TEST);
     }
@@ -808,7 +811,7 @@ export class LitRenderer {
         gl.enable(gl.BLEND);
         gl.blendEquation(gl.MAX);
         gl.blendFunc(gl.ONE, gl.ONE);
-        const drawCast = (buf: InstBuf, top: WebGLTexture, alb: WebGLTexture) => {
+        const drawCast = (buf: InstBuf, top: WebGLTexture, alb: WebGLTexture, texelsPerPx: number) => {
           if (!buf.n) return;
           const pc = this.pCaster;
           gl.useProgram(pc.p);
@@ -820,6 +823,7 @@ export class LitRenderer {
           gl.uniform1i(pc.u.uA, 1);
           gl.uniform2f(pc.u.uOff, -cr.x0 * castR, -cr.y0 * castR);
           gl.uniform1f(pc.u.uK, castR / TILE_PX);
+          gl.uniform1f(pc.u.uS, texelsPerPx);
           gl.uniform2f(pc.u.uTarget, cw, ch);
           gl.bindVertexArray(this.vaoSprite);
           gl.bindBuffer(gl.ARRAY_BUFFER, this.instBuf);
@@ -827,8 +831,8 @@ export class LitRenderer {
           gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, buf.n);
           gl.bindVertexArray(null);
         };
-        drawCast(ci, this.topTex!, this.atlas[0]);
-        drawCast(aci, this.charTex[3], this.charTex[0]);
+        drawCast(ci, this.topTex!, this.atlas[0], SPRITE_SCALE);
+        drawCast(aci, this.charTex[3], this.charTex[0], 1);
         gl.blendEquation(gl.FUNC_ADD);
         gl.disable(gl.BLEND);
       }

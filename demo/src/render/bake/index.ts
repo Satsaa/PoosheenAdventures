@@ -32,11 +32,16 @@ import { D, T } from '../../core/types';
 import { EDGE_GROUNDS, basePiece, cornerMask, edgeMask, facePiece, faceStrip, groundTile, innerMask, rimPiece, topMask, type Shape } from './ground';
 import { DECO_VARIANTS, WALL_KINDS, decoModel, housePiece, objectModels } from './models';
 import { renderModel } from './sdf';
-import { type AssetSheet, Sprite, addToSheet, packSheet } from './sheet';
+import { type AssetSheet, SPRITE_SCALE, Sprite, addToSheet, packSheet } from './sheet';
+
+/** flat props that are composed into the terrain (the same set render/props.ts draws as decals) */
+const DECAL = new Set<number>([D.TUFT, D.FLOWER]);
 
 export { type AssetSheet, type Frame, MAT, TILE_PX, ELEV_PX, HEIGHT_OFF, HEIGHT_SCALE } from './sheet';
 export { CRYSTAL_LIGHT } from './models';
 
+/** model sprites that are composed into the terrain chunks, at the terrain's resolution */
+const STATIC_KEYS = /^(torch|rail:)/;
 let cached: AssetSheet | null = null;
 export let lastBakeMs = 0;
 /** total time spent in progressive bake steps */
@@ -87,20 +92,21 @@ export function bakeAtlas(): AssetSheet {
     const d = Number(ds);
     for (let v = 0; v < n; v++) {
       const m = decoModel(d, v);
-      if (m) put('d:' + d, renderModel(m, v + d * 7));
+      // flat decals are composed into the terrain at its own resolution; everything standing is baked finer
+      if (m) put('d:' + d, renderModel(m, v + d * 7, DECAL.has(d) ? 1 : SPRITE_SCALE));
     }
   }
-  for (let v = 0; v < 2; v++) put('d:' + D.PINE + ':snow', renderModel(decoModel(D.PINE, v, { snow: true })!, v + 3));
-  for (let v = 0; v < 3; v++) put('d:' + D.MUSHROOM + ':glow', renderModel(decoModel(D.MUSHROOM, v, { glow: true })!, v + 5));
+  for (let v = 0; v < 2; v++) put('d:' + D.PINE + ':snow', renderModel(decoModel(D.PINE, v, { snow: true })!, v + 3, SPRITE_SCALE));
+  for (let v = 0; v < 3; v++) put('d:' + D.MUSHROOM + ':glow', renderModel(decoModel(D.MUSHROOM, v, { glow: true })!, v + 5, SPRITE_SCALE));
   // 1 px checkerboard test sprite (d:255): verifies that every source pixel is drawn the same size
   const chk = new Sprite(16, 16, 0, 0);
   for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) chk.set(x, y, (x + y) & 1 ? [250, 250, 250] : [10, 10, 10], 0, 0, 1, 0, null, 0);
   put('d:255', chk);
-  cached = packSheet(sprites, 1024, 1024);
+  cached = packSheet(sprites, 2048, 2048);
   // objects and building pieces are baked progressively after the first frame (bakeStep)
-  for (const o of objectModels()) deferred.push([o.key, () => renderModel(o.model, o.key.length)]);
+  for (const o of objectModels()) deferred.push([o.key, () => renderModel(o.model, o.key.length, STATIC_KEYS.test(o.key) ? 1 : SPRITE_SCALE)]);
   for (const wall of WALL_KINDS) for (let floors = 1; floors <= 2; floors++) for (let mask = 0; mask < 16; mask++)
-    deferred.push([`hp:${wall}:${floors}:${mask}`, () => renderModel(housePiece(mask, floors, wall), mask + floors * 16)]);
+    deferred.push([`hp:${wall}:${floors}:${mask}`, () => renderModel(housePiece(mask, floors, wall), mask + floors * 16, SPRITE_SCALE)]);
   lastBakeMs = performance.now() - t0;
   return cached;
 }

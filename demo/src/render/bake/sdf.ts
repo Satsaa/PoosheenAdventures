@@ -128,22 +128,26 @@ export function rgb(hex: string) {
 const SQ = Math.SQRT1_2;
 
 /** Render a model into a sprite. Sprite pivot = tile NW ground corner. */
-export function renderModel(m: Model, seed = 1): Sprite {
+export function renderModel(m: Model, seed = 1, scale = 1): Sprite {
   const fw = m.fw ?? 1, fh = m.fh ?? 1, pad = m.padX ?? 0.25;
   const zMin = m.zMin ?? 0;
-  const ox = Math.round(pad * TILE_PX);
-  const oy = Math.ceil(m.zMax * TILE_PX) + 1;
-  const w = Math.round((fw + 2 * pad) * TILE_PX);
-  const ty = Math.round(pad * TILE_PX);
-  const topRows = Math.round((fh + 2 * pad) * TILE_PX);
-  const h = Math.max(oy + Math.ceil((fh - zMin) * TILE_PX) + 1, topRows);
+  // sizes are worked out on the tile grid's px and then multiplied, so a finer bake has exactly
+  // the same footprint and pivot; PX is how many texels a tile gets
+  const PX = TILE_PX * scale;
+  const ox = Math.round(pad * TILE_PX) * scale;
+  const oy = (Math.ceil(m.zMax * TILE_PX) + 1) * scale;
+  const w = Math.round((fw + 2 * pad) * TILE_PX) * scale;
+  const ty = Math.round(pad * TILE_PX) * scale;
+  const topRows = Math.round((fh + 2 * pad) * TILE_PX) * scale;
+  const h = Math.max(oy + (Math.ceil((fh - zMin) * TILE_PX) + 1) * scale, topRows);
   const s = new Sprite(w, h, ox, oy);
   s.ty = ty;
+  s.scale = scale;
   // top-down height map (for world-space shadows): straight down from above
   if (m.zMax > 0.08) {
     for (let j = 0; j < topRows; j++)
       for (let i = 0; i < w; i++) {
-        const gx = (i + 0.5 - ox) / TILE_PX, gy = (j + 0.5 - ty) / TILE_PX;
+        const gx = (i + 0.5 - ox) / PX, gy = (j + 0.5 - ty) / PX;
         let z = m.zMax + 0.02;
         for (let k = 0; k < 48; k++) {
           const d = m.sdf(gx, gy, z);
@@ -156,7 +160,7 @@ export function renderModel(m: Model, seed = 1): Sprite {
   const grain = m.grain ?? 0.6;
   // one ray through screen point (px, py) in sprite pixels
   const ray = (px: number, py: number): { y: number; z: number } | null => {
-    const sx = (px - ox) / TILE_PX, sy = (py - oy) / TILE_PX;
+    const sx = (px - ox) / PX, sy = (py - oy) / PX;
     let z = m.zMax + 0.05, y = sy + z;
     for (let k = 0; k < 90; k++) {
       const d = m.sdf(sx, y, z);
@@ -195,7 +199,7 @@ export function renderModel(m: Model, seed = 1): Sprite {
       const k = j * w + i;
       cov[k] = 1;
       hitY[k] = r.y; hitZ[k] = r.z;
-      matI[k] = m.mat((i + 0.5 - ox) / TILE_PX, r.y, r.z);
+      matI[k] = m.mat((i + 0.5 - ox) / PX, r.y, r.z);
     }
   // pass 2: pixels on a silhouette or material edge are re-sampled 3x3 and kept only when a majority
   // of the 9 samples is covered; they take the dominant material and the normal at the samples' centroid
@@ -210,7 +214,7 @@ export function renderModel(m: Model, seed = 1): Sprite {
         const c2 = ii < 0 || jj < 0 || ii >= w || jj >= h ? 0 : cov[kk];
         if (c2 !== cov[k] || (c2 && matI[kk] !== matI[k])) { edge = true; break; }
       }
-      const sx = (i + 0.5 - ox) / TILE_PX;
+      const sx = (i + 0.5 - ox) / PX;
       if (!edge) {
         if (!cov[k]) continue;
         const [nx, ny, nz] = normal(sx, hitY[k], hitZ[k]);
@@ -224,7 +228,7 @@ export function renderModel(m: Model, seed = 1): Sprite {
           const px = i + (a + 0.5) / SS, py = j + (b + 0.5) / SS;
           const r = ray(px, py);
           if (!r) continue;
-          const ssx = (px - ox) / TILE_PX;
+          const ssx = (px - ox) / PX;
           const mi = m.mat(ssx, r.y, r.z);
           votes.set(mi, (votes.get(mi) || 0) + 1);
           ax += ssx; zs += r.z; ys += r.y;

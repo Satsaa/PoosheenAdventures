@@ -79,7 +79,7 @@ export class CharAtlas {
     const k = this.key(j.kind, j.clip, j.dir);
     let list = this.clips.get(k);
     if (!list) this.clips.set(k, (list = []));
-    list[j.f] = { x: x0, y: y0, w, h, ox: s.ox, oy: s.oy, ty: s.ty };
+    list[j.f] = { x: x0, y: y0, w, h, ox: s.ox, oy: s.oy, ty: s.ty, s: 1 };
     this.dirty.push({ x: x0, y: y0, w: SW, h: SH });
   }
 }
