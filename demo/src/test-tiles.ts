@@ -19,16 +19,31 @@ const fail = (msg: string) => { failed++; console.log('FAILED:', msg); };
 // given a wall without closing the walkway. The generator still makes a few per world; the
 // checker reports each of them, and this test holds the number down until the generator stops.
 const WALKWAY = /a wall under its edge|deep behind its wall face/;
-let warned = 0, walkways = 0;
+let warned = 0, walkways = 0, docks = 0, badDocks = 0;
 for (let i = 0; i < N; i++) {
   const w = generateWorld('tiles' + i);
   const all = w.dims.flatMap((d) => checkTiles(d));
   walkways += all.filter((x) => WALKWAY.test(x.lacks)).length;
+  // a jetty stands on the water's level or one above it, never on a cliff
+  for (const d of w.dims) for (const o of d.objects.filter((q) => q.style === 'dock')) {
+    let sea = -1;
+    for (let r = 1; r <= 4 && sea < 0; r++) for (let dy = -r; dy <= r && sea < 0; dy++) for (let dx = -r; dx <= r; dx++) {
+      const x = o.x + dx, y = o.y + dy;
+      if (x < 0 || y < 0 || x >= d.w || y >= d.h) continue;
+      const j = y * d.w + x;
+      if (d.ground[j] === T.DEEP || d.ground[j] === T.WATER) { sea = d.elev[j]; break; }
+    }
+    const depth = sea < 0 ? 99 : d.elev[o.y * d.w + o.x] - sea;
+    docks++;
+    if (depth < 0 || depth > 1) badDocks++;
+  }
   const issues = all.filter((x) => !WALKWAY.test(x.lacks));
   if (issues.length && warned++ < 3) console.log('  tiles' + i, summariseIssues(issues).join('; '));
 }
 console.log(`generated worlds with warnings: ${warned}/${N}`);
 console.log(`walkways along a drop that could not be given a wall: ${(walkways / N).toFixed(1)} per world`);
+console.log(`docks: ${docks}, of which more than one level above their water (or below it): ${badDocks}`);
+if (badDocks) fail('a dock stands on a cliff');
 if (warned) fail('the generator leaves tiles without what they need');
 if (walkways / N > 6) fail('too many edges without a wall');
 
