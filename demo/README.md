@@ -139,8 +139,18 @@ does.
 - Pattern 2, outdoors (overworld, sky, castle walls): the face that looks south is tall, the
   other three are narrow.
 - Pattern 3, lip: the south face as in the dimension's own pattern, the others a thin bevel.
-  `Dimension.lip` marks tiles that use it (raised ground too thin for a full north face);
-  steps down to water use it too.
+  Steps down to water use it; `Dimension.lip` lets a tile ask for it.
+
+Two guarantees keep a tile from losing its top however faces crowd it. They are part of the
+shape model, so they cannot change which tiles can be walked on, the zones or the logic graph:
+
+- Ground that can be walked on is level. Its sides are upright; no face ever runs across it.
+  (A bank, a bridge, a pier and a path stay full tiles.)
+- Faces are fitted to the room they have. Where raised ground ends in a face on both sides (a
+  lone hill, a ridge, a thin wall), the two runs shrink together until `MIN_TOP` px of top is
+  left. If that still leaves no top anywhere (a ridge that runs diagonally), the tile shrinks
+  its own faces until it has one; at zero it is a plain block, so this always ends. The fit is
+  worked out once per tile on the CPU and handed to the shader in the lift texture.
 
 Nothing is flat: the slope is real geometry in the G-buffer (height and normal per pixel), and
 the height map that sun and lamp shadows are cast over is built from the same function, so
@@ -161,16 +171,18 @@ under the thing's footprint is at the top of its tile, which is exactly what get
 - `checkTiles` walks every tile of every map and reports each unmet need, wording the report
   from the table: "Pine needs level ground: it stands on the face of a height step". A new tile
   or a new need is checked without writing a new warning. It also checks the rules that hold
-  for all tiles: a raised tile has its map's wall pattern and the depth for its north face (or
-  the lip), and a height step between two walkable tiles has stairs.
+  for all tiles: a raised tile has its map's wall pattern and reaches its height somewhere, and
+  a height step between two walkable tiles has stairs.
 - The result is the "tile table" line in the Checks tab. It is a warning, not a failure: the
   world is still valid and is not generated again.
 - `gen/settle.ts` is the generator's tidy-up. It asks the same questions and applies the fix
   the table names: the prop goes, or becomes the low one the table gives (a tree at the foot of
-  a cliff becomes a rock), and raised ground without depth takes the lip pattern. Placement of
-  chests, creatures and the like asks the table too (`canHold`).
-- `test-tiles.ts` plants one violation of each kind and expects it to be named, and expects
-  generated worlds to raise none.
+  a cliff becomes a rock). Placement of chests, creatures and the like asks the table too
+  (`canHold`).
+- `test-tiles.ts` plants one violation of each kind and expects it to be named, expects
+  generated worlds to raise none, and runs sketched shapes (a lone hill, ridges in every
+  direction, a peak, thin and thick walls, a causeway, a bank) through the model to confirm
+  each keeps a top and its walkable ground level.
 
 ## Settings
 

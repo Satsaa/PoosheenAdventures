@@ -1,9 +1,10 @@
 // The generator's tidy-up, driven by the tile table (core/tileset.ts): wherever a prop's need is
-// not met it becomes what the table names (or goes), and raised ground without the depth for
-// its north face takes the lip pattern. It asks exactly the questions the checker asks, so
-// what is settled here cannot be reported there, and nothing here knows about trees or cliffs.
+// not met it becomes what the table names, or goes. It asks exactly the questions the checker
+// asks, so what is settled here cannot be reported there, and nothing here knows about trees or
+// cliffs. (That raised ground always keeps a top is not settled here: the terrain model itself
+// fits faces to the room they have, see core/shape.ts.)
 import { D, type Dimension } from '../core/types';
-import { NEEDS, PROPS, lacksDepth, tileCtx } from '../core/tileset';
+import { NEEDS, PROPS, tileCtx } from '../core/tileset';
 
 export function settleTiles(dim: Dimension): void {
   const c = tileCtx(dim);
@@ -17,6 +18,5 @@ export function settleTiles(dim: Dimension): void {
       if (!unmet) break;
       dim.deco[i] = spec.instead?.[unmet] ?? D.NONE;
     }
-    if (c.edge(i) && lacksDepth(c, i)) (dim.lip ??= new Uint8Array(n))[i] = 1;
   }
 }

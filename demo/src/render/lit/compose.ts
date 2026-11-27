@@ -7,7 +7,7 @@ import type { AssetSheet, Frame } from '../bake/sheet';
 import { TILE_PX } from '../bake/sheet';
 import { pal } from '../palette';
 import { hash2 } from '../util';
-import { KIND, isWallG, surfacePx, tileKinds, wallPatterns, type WallPatterns } from '../terrain';
+import { KIND, isWallG, surfacePx, tileFits, tileKinds, wallPatterns, type WallPatterns } from '../terrain';
 import { DECAL } from '../props';
 import { FACE_OFF, shapeOf } from '../bake/ground';
 
@@ -61,6 +61,8 @@ export interface Layout {
   /** what each tile is for the height model (KIND.*), set by the renderer */
   kind?: Uint8Array;
   walls?: WallPatterns;
+  /** per tile, how much its faces are scaled sideways and up-down so a top is always left (2 bytes) */
+  fits?: Uint8Array;
   /** lift in px of whatever stands in the middle of each tile (lower than liftPx on a slope) */
   standPx?: Int16Array;
 }
@@ -72,9 +74,10 @@ export const standOf = (lay: Layout, i: number): number => (lay.standPx ? lay.st
 export function shapeLayout(dim: Dimension, lay: Layout, kind: Uint8Array, walls: WallPatterns): void {
   lay.kind = kind;
   lay.walls = walls;
+  const fits = (lay.fits = tileFits(dim, lay.liftPx, kind, walls));
   const n = dim.w * dim.h;
   const stand = new Int16Array(n);
-  for (let i = 0; i < n; i++) stand[i] = kind[i] & KIND.SLOPED ? Math.round(surfacePx(dim, lay.liftPx, kind, walls, i % dim.w, (i / dim.w) | 0, 8, 8)) : lay.liftPx[i];
+  for (let i = 0; i < n; i++) stand[i] = kind[i] & KIND.SLOPED ? Math.round(surfacePx(dim, lay.liftPx, kind, fits, walls, i % dim.w, (i / dim.w) | 0, 8, 8)) : lay.liftPx[i];
   lay.standPx = stand;
 }
 

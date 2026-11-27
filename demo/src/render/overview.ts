@@ -54,7 +54,7 @@ export function buildOverview(
   dim: Dimension, lift: Float32Array, voidLift: number, topT: number, extraT: number, opx: number,
   col: OverviewColors, lit: boolean,
   /** the sloped sides of raised ground, as the full-detail terrain draws them */
-  shape?: { liftPx: ArrayLike<number>; kind: Uint8Array; walls: WallPatterns },
+  shape?: { liftPx: ArrayLike<number>; kind: Uint8Array; fits: Uint8Array; walls: WallPatterns },
 ): Overview {
   const t0 = performance.now();
   const { w, h, ground, deco } = dim;
@@ -103,7 +103,7 @@ export function buildOverview(
         for (let sy = 0; sy < rows; sy++)
           for (let px = 0; px < opx; px++) {
             const fx = ((px + 0.5) / opx) * 16, fy = ((sy + 0.5) / rows) * 16;
-            const H = surfacePx(dim, shape!.liftPx, shape!.kind, shape!.walls, x, y, fx, fy);
+            const H = surfacePx(dim, shape!.liftPx, shape!.kind, shape!.fits, shape!.walls, x, y, fx, fy);
             const top = H >= Lpx - 0.3;
             const row = Math.floor((topT + y + fy / 16 - H / 16) * opx);
             let c = top ? base : fc;

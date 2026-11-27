@@ -3,7 +3,7 @@
 // generator has a fix for it, the tidy-up must make the report go away again.
 import { generateWorld } from './gen/index';
 import { checkTiles, summariseIssues, tileCtx } from './core/tileset';
-import { facedAt, liftAt } from './core/shape';
+import { facedAt, levelAt, liftAt, reachesTop } from './core/shape';
 import { settleTiles } from './gen/settle';
 import { D, T, type Dimension } from './core/types';
 
@@ -38,7 +38,7 @@ const expect = (name: string, d: Dimension, wants: RegExp, fixable: boolean) => 
 };
 {
   const d = over(fresh()), c = tileCtx(d);
-  const i = find(d, (k) => d.solid[k] === 1 && !d.deco[k] && c.edge(k) && d.ground[k] !== T.WALL);
+  const i = find(d, (k) => d.solid[k] === 1 && !d.deco[k] && !c.level(k) && d.ground[k] !== T.WALL);
   d.deco[i] = D.PINE;
   expect('a pine on a cliff edge', d, /^Pine needs level ground/, true);
 }
@@ -73,17 +73,51 @@ const expect = (name: string, d: Dimension, wants: RegExp, fixable: boolean) => 
 {
   const d = over(fresh()), c = tileCtx(d);
   const chest = d.objects.find((o) => o.kind === 'chest')!;
-  const i = find(d, (k) => c.edge(k) && d.ground[k] !== T.WALL);
+  const i = find(d, (k) => !c.level(k) && d.ground[k] !== T.WALL);
   chest.x = i % d.w; chest.y = (i / d.w) | 0;
   expect('a chest on a cliff edge', d, /^Chest .*needs level ground/, false);
 }
-{
-  const d = inside(fresh());
-  // a one-tile wall across a room: floor to its north, floor to its south
-  const i = find(d, (k) => !d.solid[k] && !d.solid[k - d.w] && !d.solid[k + d.w] && d.elev[k] === d.elev[k - d.w] && d.elev[k] === d.elev[k + d.w] && !d.objects.some((o) => o.y * d.w + o.x === k));
-  d.ground[i] = T.WALL; d.solid[i] = 1; d.elev[i]++;
-  expect('a wall too thin for its north face', d, /tiles of depth behind its north face/, true);
-  if (!d.lip?.[i]) fail('a wall without depth should take the lip pattern');
+
+// 3. the terrain model: however faces crowd a tile, raised ground keeps a top and walkable ground stays level
+const sketch = (rows: string[], kind: Dimension['kind'] = 'overworld'): Dimension => {
+  // '.' low ground, '#' raised and solid, 'H' raised two levels and solid, '=' raised and walkable, '~' water (lower), ' ' nothing
+  const h = rows.length, w = rows[0].length, n = w * h;
+  const d: Dimension = {
+    id: 't', name: 'sketch', kind, w, h, sw: 12, sh: 10, ground: new Uint8Array(n), deco: new Uint8Array(n), elev: new Int8Array(n),
+    solid: new Uint8Array(n), region: new Int16Array(n).fill(-1), zone: new Int32Array(n).fill(-1), zoneLoc: [], regions: [], objects: [],
+  };
+  rows.forEach((row, y) => [...row].forEach((ch, x) => {
+    const i = y * w + x;
+    d.ground[i] = ch === ' ' ? T.VOID : ch === '~' ? T.WATER : T.STONE;
+    d.elev[i] = ch === '#' || ch === '=' ? 2 : ch === 'H' ? 3 : ch === '~' ? 0 : 1;
+    d.solid[i] = ch === '.' || ch === '=' ? 0 : 1;
+  }));
+  return d;
+};
+const shapes: [string, string[]][] = [
+  ['a lone hill', ['.....', '.....', '..#..', '.....', '.....']],
+  ['a ridge running east', ['......', '......', '.####.', '......', '......']],
+  ['a ridge running south', ['.....', '..#..', '..#..', '..#..', '..#..', '.....']],
+  ['a ridge running diagonally', ['.......', '.#.....', '.##....', '..##...', '...##..', '....#..', '.......']],
+  ['a peak on a hill', ['.......', '.#####.', '.##H##.', '.#####.', '.......']],
+  ['a wall two tiles thick', ['......', '......', '######', '######', '......', '......']],
+  ['a wall with nothing behind it', ['......', '......', '######', '      ', '      ']],
+  ['a causeway between two waters', ['~~~~~~', '~~~~~~', '======', '~~~~~~', '~~~~~~']],
+  ['a bank above water', ['======', '======', '~~~~~~', '~~~~~~']],
+];
+for (const mode of ['overworld', 'interior'] as const) {
+  for (const [name, rows] of shapes) {
+    const d = sketch(rows, mode);
+    let noTop = 0, tilted = 0;
+    for (let i = 0; i < d.w * d.h; i++) {
+      if (d.ground[i] === T.VOID || d.ground[i] === T.WATER) continue;
+      if (!reachesTop(d, i)) noTop++;
+      if (!d.solid[i] && !levelAt(d, i)) tilted++;
+    }
+    if (noTop) fail(`${name} (${mode}): ${noTop} raised tile(s) never reach their height`);
+    if (tilted) fail(`${name} (${mode}): ${tilted} walkable tile(s) are not level`);
+  }
 }
+console.log(`  shapes: ${shapes.length} sketches x 2 kinds of map keep their tops and their walkable ground level`);
 console.log(failed ? `TILES ${failed} failed` : 'TILES ok');
 if (failed) process.exitCode = 1;

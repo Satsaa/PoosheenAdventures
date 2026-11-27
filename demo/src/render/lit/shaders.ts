@@ -20,7 +20,8 @@ void main() {
 // slope that rises away from the viewer shows a long face, one that rises toward the viewer a short
 // one, and with the right runs every side of a room shows its wall. The same function shapes the
 // drawn terrain and the height map that shadows are cast over, so light and picture agree.
-//   uLift: R = lift of the tile in px, G = kind (0 ground, 1 void, 2 liquid; +4 lip; +8 has slopes)
+//   uLift: R = lift of the tile in px, G = kind (0 ground, 1 void, 2 liquid; +4 lip; +8 has slopes; +16 walkable),
+//          B, A = how much the tile's faces are scaled sideways / up-down so a top is always left
 //   uWallP / uWallL: the pattern and its "lip" variant: (sBase, sK, eN, eEW) in px, where the run
 //   toward lower ground to the south is max(0, sBase - sK * dL), to the north eN + dL, sideways eEW.
 const TERRAIN_SHAPE = `
@@ -28,8 +29,10 @@ uniform sampler2D uLift;
 uniform vec4 uWallP, uWallL;
 float nbL[25];
 float nbK[25];
+vec2 nbFit;
 void loadNb(ivec2 t) {
   ivec2 sz = textureSize(uLift, 0);
+  nbFit = texelFetch(uLift, clamp(t, ivec2(0), sz - 1), 0).ba;
   for (int j = 0; j < 5; j++) for (int i = 0; i < 5; i++) {
     ivec2 q = t + ivec2(i - 2, j - 2);
     float L = 0.0, K = 1.0;
@@ -37,13 +40,20 @@ void loadNb(ivec2 t) {
     nbL[j * 5 + i] = L; nbK[j * 5 + i] = K;
   }
 }
+float runOf(bool sideways, bool south, float kq, float dL, bool lip) {
+  vec4 W = (lip || kq > 1.5) ? uWallL : uWallP;
+  return sideways ? W.w : min(32.0, south ? max(0.0, W.x - W.y * dL) : W.z + dL);
+}
 // Surface lift (px) at point p (px, relative to the centre tile's corner) of the loaded tile.
 // dir: 0 top, 1 faces south, 2 faces north, 3 faces west, 4 faces east; lowL: the ground it rises from.
+// (the twin of rawSurface() in core/shape.ts. How much a tile's faces are scaled so that a top
+// is always left is worked out there, once per tile, and arrives in the lift texture.)
 float terrH(vec2 p, out int dir, out float lowL, out float run) {
   float L = nbL[12], K = nbK[12];
   dir = 0; lowL = L; run = 0.0;
-  if (mod(K, 4.0) > 0.5) return L;
+  if (mod(K, 4.0) > 0.5 || K >= 15.5) return L;
   bool lip = mod(K, 8.0) >= 3.5;
+  float sx = nbFit.x, sy = nbFit.y;
   float h = L;
   for (int j = 0; j < 5; j++) for (int i = 0; i < 5; i++) {
     int n = j * 5 + i;
@@ -53,12 +63,11 @@ float terrH(vec2 p, out int dir, out float lowL, out float run) {
     float Lq = nbL[n];
     if (Lq >= L) continue;
     float dL = L - Lq;
-    vec4 W = (lip || kq > 1.5) ? uWallL : uWallP;
     float ox = float(i - 2) * 16.0, oy = float(j - 2) * 16.0;
     float gx = max(max(ox - p.x, p.x - (ox + 16.0)), 0.0);
     float gy = max(max(oy - p.y, p.y - (oy + 16.0)), 0.0);
-    float rx = W.w;
-    float ry = min(32.0, j > 2 ? max(0.0, W.x - W.y * dL) : W.z + dL);
+    float rx = runOf(true, false, kq, dL, lip) * sx;
+    float ry = runOf(false, j > 2, kq, dL, lip) * sy;
     float dx = gx <= 0.0 ? 0.0 : (rx < 0.25 ? 9.0 : gx / rx);
     float dy = gy <= 0.0 ? 0.0 : (ry < 0.25 ? 9.0 : gy / ry);
     float hq = Lq + dL * min(max(dx, dy), 1.0);
@@ -318,7 +327,7 @@ void main() {
     vec4 c = texelFetch(uLift, t, 0);
     L = c.r * 255.0;
     // only tiles that have slopes need their neighbourhood
-    if (floor(c.g * 255.0 + 0.5) >= 7.5) {
+    if (mod(floor(c.g * 255.0 + 0.5), 16.0) >= 7.5) {
       loadNb(t);
       int d; float l, r;
       L = terrH(fract(wt) * 16.0, d, l, r);

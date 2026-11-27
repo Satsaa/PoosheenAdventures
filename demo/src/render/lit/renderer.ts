@@ -396,7 +396,7 @@ export class LitRenderer {
     const under = dim.kind === 'underworld' || dim.kind === 'interior';
     const opx = overviewPx(dim.w, Math.ceil(lay.H / TILE_PX), this.maxTex);
     const ov = buildOverview(dim, lift, lay.voidLiftPx / TILE_PX, lay.top / TILE_PX, (lay.H - lay.top) / TILE_PX - dim.h, opx,
-      under ? this.colorsUnder : this.colors, true, { liftPx: lay.liftPx, kind: lay.kind!, walls: lay.walls! });
+      under ? this.colorsUnder : this.colors, true, { liftPx: lay.liftPx, kind: lay.kind!, fits: lay.fits!, walls: lay.walls! });
     push(litStats.overviewMs, ov.ms);
     const tex = (data: Uint8Array, mip: boolean, nearest = false) => {
       const t = texture(gl, ov.w, ov.h, { data, min: nearest ? gl.NEAREST : mip ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR, mag: gl.NEAREST });
@@ -413,14 +413,16 @@ export class LitRenderer {
     // B: river flow code 1..4, or 16 + distance to land for rough (deep) water
     for (let i = 0; i < n; i++) { maskData[i * 4 + 2] = wi.kind[i] === 2 ? 16 + wi.dist[i] : wi.flow[i]; maskData[i * 4 + 3] = wi.kind[i]; }
     const mask = texture(gl, dim.w, dim.h, { data: maskData });
-    // R = lift in px, G = what the tile is for the height model (see TERRAIN_SHAPE)
-    const liftData = new Uint8Array(n * 2);
+    // R = lift in px, G = what the tile is for the height model, B and A = how much its faces
+    // are scaled sideways and up-down (see TERRAIN_SHAPE; all of it worked out by core/shape.ts)
+    const liftData = new Uint8Array(n * 4);
     for (let i = 0; i < n; i++) {
-      liftData[i * 2] = dim.ground[i] === T.VOID ? 0 : Math.max(0, Math.min(255, lay.liftPx[i]));
-      liftData[i * 2 + 1] = lay.kind![i];
+      liftData[i * 4] = dim.ground[i] === T.VOID ? 0 : Math.max(0, Math.min(255, lay.liftPx[i]));
+      liftData[i * 4 + 1] = lay.kind![i];
+      liftData[i * 4 + 2] = lay.fits![i * 2];
+      liftData[i * 4 + 3] = lay.fits![i * 2 + 1];
     }
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    const liftTex = texture(gl, dim.w, dim.h, { internal: gl.RG8, format: gl.RG, data: liftData });
+    const liftTex = texture(gl, dim.w, dim.h, { data: liftData });
     d = {
       liftTex, props: buildPropGrid(dim),
       id: dim.id, dim, lay, cols: Math.ceil(lay.W / CPX), rows: Math.ceil(lay.H / CPX), ov, ovTex,

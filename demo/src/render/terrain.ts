@@ -153,7 +153,7 @@ export function buildOutline(src: Dimension): Path2D {
 // The model itself lives in core/shape.ts, shared with the tile checker and the generator.
 // Here: the face sizes the graphics settings choose (the picture may differ from the rules'
 // defaults, the model never does).
-export { KIND, isWallG, surfacePx, tileKinds, type WallPattern, type WallPatterns, type WallShape } from '../core/shape';
+export { KIND, isWallG, surfacePx, tileFits, tileKinds, type WallPattern, type WallPatterns, type WallShape } from '../core/shape';
 
 let wallShape: WallShape = { ...DEFAULT_WALLS };
 export function wallPatterns(dim: Dimension): WallPatterns {

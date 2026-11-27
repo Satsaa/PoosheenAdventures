@@ -6,19 +6,13 @@
 //     wording the report from this table, so a new tile or a new need is checked without
 //     writing a new warning;
 //   - the generator's tidy-up (`gen/settle.ts`) asks the same questions and applies the
-//     fix the table names (remove the prop, swap it for a low one, use the lip pattern).
+//     fix the table names (remove the prop, or swap it for a low one).
 // The Rust port can load the same table.
 import { D, T, type Dimension, type DimKind, type MapObject } from './types';
-import { KIND, WALL_MODE, facedAt, kindAt, levelAt, liftAt, type WallMode } from './shape';
+import { WALL_MODE, facedAt, kindAt, levelAt, liftAt, reachesTop, type WallMode } from './shape';
 
 export { WALL_MODE, type WallMode } from './shape';
 
-/**
- * Tiles of raised ground needed behind a face that looks north, for the face to fit. In a room
- * that face is as wide as the others, which takes a run longer than one tile; a tile without
- * the depth uses the lip pattern instead.
- */
-export const FACE_DEPTH: Record<WallMode, number> = { room: 2, outdoor: 1 };
 
 // ---------------------------------------------------------------- needs
 /** What a tile can ask of its surroundings. Each need is one question about one tile. */
@@ -127,8 +121,6 @@ export interface TileCtx {
   level: (i: number) => boolean;
   /** directly below a face that looks at the camera */
   underFace: (i: number) => boolean;
-  /** tiles of ground at least this high, counted southward from i (i included) */
-  depthSouth: (i: number) => number;
   joins: Set<number>;
 }
 
@@ -151,16 +143,10 @@ export function tileCtx(dim: Dimension): TileCtx {
     edge: memo((i) => facedAt(dim, i)),
     level: memo((i) => levelAt(dim, i)),
     underFace: (i) => solidGround(i) && solidGround(i - w) && liftAt(dim, i - w) > liftAt(dim, i),
-    depthSouth: (i) => { let d = 0; for (let j = i; j < n && solidGround(j) && liftAt(dim, j) >= liftAt(dim, i); j += w) d++; return d; },
     joins: new Set(dim.objects.filter((o) => JOINS.has(o.kind)).map((o) => o.y * w + o.x)),
   };
 }
 
-/** A raised tile whose face looks north but has too little raised ground behind it for that face. */
-export const lacksDepth = (c: TileCtx, i: number): boolean => {
-  const { dim } = c, north = i - dim.w;
-  return c.land(i) && north >= 0 && c.land(north) && liftAt(dim, north) < liftAt(dim, i) && c.depthSouth(i) < FACE_DEPTH[c.mode];
-};
 
 // ---------------------------------------------------------------- the checker
 export interface TileIssue {
@@ -186,9 +172,10 @@ export function checkTiles(dim: Dimension): TileIssue[] {
     if (g.is === 'none') continue;
     if (!g.on.includes(dim.kind)) say(i, g.name, `to be on a map it belongs on (not ${where})`);
     if (g.is !== 'liquid' && c.edge(i)) {
-      // it shows faces: it must have this kind of map's pattern, and room for it
+      // it shows faces: it must have this kind of map's pattern, and its faces must leave it a top
+      // (the terrain model fits faces to the room they have, so the second can only fail if the model does)
       if (!g.faces.includes(c.mode)) say(i, g.name, `${c.mode} wall faces: it stands above its neighbours in ${where}`);
-      if (!dim.lip?.[i] && lacksDepth(c, i)) say(i, g.name, `${FACE_DEPTH[c.mode]} tiles of depth behind its north face, or the lip pattern`);
+      if (!reachesTop(dim, i)) say(i, g.name, 'a top: it is marked higher than what is beside it, but its faces leave none of it at that height');
     }
     // a step between two walkable tiles is only passable, and only drawn right, with something that joins them
     if (!solid[i] && g.is === 'floor') {
