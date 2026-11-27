@@ -181,7 +181,7 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
       let wf: Frame | null = null, faceF: Frame | null = null;
       if (sloped) {
         // one face material along a wall, whatever ground lies on top of it (a path, a patch of sand)
-        const fg = faceGround(g), fl = get('f:' + fg) ?? get('f:' + g)!, fv = variant(x, y, seed + 11, fl.length);
+        const fg = faceGround(g), fl = get('f:' + fg) ?? get('f:' + g)!, fv = 0; // (one face texture per ground: half as many wall pieces to bake and keep)
         faceF = fl[fv];
         wf = wallSprite(sheet, dim, { liftPx, kind: lay.kind!, fits: lay.fits!, walls: lay.walls! }, x, y, faceF, fg + ':' + fv);
       }

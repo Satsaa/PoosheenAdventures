@@ -202,7 +202,10 @@ export function lowsOf(F: Field, x: number, y: number): Low[] {
         const a = (yy - Math.sign(j)) * w + xx, b = yy * w + xx - Math.sign(k);
         if ((F.kind(a) & KIND.CUT) && (F.kind(b) & KIND.CUT) && F.lift(a) >= L && F.lift(b) >= L) continue;
       }
-      out.push({ ox: k * 16, oy: j * 16, Lq, dL: L - Lq, rx: runOf(F, lip, true, false, kq, L - Lq, walk), ry: runOf(F, lip, false, j > 0, kq, L - Lq, walk) });
+      const rx = runOf(F, lip, true, false, kq, L - Lq, walk), ry = runOf(F, lip, false, j > 0, kq, L - Lq, walk);
+      // (too far for its face to reach any point of this tile: it changes nothing here)
+      if ((Math.abs(k) - 1) * 16 >= rx || (Math.abs(j) - 1) * 16 >= ry) continue;
+      out.push({ ox: k * 16, oy: j * 16, Lq, dL: L - Lq, rx, ry });
       continue;
     }
     // ground at least as high that is cut at 45 degrees: its cut half is lower ground too,
@@ -347,6 +350,12 @@ export function surface(F: Field, x: number, y: number, px: number, py: number):
 const GAME_WALLS: Record<DimKind, WallPatterns> = {
   overworld: patternsFor('overworld'), sky: patternsFor('sky'), underworld: patternsFor('underworld'), interior: patternsFor('interior'),
 };
+/** The same, with every tile's height and kind worked out once: for passes that ask about the whole of a map that no longer changes. */
+export function frozenField(dim: Dimension): Field {
+  const n = dim.w * dim.h, lift = new Int16Array(n), kind = new Uint8Array(n);
+  for (let i = 0; i < n; i++) { lift[i] = liftAt(dim, i); kind[i] = kindAt(dim, i); }
+  return { w: dim.w, h: dim.h, lift: (j) => lift[j], kind: (j) => kind[j], pat: GAME_WALLS[dim.kind] };
+}
 export const fieldOf = (dim: Dimension): Field => ({ w: dim.w, h: dim.h, lift: (j) => liftAt(dim, j), kind: (j) => kindAt(dim, j), pat: GAME_WALLS[dim.kind] });
 
 // ---- for drawing: everything per tile worked out once
@@ -533,15 +542,17 @@ export function facedAt(dim: Dimension, i: number): boolean {
  * all face when the ground behind it carries the top; what may not happen is ground that is
  * marked high and never gets there.
  */
-export function reachesTop(dim: Dimension, i: number, memo?: Int8Array): boolean {
+export function reachesTop(dim: Dimension, i: number, memo?: Int8Array, field?: Field): boolean {
   if ((kindAt(dim, i) & (3 | KIND.WALK)) || !lowerNear(dim, i)) return true;
-  const F = fieldOf(dim), { w, h } = dim, L = liftAt(dim, i), x = i % w, y = (i / w) | 0;
+  const F = field ?? fieldOf(dim), { w, h } = dim, L = liftAt(dim, i), x = i % w, y = (i / w) | 0;
   const topOn = (xx: number, yy: number): boolean => {
     const j = yy * w + xx;
     if (F.kind(j) & KIND.WALK) return true;
     if (memo && memo[j]) return memo[j] === 1;
-    const lows = lowsOf(F, xx, yy), [sx, sy] = fitOf(F, xx, yy, lows);
-    const ok = over(F.lift(j), lows, 8, 8, sx, sy) >= F.lift(j) - 0.5 || hasTop(F.lift(j), lows, sx, sy);
+    const lows = lowsOf(F, xx, yy), Lj = F.lift(j);
+    // (faces are only ever fitted smaller: a top under full-size faces is a top, without working the fit out)
+    let ok = !lows.length || over(Lj, lows, 8, 8, 1, 1) >= Lj - 0.5 || hasTop(Lj, lows, 1, 1);
+    if (!ok) { const [sx, sy] = fitOf(F, xx, yy, lows); ok = hasTop(Lj, lows, sx, sy); }
     if (memo) memo[j] = ok ? 1 : 2;
     return ok;
   };

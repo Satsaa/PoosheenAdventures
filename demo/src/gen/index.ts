@@ -8,10 +8,10 @@ import { runLints } from './validate';
 import { checkTiles, summariseIssues } from '../core/tileset';
 import { normalizeSettings, type GenSettings } from '../core/settings';
 
-function attempt(seedStr: string, S: GenSettings, n: number, t0: number): World {
+function attempt(seedStr: string, S: GenSettings, n: number, t0: number, canRetry = false): World {
   const seed = childSeed(hashStr(seedStr), 'attempt' + n);
   const bp = buildBlueprint(seed, S);
-  const tiles = realiseTiles(bp, seed);
+  const tiles = realiseTiles(bp, seed, canRetry);
   const solution = solve(bp.graph, bp.ctx.items);
   const kind = new Map(tiles.dims.map((d) => [d.id, d.kind]));
   const dimOf = new Map(bp.graph.locs.map((l) => [l.id, l.dim]));
@@ -51,7 +51,7 @@ export function generateWorld(seedStr: string, settings?: Partial<GenSettings> |
   let best: World | null = null;
   for (let n = 0; n < maxAttempts; n++) {
     try {
-      const w = attempt(seedStr, S, n, t0);
+      const w = attempt(seedStr, S, n, t0, n < maxAttempts - 1);
       if (w.ok) return w;
       best ??= w;
     } catch (e) {

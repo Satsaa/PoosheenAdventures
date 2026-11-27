@@ -134,10 +134,24 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   const fixedWater = (j: number) => liquid(j) && !(dim.kind === 'overworld' && dim.region[j] < 0 && dim.zone[j] < 0);
   seaLevel(dim);
   const lowered = new Set<number>(); // what came down is not raised again, so this always settles
+  /** tiles within a wall's reach of a step in height, along their row or column: the only ones a wall rule can concern */
+  const nearSteps = (): Uint8Array => {
+    const out = new Uint8Array(n), R = 5;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if ((x + 1 < w && dim.elev[i] !== dim.elev[i + 1]) || (x + 1 < w && isWallG(dim.ground[i]) !== isWallG(dim.ground[i + 1])))
+        for (let k = -R; k <= R + 1; k++) if (x + k >= 0 && x + k < w) out[i + k] = 1;
+      if ((y + 1 < h && dim.elev[i] !== dim.elev[i + w]) || (y + 1 < h && isWallG(dim.ground[i]) !== isWallG(dim.ground[i + w])))
+        for (let k = -R; k <= R + 1; k++) if (y + k >= 0 && y + k < h) out[i + k * w] = 1;
+    }
+    return out;
+  };
   const widen = (): void => {
   for (let pass = 0; pass < 8; pass++) {
     let changed = false;
+    const cand = nearSteps();
     for (let i = 0; i < n; i++) {
+      if (!cand[i]) continue;
       for (const [pa, pb, missing] of thinPairs(dim, i)) {
         const pair = [pa, pb];
         // one tile short: it grows by one; shorter than that it is no place at all and comes down
@@ -190,8 +204,9 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
     let any = false;
   for (let pass = 0; pass < 3; pass++) {
     let changed = false;
+    const cand = nearSteps();
     for (let i = 0; i < n; i++) {
-      if (dim.ground[i] === T.VOID) continue;
+      if (!cand[i] || dim.ground[i] === T.VOID) continue;
       if (!dim.solid[i]) {
         // walkable ground right at a drop: the wall needs closed ground. This tile closes, or the
         // lower tile in front of it comes up as wall; stairs, ledges and gates keep their step.

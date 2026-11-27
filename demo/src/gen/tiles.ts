@@ -25,7 +25,10 @@ interface Layer {
   anchors: Map<number, LocId>;
 }
 
-export function realiseTiles(bp: Blueprint, seed: number): TileResult {
+/** thrown when an attempt cannot fit something and another attempt will follow: nothing more is worked out for it */
+export class Cramped extends Error {}
+
+export function realiseTiles(bp: Blueprint, seed: number, canRetry = false): TileResult {
   const problems: string[] = [];
   // loops the map has no room for are taken out of the graph again; they were never needed
   let dropped = 0;
@@ -45,12 +48,43 @@ export function realiseTiles(bp: Blueprint, seed: number): TileResult {
     // the walls are settled now, on the bare terrain, before anything is placed: every building,
     // object and prop then goes onto ground that already has its final shape
     settleShape(st.dim, (i) => st.barriers.has(i), (i) => st.barriers.has(i));
+    // the wall pass closes ground: each region keeps the piece of open ground its openings lead to
+    // (failing that, its largest), and whatever was cut off from it becomes closed ground too, so
+    // nothing is ever placed in a pocket nobody can reach
+    {
+      const { dim } = st, { w } = dim, n = w * dim.h, comp = new Int32Array(n).fill(-1);
+      const size: number[] = [], gated: number[] = [];
+      for (let s0 = 0; s0 < n; s0++) {
+        if (comp[s0] >= 0 || dim.solid[s0] || st.owner[s0] < 0 || st.barriers.has(s0)) continue;
+        const id = size.length, todo = [s0];
+        comp[s0] = id; size.push(0); gated.push(0);
+        while (todo.length) {
+          const i = todo.pop()!, x = i % w;
+          size[id]++;
+          for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) {
+            if (j < 0 || j >= n) continue;
+            if (st.barriers.has(j)) { gated[id]++; continue; }
+            if (comp[j] >= 0 || dim.solid[j] || st.owner[j] !== st.owner[s0]) continue;
+            comp[j] = id; todo.push(j);
+          }
+        }
+      }
+      st.interior.forEach((tiles, r) => {
+        const ids = [...new Set(tiles.filter((i) => comp[i] >= 0).map((i) => comp[i]))];
+        if (!ids.length) return;
+        const best = ids.sort((a, b) => gated[b] - gated[a] || size[b] - size[a])[0];
+        for (const i of tiles) if (comp[i] >= 0 && comp[i] !== best && !st.reserved[i]) { dim.solid[i] = 1; st.border[i] = 1; }
+        st.interior[r] = tiles.filter((i) => comp[i] === best);
+      });
+    }
     sts.set(s.id, st);
   }
   const S0 = bp.ctx.settings;
   const doors = placeFeatures(sts, drop, { boat: bp.plan.tools.includes('boat'), ferries: S0.ferries, outcrops: S0.outcrops });
   const layers: Layer[] = [...sts.values()].map((st) => ({ dim: st.dim, barriers: st.barriers, anchors: st.anchors }));
   for (const st of sts.values()) problems.push(...st.problems);
+  // something did not fit and there is another attempt to come: stop here, the rest would be thrown away
+  if (canRetry && problems.length) throw new Cramped(problems[0]);
 
   // interiors, linked both ways to the door that leads to them
   for (const ib of bp.ctx.interiors) {
