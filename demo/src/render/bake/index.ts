@@ -40,7 +40,8 @@ export { CRYSTAL_LIGHT } from './models';
 
 /** model sprites that are composed into the terrain chunks, at the terrain's resolution */
 const STATIC_KEYS = /^(torch|rail:)/;
-let cached: AssetSheet | null = null;
+const DECAL_KEYS = new RegExp(`^d:(${D.TUFT}|${D.FLOWER})$`);
+const cachedAt = new Map<number, AssetSheet>();
 export let lastBakeMs = 0;
 /** total time spent baking sprites on demand */
 export let deferredBakeMs = 0;
@@ -51,8 +52,9 @@ export let deferredBakeMs = 0;
  * resolution. It also holds every prop once at that resolution: the far-zoom overview takes
  * its colours from there.
  */
-export function bakeAtlas(): AssetSheet {
-  if (cached) return cached;
+export function bakeAtlas(scale = 1): AssetSheet {
+  const had = cachedAt.get(scale);
+  if (had) return had;
   const t0 = performance.now();
   const sprites = new Map<string, Sprite[]>();
   const put = (k: string, s: Sprite) => {
@@ -62,31 +64,34 @@ export function bakeAtlas(): AssetSheet {
   };
   const grounds = Object.values(T).filter((g) => g !== T.VOID);
   for (const g of grounds) {
-    for (let v = 0; v < 4; v++) put('g:' + g, groundTile(g, v));
-    for (let v = 0; v < 2; v++) put('f:' + g, faceStrip(g, v));
+    for (let v = 0; v < 4; v++) put('g:' + g, groundTile(g, v, scale));
+    for (let v = 0; v < 2; v++) put('f:' + g, faceStrip(g, v, scale));
   }
   for (let dir = 0; dir < 4; dir++)
     for (let v = 0; v < 3; v++) {
-      put('m:' + dir, edgeMask(dir, v, false));
-      put('fm:' + dir, edgeMask(dir, v, true));
-      put('mc:' + dir, cornerMask(dir, v));
+      put('m:' + dir, edgeMask(dir, v, false, scale));
+      put('fm:' + dir, edgeMask(dir, v, true, scale));
+      put('mc:' + dir, cornerMask(dir, v, scale));
     }
-  for (let c = 0; c < 4; c++) put('mi:' + c, innerMask(c));
-  for (const shape of ['round', 'chamfer', 'rock'] as Shape[]) for (let bits = 0; bits < 16; bits++) put(`wm:${shape}:${bits}`, topMask(shape, bits));
+  for (let c = 0; c < 4; c++) put('mi:' + c, innerMask(c, scale));
+  for (const shape of ['round', 'chamfer', 'rock'] as Shape[]) for (let bits = 0; bits < 16; bits++) put(`wm:${shape}:${bits}`, topMask(shape, bits, scale));
   for (const g of EDGE_GROUNDS) {
-    for (let i = 0; i < 4; i++) { put(`w:${g}:e${i}`, rimPiece(g, 'e', i)); put(`w:${g}:oc${i}`, rimPiece(g, 'oc', i)); put(`w:${g}:ic${i}`, rimPiece(g, 'ic', i)); }
-    for (const L of ['p', 'o', 'i']) for (const R of ['p', 'o', 'i']) put(`wf:${g}:${L}${R}`, facePiece(g, 0, L, R));
+    for (let i = 0; i < 4; i++) { put(`w:${g}:e${i}`, rimPiece(g, 'e', i, scale)); put(`w:${g}:oc${i}`, rimPiece(g, 'oc', i, scale)); put(`w:${g}:ic${i}`, rimPiece(g, 'ic', i, scale)); }
+    for (const L of ['p', 'o', 'i']) for (const R of ['p', 'o', 'i']) put(`wf:${g}:${L}${R}`, facePiece(g, 0, L, R, scale));
   }
-  for (let bits = 0; bits < 32; bits++) put('wb:' + bits, basePiece(bits));
-  for (const [key, list] of propMakers()) list.forEach((make) => put(key, make(1)));
-  for (const o of objectModels()) if (STATIC_KEYS.test(o.key)) put(o.key, renderModel(o.model, o.key.length, 1));
+  for (let bits = 0; bits < 32; bits++) put('wb:' + bits, basePiece(bits, scale));
+  // flat decals and the terrain's own model pieces are drawn into it, so they share its resolution;
+  // the standing props are only here for their colours
+  for (const [key, list] of propMakers()) list.forEach((make) => put(key, make(DECAL_KEYS.test(key) ? scale : 1)));
+  for (const o of objectModels()) if (STATIC_KEYS.test(o.key)) put(o.key, renderModel(o.model, o.key.length, scale));
   // 1 px checkerboard test sprite (d:255): verifies that every source pixel is drawn the same size
   const chk = new Sprite(16, 16, 0, 0);
   for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) chk.set(x, y, (x + y) & 1 ? [250, 250, 250] : [10, 10, 10], 0, 0, 1, 0, null, 0);
   put('d:255', chk);
-  cached = packSheet(sprites, 1024, 1024);
+  const sheet = packSheet(sprites, Math.min(8192, 1024 * scale), 1024);
+  cachedAt.set(scale, sheet);
   lastBakeMs = performance.now() - t0;
-  return cached;
+  return sheet;
 }
 
 // ---------------------------------------------------------------- standing sprites, on demand
@@ -117,7 +122,7 @@ function makers(): Map<string, Maker[]> {
 }
 
 /** Bake scales on offer: texels per px of the tile grid (1 = 16 texels per tile, 8 = 128). */
-export const SPRITE_SCALES = [1, 2, 3, 4, 6, 8];
+export const SPRITE_SCALES = [1, 2, 4, 8];
 export interface SpriteUpload { x: number; y: number; sprite: Sprite }
 export interface SpriteSheet {
   w: number;
@@ -184,5 +189,5 @@ export const bakePending = () => sprites?.queue.length ?? 0;
 
 /** Replace the procedural sheet (e.g. with real pre-rendered sprites). Call before the first render. */
 export function setAssetSheet(sheet: AssetSheet) {
-  cached = sheet;
+  cachedAt.set(1, sheet);
 }

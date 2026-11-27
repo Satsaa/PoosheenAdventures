@@ -26,7 +26,7 @@ import { FLOATS, InstBuf, type Layout, buildStatic, layout, objectKey, standOf, 
 import type { WallPatterns } from '../terrain';
 import { type Prog, delFramebuffer, delTexture, framebuffer, glStats, program, texture } from './gl';
 import { type Light, LightGrid, type Mood, type Sun, moodFor, staticLights } from './lights';
-import { CHAR_H, CHAR_W, charAtlas } from '../bake/charAtlas';
+import { charAtlas } from '../bake/charAtlas';
 import { type Dir as CDir, FLYERS } from '../bake/creatures';
 import { type PropGrid, buildPropGrid, forProps, propLook } from '../props';
 import type { Gfx } from '../graphics';
@@ -92,8 +92,7 @@ export interface Actor {
   alpha: number;
 }
 
-const CHUNK_TILES = 32;
-const CPX = CHUNK_TILES * TILE_PX; // 512
+
 /** px per tile (css) where chunks start to fade in over the overview, and where they are fully opaque */
 const CHUNK_S0 = 9;
 const CHUNK_S1 = 13;
@@ -187,6 +186,10 @@ export class LitRenderer {
   private topTex: WebGLTexture | null = null;
   /** standing sprites: their own sheet, baked on demand at the chosen resolution (colour, normal, emission, top-down height) */
   private spr!: SpriteSheet;
+  /** texels per px of the tile grid: the texture resolution setting / 16 (1, 2, 4 or 8) */
+  private texS = 0;
+  /** px of the tile grid one terrain chunk spans: fewer the finer the bake, so a chunk's textures stay 1024 or less a side */
+  private cpx = 512;
   private sprTex: WebGLTexture[] = [];
   private charTex: WebGLTexture[] = [];
   private charVersion = -1;
@@ -245,18 +248,8 @@ export class LitRenderer {
     if (this.maxTex < 2048) throw new Error('MAX_TEXTURE_SIZE too small');
     this.hdr = !!gl.getExtension('EXT_color_buffer_float');
     const t0 = performance.now();
-    this.sheet = bakeAtlas();
+    this.useResolution(16);
     litStats.atlasMs = lastBakeMs || performance.now() - t0;
-    const s = this.sheet;
-    this.atlas = [s.albedo, s.normal, s.emissive].map((d) => texture(gl, s.w, s.h, { data: new Uint8Array(d.buffer, d.byteOffset, d.byteLength) }));
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    this.topTex = texture(gl, s.w, s.h, { internal: gl.R8, format: gl.RED, data: s.top });
-    if (s.dirty) s.dirty.length = 0;
-    this.charTex = [0, 1, 2].map(() => texture(gl, CHAR_W, CHAR_H));
-    this.charTex.push(texture(gl, CHAR_W, CHAR_H, { internal: gl.R8, format: gl.RED }));
-    this.charVersion = -1;
-    charAtlas().markAll();
-    this.useSprites(16);
     this.castTex = texture(gl, 1024, 1024);
     this.castFbo = framebuffer(gl, [this.castTex]);
     this.pCaster = program(gl, SPRITE_VS, CASTER_FS, 'caster');
@@ -434,7 +427,7 @@ export class LitRenderer {
     const liftTex = texture(gl, dim.w, dim.h, { data: liftData });
     d = {
       liftTex, props: buildPropGrid(dim),
-      id: dim.id, dim, lay, cols: Math.ceil(lay.W / CPX), rows: Math.ceil(lay.H / CPX), ov, ovTex,
+      id: dim.id, dim, lay, cols: Math.ceil(lay.W / this.cpx), rows: Math.ceil(lay.H / this.cpx), ov, ovTex,
       lights: new LightGrid(lights), nLights: lights.length, mask, maskData, mood: moodFor(this.world, dim),
       chunks: new Map(), lastUse: performance.now(),
     };
@@ -517,7 +510,9 @@ export class LitRenderer {
     const t0 = performance.now();
     const { lay } = d;
     const lin = { min: gl.LINEAR, mag: gl.NEAREST };
-    const tex = [texture(gl, CPX, CPX, lin), texture(gl, CPX, CPX, lin), texture(gl, CPX, CPX, lin), texture(gl, CPX, CPX)];
+    // a chunk spans CPX px of the tile grid and holds S texels for each of them
+    const CPX = this.cpx, S = this.texS, T = CPX * S, CHUNK_TILES = CPX / TILE_PX;
+    const tex = [texture(gl, T, T, lin), texture(gl, T, T, lin), texture(gl, T, T, lin), texture(gl, T, T)];
     const fbo = framebuffer(gl, tex);
     // every tile whose sprites can reach into this chunk: faces drop below their row, lifted tiles and
     // tall props rise above it, wide props overhang their column
@@ -530,11 +525,11 @@ export class LitRenderer {
     };
     buildStatic(d.dim, lay, this.sheet, this.seed, rect, this.chunkInst);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-    gl.viewport(0, 0, CPX, CPX);
+    gl.viewport(0, 0, T, T);
     gl.disable(gl.BLEND);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    this.drawSprites(this.chunkInst, 1, -cx * CPX, -cy * CPX, CPX, CPX, this.atlas, null, 1, { lift: d.liftTex, walls: lay.walls! });
+    this.drawSprites(this.chunkInst, S, -cx * T, -cy * T, T, T, this.atlas, null, 1, { lift: d.liftTex, walls: lay.walls! }, S);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     // mipmaps of albedo, normal + height and emission, for zoomed-out views (the tile ids are never filtered)
     for (let i = 0; i < 3; i++) { gl.bindTexture(gl.TEXTURE_2D, tex[i]); gl.generateMipmap(gl.TEXTURE_2D); }
@@ -653,6 +648,7 @@ export class LitRenderer {
 
     // ---- which chunks this frame needs; compose a few, evict only what this frame does not use
     const vx0 = -offX / k, vx1 = (iw - offX) / k, vy0 = -offY / k, vy1 = (ih - offY) / k; // dim px
+    const CPX = this.cpx, texS = this.texS;
     const cx0 = Math.max(0, Math.floor(vx0 / CPX)), cx1 = Math.min(d.cols - 1, Math.floor(vx1 / CPX));
     const cy0 = Math.max(0, Math.floor(vy0 / CPX)), cy1 = Math.min(d.rows - 1, Math.floor(vy1 / CPX));
     const nVis = Math.max(0, cx1 - cx0 + 1) * Math.max(0, cy1 - cy0 + 1);
@@ -670,7 +666,9 @@ export class LitRenderer {
         }
       missing.sort((a, b) => a[2] - b[2]);
       // small dimensions compose everything at once (no placeholder flash); big ones a few per frame
-      const budget = visible.length === 0 && missing.length <= 9 ? missing.length : 3;
+      // (chunks span fewer tiles at finer bakes, so more of them are composed per frame)
+      const perFrame = 3 * Math.round(512 / CPX);
+      const budget = visible.length === 0 && missing.length <= 9 * Math.round(512 / CPX) ? missing.length : perFrame;
       const pinned = new Set(visible);
       this.evict(pinned, Math.max(CHUNK_BUDGET - budget, pinned.size));
       for (const [cx, cy] of missing.slice(0, budget)) {
@@ -692,8 +690,8 @@ export class LitRenderer {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     this.mipSprites = G.mipmaps;
-    this.spriteRes = Math.max(4, G.spriteResolution || 16);
-    this.useSprites(this.spriteRes);
+    this.useResolution(G.spriteResolution || 16);
+    this.spriteRes = this.texS * 16;
     const pb = this.pBlit;
     gl.useProgram(pb.p);
     gl.uniform1i(pb.u.uA, 0); gl.uniform1i(pb.u.uN, 1); gl.uniform1i(pb.u.uE, 2); gl.uniform1i(pb.u.uT, 3);
@@ -702,9 +700,9 @@ export class LitRenderer {
     if (fade < 1 || missing.length) this.blitLayer(d.ovTex, offX, offY, ovK, d.ov.w, d.ov.h, 1, iw, ih);
     if (fade > 0) for (const c of visible) {
       // mipmapped only while minified and wanted; otherwise exactly the pixels that were composed
-      const min = G.mipmaps && k < 1 ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR;
+      const min = G.mipmaps && k < texS ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR;
       for (let i = 0; i < 3; i++) { gl.activeTexture(gl.TEXTURE0 + i); gl.bindTexture(gl.TEXTURE_2D, c.tex[i]); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, min); }
-      this.blitLayer(c.tex, offX + c.cx * CPX * k, offY + c.cy * CPX * k, k, CPX, CPX, fade, iw, ih);
+      this.blitLayer(c.tex, offX + c.cx * CPX * k, offY + c.cy * CPX * k, k / texS, CPX * texS, CPX * texS, fade, iw, ih);
     }
     // copy the terrain tile ids: sprites test against them for occlusion by raised ground further south
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.gFbo);
@@ -771,7 +769,7 @@ export class LitRenderer {
         if (fade > 0) { pi.push(o.x * TILE_PX - frm.ox + dx, lay.top + o.y * TILE_PX - L - frm.oy + dy, frm.w, frm.h, frm.x, frm.y, -2, alpha, L / TILE_PX, o.x, o.y, 64 | 1024, tint[0], tint[1], tint[2], e); nObj++; }
         if (shadowsOn && !dy && alpha > 0.5) pushCaster(ci, frm, o.x + dx / TILE_PX, o.y, L / TILE_PX, false);
       }
-      const ca = charAtlas();
+      const ca = charAtlas(this.texS);
       for (const a of f.actors) {
         const dir = a.dir === 'w' ? 'e' : a.dir;
         const cf = ca.get(a.kind, a.clip, dir) || ca.get(a.kind, 'idle', dir) || ca.get(a.kind, 'idle', 's');
@@ -792,7 +790,7 @@ export class LitRenderer {
       gl.depthMask(true);
       gl.clear(gl.DEPTH_BUFFER_BIT);
       this.drawSprites(pi, k, offX, offY, iw, ih, this.sprTex, { lift: d.liftTex }, fade, null, spr.scale);
-      this.drawSprites(ai, k, offX, offY, iw, ih, this.charTex, { lift: d.liftTex }, fade);
+      this.drawSprites(ai, k, offX, offY, iw, ih, this.charTex, { lift: d.liftTex }, fade, null, texS);
       gl.disable(gl.DEPTH_TEST);
     }
 
@@ -838,7 +836,7 @@ export class LitRenderer {
           gl.bindVertexArray(null);
         };
         drawCast(ci, this.sprTex[3], this.sprTex[0], spr.scale);
-        drawCast(aci, this.charTex[3], this.charTex[0], 1);
+        drawCast(aci, this.charTex[3], this.charTex[0], texS);
         gl.blendEquation(gl.FUNC_ADD);
         gl.disable(gl.BLEND);
       }
@@ -896,6 +894,7 @@ export class LitRenderer {
     gl.uniform1f(pl.u.uWaterK, G.water);
     gl.uniform1f(pl.u.uFoamK, G.waterFoam);
     gl.uniform1f(pl.u.uGlintK, G.waterGlint);
+    gl.uniform1f(pl.u.uTexS, texS);
     gl.uniform4f(pl.u.uGlintP, G.waterGlintDensity, 16 / Math.max(1, G.waterGlintSize), G.waterGlintCrest, G.waterGlintLowSun);
     gl.uniform1f(pl.u.uGlintPL, G.waterGlintLights);
     gl.uniform3fv(pl.u.uBg0, mood.bg0);
@@ -1071,6 +1070,34 @@ export class LitRenderer {
     litStats.worstFrameMs = Math.max(litStats.worstFrameMs, litStats.lastFrameMs);
   }
 
+  /**
+   * Everything in the world is baked at `pxPerTile` texels per tile (16, 32, 64 or 128): the
+   * terrain's sheet at once, standing sprites and characters as they are needed. The terrain
+   * chunks composed at the old size are dropped.
+   */
+  private useResolution(pxPerTile: number) {
+    const S = pxPerTile >= 128 ? 8 : pxPerTile >= 64 ? 4 : pxPerTile >= 32 ? 2 : 1;
+    if (S === this.texS) return;
+    const gl = this.gl;
+    this.texS = S;
+    this.cpx = S <= 2 ? 512 : S === 4 ? 256 : 128;
+    this.freeDims();
+    this.atlas.forEach((t) => delTexture(gl, t));
+    if (this.topTex) delTexture(gl, this.topTex);
+    const s = (this.sheet = bakeAtlas(S));
+    this.atlas = [s.albedo, s.normal, s.emissive].map((d) => texture(gl, s.w, s.h, { data: new Uint8Array(d.buffer, d.byteOffset, d.byteLength) }));
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    this.topTex = texture(gl, s.w, s.h, { internal: gl.R8, format: gl.RED, data: s.top });
+    if (s.dirty) s.dirty.length = 0;
+    this.charTex.forEach((t) => delTexture(gl, t));
+    const ca = charAtlas(S);
+    this.charTex = [0, 1, 2].map(() => texture(gl, ca.w, ca.h));
+    this.charTex.push(texture(gl, ca.w, ca.h, { internal: gl.R8, format: gl.RED }));
+    this.charVersion = -1;
+    ca.markAll();
+    this.useSprites(S * 16);
+  }
+
   /** Switch to the sprite sheet for this resolution (px per tile); a new one starts empty and fills as sprites are needed. */
   private useSprites(pxPerTile: number) {
     const sh = spriteSheet(pxPerTile, this.maxTex);
@@ -1131,11 +1158,11 @@ export class LitRenderer {
 
   /** upload character frames baked since the last frame */
   private syncChars() {
-    const ca = charAtlas();
+    const ca = charAtlas(this.texS);
     ca.step(6);
     if (!ca.dirty.length) return;
     const gl = this.gl;
-    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, CHAR_W);
+    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, ca.w);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     for (const r of ca.dirty) {
       gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, r.x);

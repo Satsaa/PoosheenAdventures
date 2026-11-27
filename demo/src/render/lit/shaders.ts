@@ -131,12 +131,15 @@ void main() {
     // project to; for each pixel, walk down from the tile's top until the sight line meets the surface.
     loadNb(ivec2(int(vInst.y + 0.5), int(vInst.z + 0.5)));
     float L = nbL[12], lowest = vTint.r;
-    float ys = float(lp.y) + 0.5 - L, px = float(lp.x) + 0.5;
+    // (px of the tile grid, with the texel's own sub-px position when the terrain is baked finer)
+    vec2 tc = (floor(vLocal * uS) + 0.5) / uS;
+    float ys = tc.y - L, px = tc.x;
+    float stepH = 0.5 / uS;
     bool southOpen = mod(nbK[17], 4.0) < 0.5 || mod(nbK[17], 4.0) > 1.5;
     int dir = 0; float lowL = L, run = 0.0, hh = -99.0;
     bool wasSouth = false, was = false;
-    for (int s2 = 0; s2 <= 128; s2++) {
-      float h2 = L - float(s2) * 0.5;
+    for (int s2 = 0; s2 <= 1200; s2++) {
+      float h2 = L - float(s2) * stepH;
       if (h2 < lowest - 0.5) break;
       float py = ys + h2;
       if (py < 0.0) break;
@@ -162,10 +165,10 @@ void main() {
     float ext = dir == 1 ? run + dL : dir == 2 ? max(run - dL, 3.0) : max(run, dL);
     float down = (1.0 - frac) * ext;
     float py2 = ys + hh;
-    int u = int(dir <= 2 ? px : py2);
-    int v = int(down);
-    if (v >= 48) v = 4 + (v - 4) % 44;
-    ivec2 st2 = ivec2(vSrc.xy) + ivec2(clamp(u, 0, 15), v);
+    float uF = clamp(dir <= 2 ? px : py2, 0.0, 15.999);
+    float vF = down;
+    if (vF >= 48.0) vF = 4.0 + mod(vF - 4.0, 44.0);
+    ivec2 st2 = ivec2(vSrc.xy) + ivec2(floor(vec2(uF, vF) * uS));
     vec4 a2 = texelFetch(uA, st2, 0);
     vec4 n2 = texelFetch(uN, st2, 0);
     vec4 e2 = texelFetch(uE, st2, 0);
@@ -194,11 +197,12 @@ void main() {
     // the top of a tile with sloped sides: only where the surface really is at the top
     loadNb(ivec2(int(vInst.y + 0.5), int(vInst.z + 0.5)));
     int d3; float l3, r3;
-    if (terrH(vec2(lp) + 0.5, d3, l3, r3) < nbL[12] - 0.3) discard;
+    if (terrH((floor(vLocal * uS) + 0.5) / uS, d3, l3, r3) < nbL[12] - 0.3) discard;
   }
   ivec2 lq = flip ? ivec2(tSize.x - 1 - lp.x, lp.y) : lp;
   ivec2 st = ivec2(vSrc.xy) + lq;
-  if (face && lp.y >= 48) st = ivec2(vSrc.xy) + ivec2(lp.x, 4 + (lp.y - 4) % 44);
+  int iS = int(uS + 0.5);
+  if (face && lp.y >= 48 * iS) st = ivec2(vSrc.xy) + ivec2(lp.x, 4 * iS + (lp.y - 4 * iS) % (44 * iS));
   vec4 a = texelFetch(uA, st, 0);
   // Mipmapping for sprites, on all three of their textures (colour, normal + height, emission).
   // A sheet's stock mipmaps would bleed neighbouring sprites into each other, so each screen
@@ -273,7 +277,7 @@ void main() {
   }
   if (mat == 6) { alb *= vTint.rgb; mat = 0; }
   else if ((flags & 32) != 0) alb *= vTint.rgb;
-  float h = face ? vInst.x - float(lp.y) / 16.0 : vInst.x + n.a * 255.0 / 40.0 - 1.0;
+  float h = face ? vInst.x - (float(lp.y) + 0.5) / (16.0 * uS) + 0.5 / 16.0 : vInst.x + n.a * 255.0 / 40.0 - 1.0;
   vec3 nn = n.rgb * 2.0 - 1.0;
   if (flip) nn.x = -nn.x;
   // ---- autotiled raised edges (terrain tops): rims / coping on exposed edges, rounded or chamfered
@@ -283,7 +287,7 @@ void main() {
     bool chamfer = cr >= 15.5;
     if (chamfer) cr -= 16.0;
     float rw = cr > 0.0 ? (chamfer ? 3.0 : 2.0) : 1.0;
-    vec2 pc = vec2(lp) + 0.5;
+    vec2 pc = vLocal;
     float dLit = 99.0, dDark = 99.0;
     if ((flags & 2) != 0) dLit = min(dLit, pc.y);
     if ((flags & 4) != 0) dLit = min(dLit, pc.x);
@@ -316,8 +320,8 @@ void main() {
   }
   if (face) {
     // face end returns: lit west edge, shaded east edge where the face turns a corner
-    if ((flags & 4096) != 0 && lp.x == 0) { alb = min(alb * 1.3 + 0.03, 1.0); nn = normalize(nn + vec3(-0.9, 0.0, 0.0)); }
-    if ((flags & 8192) != 0 && lp.x >= int(vSize.x) - 2) { alb *= lp.x == int(vSize.x) - 1 ? 0.5 : 0.75; nn = normalize(nn + vec3(0.9, 0.0, 0.0)); }
+    if ((flags & 4096) != 0 && int(vLocal.x) == 0) { alb = min(alb * 1.3 + 0.03, 1.0); nn = normalize(nn + vec3(-0.9, 0.0, 0.0)); }
+    if ((flags & 8192) != 0 && int(vLocal.x) >= int(vSize.x) - 2) { alb *= int(vLocal.x) == int(vSize.x) - 1 ? 0.5 : 0.75; nn = normalize(nn + vec3(0.9, 0.0, 0.0)); }
   }
   oA = vec4(alb, 1.0);
   oN = vec4(nn * 0.5 + 0.5, clamp((h + 1.0) * 40.0 / 255.0, 0.0, 1.0));
@@ -444,6 +448,7 @@ uniform vec2 uCastSize;
 uniform vec3 uSun;        // direction toward the sun (x east, y south, z up), normalized
 uniform float uShadowMode, uShadowStr, uShadowSoft, uTerrainSh, uContact, uAmbK, uSunK, uPointK, uSea;
 uniform float uFogDark, uFogDesat, uWaterK, uFoamK, uGlintK, uGlintPL;
+uniform float uTexS;   // texels per px of the tile grid (texture resolution / 16): lighting, shadows and water keep to that grid
 uniform vec4 uGlintP; // water speculars: density, cells per tile, crest focus, low-sun boost
 uniform sampler2D uOvA;
 uniform float uOvP, uOvTop;
@@ -500,7 +505,7 @@ float foamStreak(vec2 w, float t) {
 }
 // deep-sea albedo and normal at world point w (shared by sea tiles and the sea past the map edge)
 vec3 seaAlbedo(vec2 w, float dist, float t, out vec3 n) {
-  vec2 q = floor(w * 16.0) / 16.0;   // stay on the pixel grid
+  vec2 q = floor(w * 16.0 * uTexS) / (16.0 * uTexS);   // stay on the pixel grid
   float sw = swell(q, t);
   float band = floor(sw * 1.4 + 0.5) / 1.4;
   float far = smoothstep(2.0, 8.0, dist);
@@ -537,7 +542,7 @@ void main() {
   ivec2 fc = ivec2(gl_FragCoord.xy);
   vec4 A = texelFetch(gA, fc, 0);
   vec2 dp = (gl_FragCoord.xy - uOff) / uK;
-  vec2 sp = uK > 1.0 ? floor(dp) + 0.5 : dp;
+  vec2 sp = uK > uTexS ? (floor(dp * uTexS) + 0.5) / uTexS : dp;
   float X = sp.x / 16.0, Ys = (sp.y - uTop) / 16.0;
   if (A.a < 0.5) {
     vec3 bg = mix(uBg0, uBg1, gl_FragCoord.y / uIS.y);
@@ -609,7 +614,7 @@ void main() {
   int flowC = int(M.b * 255.0 + 0.5), wk = int(M.a * 255.0 + 0.5);
   float waterGlint = 0.0;
   if (mat == 1) {
-    vec2 q = floor(P.xy * 16.0) / 16.0;
+    vec2 q = floor(P.xy * 16.0 * uTexS) / (16.0 * uTexS);
     float zf = smoothstep(0.35, 0.9, uK);   // fine detail fades out when zoomed out (no moire)
     if (wk == 2) {
       // deep sea: dark readable blue, broad slow swells, rare foam streaks; darker far from land
@@ -661,7 +666,8 @@ void main() {
   if (mat == 5 || mat == 3) nl = (nl + 0.4) / 1.4;
   float sh = 1.0;
   if (uShadowMode > 0.5 && uSun.z > 0.02) {
-    vec3 Pg = vec3(floor(P.x * 16.0) / 16.0 + 1.0 / 32.0, floor(P.y * 16.0) / 16.0 + 1.0 / 32.0, P.z + 0.02);
+    float gS = 16.0 * uTexS;
+    vec3 Pg = vec3((floor(P.x * gS) + 0.5) / gS, (floor(P.y * gS) + 0.5) / gS, P.z + 0.02);
     float occ0 = shadowRay(Pg, uSun);
     if (uShadowSoft > 0.0) {
       vec3 s1 = normalize(uSun + vec3(-uSun.y, uSun.x, 0.0) * 0.08 * uShadowSoft);

@@ -11,6 +11,8 @@ export interface GraphicsDef {
   max?: number;
   step?: number;
   options?: { value: string; label: string; help?: string }[];
+  /** numbers: the only values allowed; anything else snaps to the nearest */
+  values?: number[];
   default: number | boolean | string;
   help: string;
   /** extra words the search should match */
@@ -44,7 +46,7 @@ export const GRAPHICS_DEFS: GraphicsDef[] = [
   // detail
   { key: 'detailDistance', label: 'Detail distance', group: DT, type: 'float', min: 2, max: 24, step: 0.5, default: 4, help: 'Zoom level (pixels per tile) below which the low-resolution overview replaces full-detail tiles and sprites.', keywords: 'dither lod overview distance' },
   { key: 'detailFade', label: 'Detail fade', group: DT, type: 'float', min: 0, max: 12, step: 0.5, default: 4, help: 'How many pixels per tile the cross-fade between overview and full detail lasts.', keywords: 'dither lod' },
-  { key: 'spriteResolution', label: 'Sprite resolution', group: DT, type: 'float', min: 4, max: 128, step: 1, default: 16, help: 'Pixels per tile that trees, props, objects and buildings are drawn with. They are baked at the next size up that is on offer (16, 32, 48, 64, 96 or 128), each sprite the first time it is needed, and baked again when this changes. 16 matches the terrain\'s pixel size. Creatures and characters are baked at 16 and only follow below that.', keywords: 'pixel size chunky lod sprite detail low res' },
+  { key: 'spriteResolution', label: 'Texture resolution', group: DT, type: 'int', min: 16, max: 128, step: 16, values: [16, 32, 64, 128], default: 16, help: 'Texels per tile of every texture in the world: ground, wall faces, masks, decals, trees, props, objects, buildings, creatures and characters, with the lighting, shadow and water grids following. 16, 32, 64 or 128. Changing it bakes everything again at the new size (standing sprites as they are needed).', keywords: 'pixel size sprite texture resolution detail hd bake' },
   { key: 'mipmaps', label: 'Mipmaps', group: DT, type: 'bool', default: true, help: 'When zoomed out, average the pixels that fall on one screen pixel instead of picking one. Applies to the terrain and to every sprite (trees, props, objects, characters), on colour, shading and glow alike. Stops them shimmering while the view moves; off is crisper but noisier.', keywords: 'mip aliasing shimmer flicker zoom out filter smooth' },
   { key: 'dither', label: 'Dithered fade', group: DT, type: 'bool', default: true, help: 'Cross-fade with an ordered pixel dither (on) or switch hard at the detail distance (off).', keywords: 'dither lod transition' },
   { key: 'outlineCreatures', label: 'Outline: creatures', group: DT, type: 'enum', options: [{ value: 'off', label: 'Off' }, { value: 'subtle', label: 'Subtle' }, { value: 'strong', label: 'Strong' }], default: 'subtle', help: 'A 1 px darker rim (a darker shade of the sprite\'s own edge colour) around enemies, NPCs, bosses and the start marker.', keywords: 'outline edge readability enemies npc' },
@@ -98,7 +100,7 @@ export function normalizeGraphics(partial?: Record<string, unknown> | null): Gra
     else if (d.type === 'enum') { if (d.options!.some((o) => o.value === v)) g[d.key] = v as string; }
     else if (typeof v === 'number' && Number.isFinite(v)) {
       const c = Math.max(d.min!, Math.min(d.max!, v));
-      g[d.key] = d.type === 'int' ? Math.round(c) : c;
+      g[d.key] = d.values ? d.values.reduce((a, b) => (Math.abs(b - c) < Math.abs(a - c) ? b : a)) : d.type === 'int' ? Math.round(c) : c;
     }
   }
   return g;
