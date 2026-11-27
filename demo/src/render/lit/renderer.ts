@@ -152,6 +152,8 @@ export class LitRenderer {
   private pBlit!: Prog;
   /** average sprite texels when zoomed out (graphics setting) */
   private mipSprites = true;
+  /** texels of a sprite per drawn sprite pixel (16 / the sprite resolution setting) */
+  private spriteBlock = 1;
   private pLight!: Prog;
   private pPoint!: Prog;
   private pBright!: Prog;
@@ -468,6 +470,7 @@ export class LitRenderer {
     gl.uniform1f(p.u.uDepthOn, occ ? 1 : 0);
     gl.uniform1f(p.u.uFade, fade);
     gl.uniform1f(p.u.uMip, occ && this.mipSprites ? 1 : 0);
+    gl.uniform1f(p.u.uBlock, occ ? this.spriteBlock : 1);
     gl.uniform3f(p.u.uOutline, this.outlineK[0], this.outlineK[1], this.outlineK[2]);
     if (occ) {
       gl.activeTexture(gl.TEXTURE3);
@@ -682,6 +685,7 @@ export class LitRenderer {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     this.mipSprites = G.mipmaps;
+    this.spriteBlock = 16 / Math.max(4, Math.min(16, G.spriteResolution || 16));
     const pb = this.pBlit;
     gl.useProgram(pb.p);
     gl.uniform1i(pb.u.uA, 0); gl.uniform1i(pb.u.uN, 1); gl.uniform1i(pb.u.uE, 2); gl.uniform1i(pb.u.uT, 3);

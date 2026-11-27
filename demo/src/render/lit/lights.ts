@@ -63,7 +63,9 @@ export function staticLights(dim: Dimension, lay: Layout, st: { torches: [number
       for (let y = by; y < Math.min(h, by + 3); y++)
         for (let x = bx; x < Math.min(w, bx + 3); x++)
           if (ground[y * w + x] === T.LAVA) { n++; sx += x; sy += y; sz += lay.liftPx[y * w + x]; }
-      if (n >= 2) out.push(L(sx / n + 0.5, sy / n + 0.5, sz / n / TILE_PX + 0.5, 3 + n * 0.12, [1.6, 0.55, 0.15], 1.3));
+      // lava glows from its surface, not from head height like a torch on a wall: the light sits just
+      // above the lava, so it washes up the walls and props around it and skims the floor
+      if (n >= 2) out.push(L(sx / n + 0.5, sy / n + 0.5, sz / n / TILE_PX + 0.1, 3 + n * 0.12, [1.6, 0.55, 0.15], 1.3));
     }
   for (const [x, y, z] of st.windows) out.push(L(x, y, z, 1.9, [0.95, 0.58, 0.26], 0));
   for (const [x, y, z] of st.torches) out.push(L(x, y, z - 0.1, 5, [1.7, 0.9, 0.38], 9));

@@ -44,6 +44,7 @@ export const GRAPHICS_DEFS: GraphicsDef[] = [
   // detail
   { key: 'detailDistance', label: 'Detail distance', group: DT, type: 'float', min: 2, max: 24, step: 0.5, default: 4, help: 'Zoom level (pixels per tile) below which the low-resolution overview replaces full-detail tiles and sprites.', keywords: 'dither lod overview distance' },
   { key: 'detailFade', label: 'Detail fade', group: DT, type: 'float', min: 0, max: 12, step: 0.5, default: 4, help: 'How many pixels per tile the cross-fade between overview and full detail lasts.', keywords: 'dither lod' },
+  { key: 'spriteResolution', label: 'Sprite resolution', group: DT, type: 'float', min: 4, max: 16, step: 1, default: 16, help: 'Pixels per tile that trees, props, objects and characters are drawn with. 16 is what they are baked at; lower values average them down to chunkier pixels on their own grid, at any zoom. All three of their textures follow (colour, shading, glow).', keywords: 'pixel size chunky lod sprite detail low res' },
   { key: 'mipmaps', label: 'Mipmaps', group: DT, type: 'bool', default: true, help: 'When zoomed out, average the pixels that fall on one screen pixel instead of picking one. Applies to the terrain and to every sprite (trees, props, objects, characters), on colour, shading and glow alike. Stops them shimmering while the view moves; off is crisper but noisier.', keywords: 'mip aliasing shimmer flicker zoom out filter smooth' },
   { key: 'dither', label: 'Dithered fade', group: DT, type: 'bool', default: true, help: 'Cross-fade with an ordered pixel dither (on) or switch hard at the detail distance (off).', keywords: 'dither lod transition' },
   { key: 'outlineCreatures', label: 'Outline: creatures', group: DT, type: 'enum', options: [{ value: 'off', label: 'Off' }, { value: 'subtle', label: 'Subtle' }, { value: 'strong', label: 'Strong' }], default: 'subtle', help: 'A 1 px darker rim (a darker shade of the sprite\'s own edge colour) around enemies, NPCs, bosses and the start marker.', keywords: 'outline edge readability enemies npc' },
@@ -56,7 +57,7 @@ export const GRAPHICS_DEFS: GraphicsDef[] = [
   // walls
   { key: 'wallRoom', label: 'Wall faces: rooms', group: WL, type: 'float', min: 4, max: 24, step: 1, default: 14, help: 'Indoors and underground every wall leans away from the floor, so all four show a face. This is how wide each face is on screen, in texture pixels (a tile is 16).', keywords: 'dungeon cave interior wall face size splay' },
   { key: 'wallSouth', label: 'Wall faces: outdoors, facing south', group: WL, type: 'float', min: 0, max: 24, step: 1, default: 10, help: 'Outdoors the face that looks toward the camera is the tall one. This is added to its height: 0 is an upright wall.', keywords: 'cliff castle wall face size overworld' },
-  { key: 'wallSide', label: 'Wall faces: outdoors, sides', group: WL, type: 'float', min: 0, max: 16, step: 1, default: 7, help: 'Width of the faces that look east and west outdoors.', keywords: 'cliff castle wall face size overworld left right' },
+  { key: 'wallSide', label: 'Wall faces: outdoors, sides', group: WL, type: 'float', min: 0, max: 16, step: 1, default: 5, help: 'Width of the faces that look east and west outdoors.', keywords: 'cliff castle wall face size overworld left right' },
   { key: 'wallNorth', label: 'Wall faces: outdoors, facing north', group: WL, type: 'float', min: 0, max: 16, step: 1, default: 6, help: 'Width of the face that looks away from the camera outdoors. A wall never covers the ground behind it, whatever this is set to.', keywords: 'cliff castle wall face size overworld up back' },
   { key: 'wallLip', label: 'Wall faces: thin bevel', group: WL, type: 'float', min: 0, max: 6, step: 0.5, default: 1.5, help: 'Width of the bevel on walls that show no side faces (low walls, kerbs, water edges).', keywords: 'lip bevel kerb' },
   // water
@@ -108,7 +109,7 @@ export interface Gfx {
   exposure: number; toneMap: string; ambient: number; sunStrength: number; pointLights: number; maxLights: number;
   bloom: number; bloomThreshold: number; bloomRadius: number;
   shadows: 'baked' | 'flat' | 'off'; shadowStrength: number; shadowSoftness: number; terrainShadows: boolean; contactShadows: number;
-  detailDistance: number; detailFade: number; dither: boolean; mipmaps: boolean; renderScale: number; maxPixels: number;
+  detailDistance: number; detailFade: number; dither: boolean; mipmaps: boolean; spriteResolution: number; renderScale: number; maxPixels: number;
   particles: number; water: number; waterFoam: number; animation: boolean;
   wallRoom: number; wallSouth: number; wallSide: number; wallNorth: number; wallLip: number;
   waterGlint: number; waterGlintDensity: number; waterGlintSize: number; waterGlintCrest: number; waterGlintLowSun: number; waterGlintLights: number;

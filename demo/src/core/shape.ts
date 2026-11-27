@@ -33,7 +33,7 @@ export type WallPattern = [number, number, number, number];
 export interface WallPatterns { main: WallPattern; lip: WallPattern }
 /** Face sizes in px (a tile is 16). */
 export interface WallShape { room: number; south: number; north: number; side: number; lip: number }
-export const DEFAULT_WALLS: WallShape = { room: 14, south: 10, north: 6, side: 7, lip: 1.5 };
+export const DEFAULT_WALLS: WallShape = { room: 14, south: 10, north: 6, side: 5, lip: 1.5 };
 
 /**
  * Three ways a wall shows its sides:
@@ -226,8 +226,12 @@ export function surfacePx(dim: Dimension, liftPx: ArrayLike<number>, kind: Uint8
 }
 
 // ---- for rules: straight from a map
-/** Where things stand on a tile: its middle and halfway to each side. */
-const FOOTPRINT: [number, number][] = [[8, 8], [4, 8], [12, 8], [8, 4], [8, 12]];
+/**
+ * Where a thing stands on a tile: down its middle. A face along the tile's west or east side
+ * is beside it, not under it, so a side face never stops something standing there; a face that
+ * comes across from the north or south does.
+ */
+const FOOTPRINT: [number, number][] = [[8, 8], [8, 4], [8, 12]];
 /** Is anything within a face's reach of the tile lower than it? Most tiles: no, and then they are simply flat. */
 function lowerNear(dim: Dimension, i: number): boolean {
   const { w, h } = dim, x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
@@ -240,7 +244,7 @@ function lowerNear(dim: Dimension, i: number): boolean {
   return false;
 }
 
-/** Is the tile level where something would stand on it: no face under its middle or its sides? */
+/** Is the tile level where something would stand on it: no face under the line down its middle? */
 export function levelAt(dim: Dimension, i: number): boolean {
   if ((kindAt(dim, i) & (3 | KIND.WALK)) || !lowerNear(dim, i)) return true;
   const F = fieldOf(dim), x = i % dim.w, y = (i / dim.w) | 0, L = liftAt(dim, i);

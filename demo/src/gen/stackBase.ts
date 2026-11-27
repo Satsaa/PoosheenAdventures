@@ -149,39 +149,6 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
     });
   }
 
-  // 2b. the rim knows about height. A rim tile that touches a drop (lower land, a river or sea
-  //     below it, on any side or corner) is the cliff's edge: it shows the cliff's faces and
-  //     carries nothing. Above lower LAND the line of trees or rocks stands on the row behind
-  //     it instead, so that row joins the rim; above water the bank is simply left open (a
-  //     second row along every river would cost narrow regions too much of their ground).
-  //     Regions whose rim is built or is water need none of this.
-  const bare = new Uint8Array(n);
-  {
-    const wetAt = (j: number): boolean =>
-      reg[j] >= 0 ? st.river[j] > 0 || (st.border[j] === 1 && STYLES[bp.regions[reg[j]].biome].rimGround === T.DEEP) : bp.kind === 'overworld' && (bp.fill?.kind[scr[j]] ?? FILL.OCEAN) === FILL.OCEAN;
-    const heightAt = (j: number): number | null => {
-      if (reg[j] >= 0) return st.river[j] ? st.segs[st.river[j] - 1].level : bp.regions[reg[j]].elev;
-      if (bp.kind !== 'overworld') return null; // nothing there: not a drop
-      const k = bp.fill?.kind[scr[j]] ?? FILL.OCEAN;
-      return k === FILL.RANGE ? 4 : k === FILL.OCEAN ? 0 : 1;
-    };
-    const grown = (r: number) => STYLES[bp.regions[r].biome].rimGround === undefined;
-    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
-      const i = y * w + x;
-      if (reg[i] < 0 || !st.border[i] || st.river[i] || !grown(reg[i])) continue;
-      const e = bp.regions[reg[i]].elev;
-      // 1 = above water only, 2 = above lower land
-      for (const [dx, dy] of N8) { const j = (y + dy) * w + x + dx, v = heightAt(j); if (v !== null && v < e) bare[i] = Math.max(bare[i], wetAt(j) ? 1 : 2); }
-    }
-    const behind: number[] = [];
-    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
-      const i = y * w + x;
-      if (reg[i] < 0 || st.border[i]) continue;
-      for (const [dx, dy] of N8) { const j = (y + dy) * w + x + dx; if (bare[j] === 2 && reg[j] === reg[i]) { behind.push(i); break; } }
-    }
-    for (const i of behind) st.border[i] = 1;
-  }
-
   // 3. each region keeps its largest walkable piece; slivers cut off by the warp become rim
   const comp = new Int32Array(n).fill(-1);
   const sizes: number[] = [];
@@ -254,7 +221,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
       if (style.rimGround === T.CAVEWALL) dim.elev[i] = region.elev + 1;
       if (style.rimRise) dim.elev[i] = region.elev + style.rimRise + (tower[i] ? 1 : 0);
       if (style.rimGround === T.VOID) dim.region[i] = -1; // sky islands simply end
-    } else if (!bare[i]) dim.deco[i] = st.rng.pick(style.rim);
+    } else dim.deco[i] = st.rng.pick(style.rim);
   }
   if (st.segs.length) dim.flow = st.flow;
   return st;

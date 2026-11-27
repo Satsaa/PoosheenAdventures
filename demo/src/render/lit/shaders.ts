@@ -109,6 +109,7 @@ uniform int uOccOn;
 ` + TERRAIN_SHAPE + `
 uniform float uFade;             // detail fade (dithered)
 uniform float uMip;              // 1: average the texels under a screen pixel when zoomed out
+uniform float uBlock;            // texels of the sprite per drawn sprite pixel (1 = as baked)
 uniform float uK;
 uniform float uDepthOn;
 uniform vec3 uOutline;          // rim strength: creatures, objects, props
@@ -198,13 +199,18 @@ void main() {
   // A sheet's stock mipmaps would bleed neighbouring sprites into each other, so each screen
   // pixel averages the texels of ITS sprite that fall on it: the same result as a mip level
   // made for that sprite alone. Only texels that are part of the sprite count.
+  // The area averaged is whichever is larger: what one screen pixel covers when zoomed out, or
+  // one block of the sprite's own grid when the sprite resolution is set below what it was baked at.
   bool mipd = false; vec4 nM = vec4(0.0); vec4 eM = vec4(0.0);
-  if (uMip > 0.5 && uK < 0.999 && !face) {
-    int nS = uK < 0.3 ? 4 : uK < 0.45 ? 3 : 2;
+  float fMip = uMip > 0.5 ? 1.0 / uK : 1.0;
+  float foot = max(fMip, uBlock);
+  if (foot > 1.001 && !face) {
+    vec2 org = uBlock >= fMip ? floor(vLocal / uBlock) * uBlock : vLocal - 0.5 * foot;
+    int nS = foot > 3.3 ? 4 : foot > 2.2 ? 3 : 2;
     vec3 sum = vec3(0.0); float cov = 0.0; bool gotMat = false;
     for (int sy = 0; sy < 4; sy++) for (int sx = 0; sx < 4; sx++) {
       if (sx >= nS || sy >= nS) continue;
-      ivec2 q = clamp(ivec2(floor(vLocal + (vec2(float(sx), float(sy)) + 0.5) / float(nS) / uK - 0.5 / uK)), ivec2(0), ivec2(vSize) - 1);
+      ivec2 q = clamp(ivec2(floor(org + (vec2(float(sx), float(sy)) + 0.5) / float(nS) * foot)), ivec2(0), ivec2(vSize) - 1);
       if (flip) q.x = int(vSize.x) - 1 - q.x;
       ivec2 sq = ivec2(vSrc.xy) + q;
       vec4 t = texelFetch(uA, sq, 0);
