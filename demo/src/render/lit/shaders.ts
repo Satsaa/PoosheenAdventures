@@ -194,20 +194,29 @@ void main() {
   ivec2 st = ivec2(vSrc.xy) + lq;
   if (face && lp.y >= 48) st = ivec2(vSrc.xy) + ivec2(lp.x, 4 + (lp.y - 4) % 44);
   vec4 a = texelFetch(uA, st, 0);
-  if (uMip > 0.5 && uK < 0.75 && !face) {
-    // zoomed out: a screen pixel covers several texels of the sprite. Average the ones that are
-    // part of it (what a mipmap would hold) and keep the pixel if at least a third of them are.
+  // Mipmapping for sprites, on all three of their textures (colour, normal + height, emission).
+  // A sheet's stock mipmaps would bleed neighbouring sprites into each other, so each screen
+  // pixel averages the texels of ITS sprite that fall on it: the same result as a mip level
+  // made for that sprite alone. Only texels that are part of the sprite count.
+  bool mipd = false; vec4 nM = vec4(0.0); vec4 eM = vec4(0.0);
+  if (uMip > 0.5 && uK < 0.999 && !face) {
     int nS = uK < 0.3 ? 4 : uK < 0.45 ? 3 : 2;
-    vec3 sum = vec3(0.0); float cov = 0.0;
+    vec3 sum = vec3(0.0); float cov = 0.0; bool gotMat = false;
     for (int sy = 0; sy < 4; sy++) for (int sx = 0; sx < 4; sx++) {
       if (sx >= nS || sy >= nS) continue;
       ivec2 q = clamp(ivec2(floor(vLocal + (vec2(float(sx), float(sy)) + 0.5) / float(nS) / uK - 0.5 / uK)), ivec2(0), ivec2(vSize) - 1);
       if (flip) q.x = int(vSize.x) - 1 - q.x;
-      vec4 t = texelFetch(uA, ivec2(vSrc.xy) + q, 0);
-      if (t.a >= 0.5) { sum += t.rgb; cov += 1.0; }
+      ivec2 sq = ivec2(vSrc.xy) + q;
+      vec4 t = texelFetch(uA, sq, 0);
+      if (t.a < 0.5) continue;
+      vec4 tn = texelFetch(uN, sq, 0), te = texelFetch(uE, sq, 0);
+      sum += t.rgb; nM += tn; eM.rgb += te.rgb; cov += 1.0;
+      if (!gotMat) { eM.a = te.a; gotMat = true; }   // a material id cannot be averaged: the first texel's stands
     }
     if (cov < float(nS * nS) * 0.34) discard;
     a = vec4(sum / cov, 1.0);
+    nM /= cov; eM.rgb /= cov;
+    mipd = true;
   }
   if (a.a < 0.5) discard;
   float fadeA = uFade * (vSrc.z < -1.5 ? vSrc.w : 1.0);   // per-instance fade (hidden / done changes)
@@ -227,6 +236,7 @@ void main() {
   if (vSrc.z >= 0.0 && texelFetch(uA, ivec2(vSrc.zw) + lq, 0).a < 0.5) discard;
   vec4 n = texelFetch(uN, st, 0);
   vec4 e = texelFetch(uE, st, 0);
+  if (mipd) { n = nM; e = eM; }
   int mat = int(e.a * 255.0 + 0.5);
   vec3 alb = a.rgb;
   // wall-foot base piece (corner texture): an albedo multiplier whose frame travels in the tint
