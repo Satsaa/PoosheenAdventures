@@ -12,11 +12,11 @@
 // bloom -> grade/vignette composite.
 import type { DimId, Dimension, MapObject, World } from '../../core/types';
 import { D, T } from '../../core/types';
-import { bakeAtlas, bakeStep, lastBakeMs } from '../bake/index';
+import { type SpriteSheet, bakeAtlas, bakeStep, lastBakeMs, spriteSheet } from '../bake/index';
 import { groundMat } from '../bake/ground';
 import { CRYSTAL_LIGHT } from '../bake/models';
 import type { AssetSheet } from '../bake/sheet';
-import { SPRITE_SCALE, TILE_PX } from '../bake/sheet';
+import { TILE_PX } from '../bake/sheet';
 import type { Particles } from '../particles';
 import { npcColor } from '../objects';
 import { type Overview, type OverviewColors, type RGB, buildOverview, overviewPx } from '../overview';
@@ -185,6 +185,9 @@ export class LitRenderer {
   private castCharInst = new InstBuf();
   private charInst = new InstBuf();
   private topTex: WebGLTexture | null = null;
+  /** standing sprites: their own sheet, baked on demand at the chosen resolution (colour, normal, emission, top-down height) */
+  private spr!: SpriteSheet;
+  private sprTex: WebGLTexture[] = [];
   private charTex: WebGLTexture[] = [];
   private charVersion = -1;
   private pCaster!: Prog;
@@ -253,6 +256,7 @@ export class LitRenderer {
     this.charTex.push(texture(gl, CHAR_W, CHAR_H, { internal: gl.R8, format: gl.RED }));
     this.charVersion = -1;
     charAtlas().markAll();
+    this.useSprites(16);
     this.castTex = texture(gl, 1024, 1024);
     this.castFbo = framebuffer(gl, [this.castTex]);
     this.pCaster = program(gl, SPRITE_VS, CASTER_FS, 'caster');
@@ -689,6 +693,7 @@ export class LitRenderer {
     gl.clear(gl.COLOR_BUFFER_BIT);
     this.mipSprites = G.mipmaps;
     this.spriteRes = Math.max(4, G.spriteResolution || 16);
+    this.useSprites(this.spriteRes);
     const pb = this.pBlit;
     gl.useProgram(pb.p);
     gl.uniform1i(pb.u.uA, 0); gl.uniform1i(pb.u.uN, 1); gl.uniform1i(pb.u.uE, 2); gl.uniform1i(pb.u.uT, 3);
@@ -712,7 +717,7 @@ export class LitRenderer {
     this.syncChars();
 
     // standing sprites: props from the grid, objects, characters (depth = row order, occluded by terrain)
-    const fr = this.sheet.frames;
+    const spr = this.spr, sprView = { frames: { get: (k: string) => spr.want(k) ?? undefined, has: (k: string) => spr.has(k) } } as unknown as AssetSheet;
     const wx0 = Math.floor(vx0 / TILE_PX) - 1, wx1 = Math.ceil(vx1 / TILE_PX) + 1;
     const wy0 = Math.floor((vy0 - lay.top) / TILE_PX) - 1, wy1 = Math.ceil((vy1 - lay.top + lay.maxLiftPx) / TILE_PX) + 3;
     // caster region (world tiles): the view plus the reach of shadows toward the sun
@@ -742,7 +747,7 @@ export class LitRenderer {
       const py0 = shadowsOn ? Math.min(wy0, cr.y0) : wy0, py1 = shadowsOn ? Math.max(wy1, cr.y1) : wy1;
       const W = f.dim.w;
       forProps(d.props, f.dim, px0, py0, px1, py1, (i) => {
-        const look = propLook(f.dim, d.props, i, this.sheet, this.seed);
+        const look = propLook(f.dim, d.props, i, sprView, this.seed);
         if (!look) return;
         const x = i % W, y = (i / W) | 0, L = standOf(lay, i), fm = look.frame;
         if (fade > 0 && x >= wx0 && x <= wx1 && y >= wy0 && y <= wy1)
@@ -753,9 +758,10 @@ export class LitRenderer {
     let nObj = 0;
     if (s >= 4) {
       for (const { o, done, attach, alpha } of f.objs) {
-        const key = objectKey(o, done, this.sheet, f.dim);
+        const key = objectKey(o, done, sprView, f.dim);
         if (!key) continue;
-        const frm = fr.get(key)![0];
+        const frm = spr.want(key)?.[0];
+        if (!frm) continue; // being baked: it appears as soon as it is
         const i = o.y * f.dim.w + o.x;
         const L = standOf(lay, i);
         const tint = o.kind === 'gate' && o.gate === 'guard' ? [0.85, 0.45, 0.2] : [1, 1, 1];
@@ -785,7 +791,7 @@ export class LitRenderer {
       gl.depthFunc(gl.LESS);
       gl.depthMask(true);
       gl.clear(gl.DEPTH_BUFFER_BIT);
-      this.drawSprites(pi, k, offX, offY, iw, ih, this.atlas, { lift: d.liftTex }, fade, null, SPRITE_SCALE);
+      this.drawSprites(pi, k, offX, offY, iw, ih, this.sprTex, { lift: d.liftTex }, fade, null, spr.scale);
       this.drawSprites(ai, k, offX, offY, iw, ih, this.charTex, { lift: d.liftTex }, fade);
       gl.disable(gl.DEPTH_TEST);
     }
@@ -831,7 +837,7 @@ export class LitRenderer {
           gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, buf.n);
           gl.bindVertexArray(null);
         };
-        drawCast(ci, this.topTex!, this.atlas[0], SPRITE_SCALE);
+        drawCast(ci, this.sprTex[3], this.sprTex[0], spr.scale);
         drawCast(aci, this.charTex[3], this.charTex[0], 1);
         gl.blendEquation(gl.FUNC_ADD);
         gl.disable(gl.BLEND);
@@ -1065,9 +1071,42 @@ export class LitRenderer {
     litStats.worstFrameMs = Math.max(litStats.worstFrameMs, litStats.lastFrameMs);
   }
 
+  /** Switch to the sprite sheet for this resolution (px per tile); a new one starts empty and fills as sprites are needed. */
+  private useSprites(pxPerTile: number) {
+    const sh = spriteSheet(pxPerTile, this.maxTex);
+    if (sh === this.spr) return;
+    const gl = this.gl;
+    this.sprTex.forEach((t) => delTexture(gl, t));
+    this.spr = sh;
+    this.sprTex = [0, 1, 2].map(() => texture(gl, sh.w, sh.h));
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    this.sprTex.push(texture(gl, sh.w, sh.h, { internal: gl.R8, format: gl.RED }));
+    // these textures are empty: whatever the sheet held for an earlier renderer is baked again
+    for (const key of sh.frames.keys()) sh.queue.push(key);
+    sh.frames.clear();
+    sh.cursor = { x: 0, y: 0, rowH: 0 };
+    sh.full = false;
+  }
+
   /** bake a few deferred sprites and upload what changed in the main atlas */
   private syncAtlas() {
     bakeStep(5);
+    // sprites baked on demand since the last frame go straight to the GPU
+    const up = this.spr.uploads;
+    if (up.length) {
+      const g2 = this.gl;
+      g2.pixelStorei(g2.UNPACK_ALIGNMENT, 1);
+      for (const { x, y, sprite: sp } of up) {
+        const layers = [sp.alb, sp.nrm, sp.emi];
+        for (let i = 0; i < 3; i++) {
+          g2.bindTexture(g2.TEXTURE_2D, this.sprTex[i]);
+          g2.texSubImage2D(g2.TEXTURE_2D, 0, x, y, sp.w, sp.h, g2.RGBA, g2.UNSIGNED_BYTE, new Uint8Array(layers[i].buffer, layers[i].byteOffset, layers[i].byteLength));
+        }
+        g2.bindTexture(g2.TEXTURE_2D, this.sprTex[3]);
+        g2.texSubImage2D(g2.TEXTURE_2D, 0, x, y, sp.w, sp.h, g2.RED, g2.UNSIGNED_BYTE, sp.top);
+      }
+      up.length = 0;
+    }
     const sh = this.sheet;
     if (!sh.dirty || !sh.dirty.length) return;
     const gl = this.gl;

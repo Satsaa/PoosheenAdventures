@@ -350,7 +350,7 @@ void main() {
     // flat card: the silhouette column above this base pixel, as a vertical card
     int oy = int(vSrc.z * uS + 0.5);
     int r = 0;
-    for (; r < 320; r++) { if (r >= oy || texelFetch(uA, ivec2(vSrc.xy) + ivec2(lx, r), 0).a > 0.5) break; }
+    for (; r < 1280; r++) { if (r >= oy || texelFetch(uA, ivec2(vSrc.xy) + ivec2(lx, r), 0).a > 0.5) break; }
     if (r >= oy) discard;
     hh = float(oy - r) / (16.0 * uS);
   } else {

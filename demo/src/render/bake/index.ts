@@ -32,10 +32,8 @@ import { D, T } from '../../core/types';
 import { EDGE_GROUNDS, basePiece, cornerMask, edgeMask, facePiece, faceStrip, groundTile, innerMask, rimPiece, topMask, type Shape } from './ground';
 import { DECO_VARIANTS, WALL_KINDS, decoModel, housePiece, objectModels } from './models';
 import { renderModel } from './sdf';
-import { type AssetSheet, SPRITE_SCALE, Sprite, addToSheet, packSheet } from './sheet';
+import { type AssetSheet, type Frame, Sprite, packSheet } from './sheet';
 
-/** flat props that are composed into the terrain (the same set render/props.ts draws as decals) */
-const DECAL = new Set<number>([D.TUFT, D.FLOWER]);
 
 export { type AssetSheet, type Frame, MAT, TILE_PX, ELEV_PX, HEIGHT_OFF, HEIGHT_SCALE } from './sheet';
 export { CRYSTAL_LIGHT } from './models';
@@ -44,23 +42,15 @@ export { CRYSTAL_LIGHT } from './models';
 const STATIC_KEYS = /^(torch|rail:)/;
 let cached: AssetSheet | null = null;
 export let lastBakeMs = 0;
-/** total time spent in progressive bake steps */
+/** total time spent baking sprites on demand */
 export let deferredBakeMs = 0;
-const deferred: [string, () => Sprite][] = [];
 
-/** Bake queued sprites for up to `budgetMs` into the sheet's free space; true while work remains. */
-export function bakeStep(budgetMs: number): boolean {
-  if (!cached || !deferred.length) return false;
-  const t0 = performance.now();
-  while (deferred.length && performance.now() - t0 < budgetMs) {
-    const [key, make] = deferred.shift()!;
-    if (!addToSheet(cached, key, make())) { deferred.length = 0; console.warn('asset sheet full'); }
-  }
-  deferredBakeMs += performance.now() - t0;
-  return deferred.length > 0;
-}
-export const bakePending = () => deferred.length;
-
+/**
+ * The terrain's own sheet: ground tiles, faces, masks, rims, flat decals, and the few model
+ * sprites the terrain composes in (torches, bridge rails). Baked once, at the tile grid's
+ * resolution. It also holds every prop once at that resolution: the far-zoom overview takes
+ * its colours from there.
+ */
 export function bakeAtlas(): AssetSheet {
   if (cached) return cached;
   const t0 = performance.now();
@@ -88,28 +78,109 @@ export function bakeAtlas(): AssetSheet {
     for (const L of ['p', 'o', 'i']) for (const R of ['p', 'o', 'i']) put(`wf:${g}:${L}${R}`, facePiece(g, 0, L, R));
   }
   for (let bits = 0; bits < 32; bits++) put('wb:' + bits, basePiece(bits));
-  for (const [ds, n] of Object.entries(DECO_VARIANTS)) {
-    const d = Number(ds);
-    for (let v = 0; v < n; v++) {
-      const m = decoModel(d, v);
-      // flat decals are composed into the terrain at its own resolution; everything standing is baked finer
-      if (m) put('d:' + d, renderModel(m, v + d * 7, DECAL.has(d) ? 1 : SPRITE_SCALE));
-    }
-  }
-  for (let v = 0; v < 2; v++) put('d:' + D.PINE + ':snow', renderModel(decoModel(D.PINE, v, { snow: true })!, v + 3, SPRITE_SCALE));
-  for (let v = 0; v < 3; v++) put('d:' + D.MUSHROOM + ':glow', renderModel(decoModel(D.MUSHROOM, v, { glow: true })!, v + 5, SPRITE_SCALE));
+  for (const [key, list] of propMakers()) list.forEach((make) => put(key, make(1)));
+  for (const o of objectModels()) if (STATIC_KEYS.test(o.key)) put(o.key, renderModel(o.model, o.key.length, 1));
   // 1 px checkerboard test sprite (d:255): verifies that every source pixel is drawn the same size
   const chk = new Sprite(16, 16, 0, 0);
   for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) chk.set(x, y, (x + y) & 1 ? [250, 250, 250] : [10, 10, 10], 0, 0, 1, 0, null, 0);
   put('d:255', chk);
-  cached = packSheet(sprites, 2048, 2048);
-  // objects and building pieces are baked progressively after the first frame (bakeStep)
-  for (const o of objectModels()) deferred.push([o.key, () => renderModel(o.model, o.key.length, STATIC_KEYS.test(o.key) ? 1 : SPRITE_SCALE)]);
-  for (const wall of WALL_KINDS) for (let floors = 1; floors <= 2; floors++) for (let mask = 0; mask < 16; mask++)
-    deferred.push([`hp:${wall}:${floors}:${mask}`, () => renderModel(housePiece(mask, floors, wall), mask + floors * 16, SPRITE_SCALE)]);
+  cached = packSheet(sprites, 1024, 1024);
   lastBakeMs = performance.now() - t0;
   return cached;
 }
+
+// ---------------------------------------------------------------- standing sprites, on demand
+// Trees, props, objects and buildings live in a sheet of their own, at whatever resolution is
+// asked for, and each is baked the first time something on screen needs it. Nothing is baked
+// that is not used, so the resolution can be as high as the models are worth.
+
+type Maker = (scale: number) => Sprite;
+let makersCache: Map<string, Maker[]> | null = null;
+function propMakers(): Map<string, Maker[]> {
+  const m = new Map<string, Maker[]>();
+  const add = (k: string, f: Maker) => { const l = m.get(k); if (l) l.push(f); else m.set(k, [f]); };
+  for (const [ds, n] of Object.entries(DECO_VARIANTS)) {
+    const d = Number(ds);
+    for (let v = 0; v < n; v++) { const model = decoModel(d, v); if (model) add('d:' + d, (sc) => renderModel(model, v + d * 7, sc)); }
+  }
+  for (let v = 0; v < 2; v++) add('d:' + D.PINE + ':snow', (sc) => renderModel(decoModel(D.PINE, v, { snow: true })!, v + 3, sc));
+  for (let v = 0; v < 3; v++) add('d:' + D.MUSHROOM + ':glow', (sc) => renderModel(decoModel(D.MUSHROOM, v, { glow: true })!, v + 5, sc));
+  return m;
+}
+function makers(): Map<string, Maker[]> {
+  if (makersCache) return makersCache;
+  const m = propMakers();
+  for (const o of objectModels()) if (!STATIC_KEYS.test(o.key)) m.set(o.key, [(sc) => renderModel(o.model, o.key.length, sc)]);
+  for (const wall of WALL_KINDS) for (let floors = 1; floors <= 2; floors++) for (let mask = 0; mask < 16; mask++)
+    m.set(`hp:${wall}:${floors}:${mask}`, [(sc) => renderModel(housePiece(mask, floors, wall), mask + floors * 16, sc)]);
+  return (makersCache = m);
+}
+
+/** Bake scales on offer: texels per px of the tile grid (1 = 16 texels per tile, 8 = 128). */
+export const SPRITE_SCALES = [1, 2, 3, 4, 6, 8];
+export interface SpriteUpload { x: number; y: number; sprite: Sprite }
+export interface SpriteSheet {
+  w: number;
+  h: number;
+  /** texels per px every sprite in this sheet is baked at */
+  scale: number;
+  /** frames of the sprites baked so far (a key appears once all its variants are in) */
+  frames: Map<string, Frame[]>;
+  /** what `frames` will hold once asked for */
+  has: (key: string) => boolean;
+  /** the frames of a sprite if it is baked; otherwise it is queued and null comes back */
+  want: (key: string) => Frame[] | null;
+  /** sprites baked since the last look, to be uploaded */
+  uploads: SpriteUpload[];
+  cursor: { x: number; y: number; rowH: number };
+  queue: string[];
+  full: boolean;
+}
+
+let sprites: SpriteSheet | null = null;
+/** The sheet of standing sprites at `pxPerTile` (rounded up to a scale on offer), made anew when that changes. */
+export function spriteSheet(pxPerTile: number, maxTex: number): SpriteSheet {
+  const scale = SPRITE_SCALES.find((v) => v * 16 >= pxPerTile) ?? SPRITE_SCALES[SPRITE_SCALES.length - 1];
+  if (sprites && sprites.scale === scale) return sprites;
+  // room for a world's worth of sprites at this scale, within what the GPU takes
+  const side = Math.min(maxTex, scale <= 1 ? 2048 : scale <= 2 ? 4096 : 8192);
+  const all = makers();
+  const sh: SpriteSheet = {
+    w: side, h: side, scale, frames: new Map(), uploads: [], cursor: { x: 0, y: 0, rowH: 0 }, queue: [], full: false,
+    has: (key) => all.has(key),
+    want: (key) => {
+      const got = sh.frames.get(key);
+      if (got) return got;
+      if (all.has(key) && !sh.queue.includes(key)) sh.queue.push(key);
+      return null;
+    },
+  };
+  return (sprites = sh);
+}
+
+/** Bake queued sprites for up to `budgetMs` (always at least one); true while work remains. */
+export function bakeStep(budgetMs: number): boolean {
+  const sh = sprites;
+  if (!sh || !sh.queue.length || sh.full) return false;
+  const t0 = performance.now();
+  do {
+    const key = sh.queue.shift()!;
+    const list: Frame[] = [];
+    for (const make of makers().get(key)!) {
+      const s = make(sh.scale), c = sh.cursor;
+      if (c.x + s.w + 1 > sh.w) { c.x = 0; c.y += c.rowH + 1; c.rowH = 0; }
+      if (c.y + s.h > sh.h) { sh.full = true; console.warn('sprite sheet full at', sh.scale * 16, 'px per tile'); break; }
+      list.push({ x: c.x, y: c.y, w: s.w / s.scale, h: s.h / s.scale, ox: s.ox / s.scale, oy: s.oy / s.scale, ty: s.ty / s.scale, s: s.scale });
+      sh.uploads.push({ x: c.x, y: c.y, sprite: s });
+      c.x += s.w + 1;
+      c.rowH = Math.max(c.rowH, s.h);
+    }
+    if (!sh.full) sh.frames.set(key, list);
+  } while (sh.queue.length && !sh.full && performance.now() - t0 < budgetMs);
+  deferredBakeMs += performance.now() - t0;
+  return sh.queue.length > 0;
+}
+export const bakePending = () => sprites?.queue.length ?? 0;
 
 /** Replace the procedural sheet (e.g. with real pre-rendered sprites). Call before the first render. */
 export function setAssetSheet(sheet: AssetSheet) {

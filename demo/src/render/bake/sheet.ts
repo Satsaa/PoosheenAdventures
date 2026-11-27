@@ -18,12 +18,7 @@
 // So a 1x1 tile footprint covers pixels [ox, ox+16) x [oy, oy+16) and anything taller rises above it.
 
 export const TILE_PX = 16;
-/**
- * Standing sprites (trees, props, objects, buildings) are baked this many texels per px of the
- * tile grid: 2 = 32 texels per tile. Everything that places a sprite keeps working in px; a
- * frame's w, h, ox, oy and ty are in px, and only its x, y point at texels in the sheet.
- */
-export const SPRITE_SCALE = 2;
+
 /** pixels per elevation step (0.4 tile), rounded per level when composing */
 export const ELEV_PX = TILE_PX * 0.4;
 export const HEIGHT_SCALE = 40;
