@@ -12,7 +12,7 @@ import { oneWaySafe, requiredTable } from './validate';
 import { realiseInterior } from './interiorTiles';
 import { carveOpenings, initStack, type ST } from './stackBase';
 import { placeFeatures } from './stackFeatures';
-import { settleTiles } from './settle';
+import { settleShape, settleTiles } from './settle';
 
 export interface TileResult {
   dims: Dimension[];
@@ -42,6 +42,9 @@ export function realiseTiles(bp: Blueprint, seed: number): TileResult {
     const S = bp.ctx.settings;
     const st = initStack(s, s.part.gw, s.part.gh, seed, S.borderWobble, S.scenery, S.riverWidth, S.lava);
     carveOpenings(st, drop);
+    // the walls are settled now, on the bare terrain, before anything is placed: every building,
+    // object and prop then goes onto ground that already has its final shape
+    settleShape(st.dim, (i) => st.barriers.has(i));
     sts.set(s.id, st);
   }
   const S0 = bp.ctx.settings;

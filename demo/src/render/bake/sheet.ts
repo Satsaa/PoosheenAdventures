@@ -182,7 +182,7 @@ export class Sprite {
 }
 
 /** Shelf-pack sprites into one sheet. */
-export function packSheet(sprites: Map<string, Sprite[]>, width = 1024, minH = 1): AssetSheet {
+export function packSheet(sprites: Map<string, Sprite[]>, width = 1024, minH = 1, spare = 0): AssetSheet {
   const items: { key: string; idx: number; s: Sprite }[] = [];
   for (const [key, list] of sprites) list.forEach((s, idx) => items.push({ key, idx, s }));
   items.sort((a, b) => b.s.h - a.s.h || b.s.w - a.s.w);
@@ -195,7 +195,8 @@ export function packSheet(sprites: Map<string, Sprite[]>, width = 1024, minH = 1
     rowH = Math.max(rowH, it.s.h);
   }
   let h = 1;
-  while (h < Math.max(minH, y + rowH + 1)) h *= 2;
+  // (`spare` rows are kept free below what is packed, for sprites added later)
+  while (h < Math.max(minH, y + rowH + 1 + spare)) h *= 2;
   const albedo = new Uint8ClampedArray(width * h * 4), normal = new Uint8ClampedArray(width * h * 4), emissive = new Uint8ClampedArray(width * h * 4);
   const top = new Uint8Array(width * h * 2);
   const frames = new Map<string, Frame[]>();

@@ -14,16 +14,41 @@ import { type AssetSheet, type Frame, Sprite, addToSheet } from './sheet';
 
 export interface WallShapeData { liftPx: ArrayLike<number>; kind: Uint8Array; fits: Uint8Array; walls: WallPatterns }
 
+/** how many wall tiles were baked, and how many found the sheet full (those are drawn the slow way) */
+export const wallStats = { baked: 0, full: 0 };
 const sig = (lows: Low[], L: number): string => lows.map((q) => `${q.ox / 16},${q.oy / 16},${L - q.Lq},${q.rx},${q.ry}${q.cx !== undefined ? `,${q.cx / 16},${q.cy! / 16}` : ''}`).join(';');
+
+/**
+ * Only the lower ground that shapes this tile: what is too far for its wall to reach the tile is
+ * left out, and so is what lies behind other lower ground that is at least as low (a straight wall
+ * is shaped by the row beside it, not by the tiles further along). What is left names the piece,
+ * so every tile of a straight wall is the same sprite.
+ */
+function relevant(lows: Low[], sx: number, sy: number): Low[] {
+  const near = lows.filter((q) => {
+    const gx = Math.max(q.ox - 16, -q.ox - 16, 0), gy = Math.max(q.oy - 16, -q.oy - 16, 0);
+    const rx = q.rx * sx, ry = q.ry * sy;
+    let d = Math.max(gx <= 0 ? 0 : rx < 0.25 ? 9 : gx / rx, gy <= 0 ? 0 : ry < 0.25 ? 9 : gy / ry);
+    if (q.cx !== undefined) {
+      // the nearest the tile comes to the cut's diagonal
+      const u = Math.max(q.cx - 16, -q.cx, 0), v = Math.max(q.cy! - 16, -q.cy!, 0), rd = (rx + ry) / 2, past = u + v - 16;
+      d = Math.max(d, past <= 0 ? 0 : rd < 0.25 ? 9 : past / rd);
+    }
+    return d < 1;
+  });
+  return near.filter((q) => q.cx !== undefined || !near.some((o) => o !== q && o.cx === undefined && o.Lq <= q.Lq &&
+    Math.abs(o.ox) <= Math.abs(q.ox) && Math.abs(o.oy) <= Math.abs(q.oy) && (o.ox === 0 || Math.sign(o.ox) === Math.sign(q.ox)) && (o.oy === 0 || Math.sign(o.oy) === Math.sign(q.oy)) &&
+    (Math.abs(o.ox) < Math.abs(q.ox) || Math.abs(o.oy) < Math.abs(q.oy))));
+}
 
 /** The baked sprite of the wall faces on tile (x, y), or null when the tile has none or the sheet is full. */
 export function wallSprite(sheet: AssetSheet, dim: Dimension, sh: WallShapeData, x: number, y: number, face: Frame, faceKey: string): Frame | null {
   if (!sheet.cursor) return null;
   const i = y * dim.w + x, L = sh.liftPx[i];
   const F: Field = { w: dim.w, h: dim.h, lift: (j) => sh.liftPx[j], kind: (j) => sh.kind[j], pat: sh.walls };
-  const lows = lowsOf(F, x, y);
-  if (!lows.length) return null;
   const sx = sh.fits[i * 2] / 255, sy = sh.fits[i * 2 + 1] / 255;
+  const lows = relevant(lowsOf(F, x, y), sx, sy);
+  if (!lows.length) return null;
   const key = `wl:${faceKey}:${(sh.kind[i] & KIND.LIP) ? 1 : 0}:${sh.fits[i * 2]},${sh.fits[i * 2 + 1]}:${sig(lows, L)}`;
   const had = sheet.frames.get(key);
   if (had) return had[0];
@@ -60,6 +85,7 @@ export function wallSprite(sheet: AssetSheet, dim: Dimension, sh: WallShapeData,
     any = true;
   }
   if (!any) return null;
-  if (!addToSheet(sheet, key, s)) return null;
+  if (!addToSheet(sheet, key, s)) { wallStats.full++; return null; }
+  wallStats.baked++;
   return sheet.frames.get(key)![0];
 }

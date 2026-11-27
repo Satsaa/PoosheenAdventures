@@ -97,7 +97,8 @@ export function bakeAtlas(scale = 1): AssetSheet {
   const chk = new Sprite(16, 16, 0, 0);
   for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) chk.set(x, y, (x + y) & 1 ? [250, 250, 250] : [10, 10, 10], 0, 0, 1, 0, null, 0);
   put('d:255', chk);
-  const sheet = packSheet(sprites, Math.min(8192, 1024 * scale), 1024);
+  // room is kept for the wall tiles, which are baked as the map shows them (bake/walls.ts)
+  const sheet = packSheet(sprites, Math.min(8192, 1024 * scale), 1024, 12 * 16 * scale);
   cachedAt.set(scale, sheet);
   lastBakeMs = performance.now() - t0;
   return sheet;

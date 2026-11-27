@@ -1,6 +1,7 @@
 // Page wiring: seed bar, map stage, sphere scrubber, info card, side panels.
 import { D, T, type Dimension, type DimId, type LocId, type MapObject, type World } from './core/types';
 import { settleTiles } from './gen/settle';
+import { wallStats } from './render/bake/walls';
 import { fmtReq } from './core/req';
 import { phaseAt, stateAt, type WorldState } from './core/view';
 import { normalizeGraphics, type GraphicsSettings } from './render/graphics';
@@ -254,7 +255,7 @@ function scene(rows: string[], opts: { settle?: boolean; kind?: 'overworld' | 'i
   showDim(dim.id);
   map.fitAll();
 }
-(window as unknown as Record<string, unknown>).poosheen = { show: (id: DimId) => { showDim(id); map.fitAll(); }, world: () => world, time: (h: number) => view.setTime?.(h), scene, focus: (id: DimId, x: number, y: number) => showDim(id, { x, y }) };
+(window as unknown as Record<string, unknown>).poosheen = { show: (id: DimId) => { showDim(id); map.fitAll(); }, world: () => world, time: (h: number) => view.setTime?.(h), wallStats, scene, focus: (id: DimId, x: number, y: number) => showDim(id, { x, y }) };
 
 // fullscreen for the map: the browser's own where it is allowed, otherwise the stage fills the page
 const stage = document.querySelector('.stage') as HTMLElement;

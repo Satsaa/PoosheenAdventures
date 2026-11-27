@@ -310,7 +310,10 @@ export function fitOf(F: Field, x: number, y: number, lows: Low[] = lowsOf(F, x,
   const { w, h } = F, i = y * w + x, L = F.lift(i);
   if ((F.kind(i) & (3 | KIND.WALK)) || !lows.length) return [1, 1];
   const [sx, sy] = axisFit(F, x, y);
-  if (hasTop(L, lows, sx, sy)) return [sx, sy];
+  if (over(L, lows, 8, 8, sx, sy) >= L - 0.5 || hasTop(L, lows, sx, sy)) return [sx, sy];
+  // equally high ground within reach that has a top: first what is cheap to tell (the map's edge,
+  // the void, ground one can walk on, ground with nothing lower near it), then the rest
+  const later: [number, number][] = [];
   for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     for (let k = 1; k <= 2; k++) {
       const xx = x + dx * k, yy = y + dy * k;
@@ -319,9 +322,14 @@ export function fitOf(F: Field, x: number, y: number, lows: Low[] = lowsOf(F, x,
       if ((F.kind(j) & 3) === KIND.VOID) return [sx, sy];             // or at the void: no top needed
       if ((F.kind(j) & 3) || F.lift(j) < L) break;
       if (F.kind(j) & KIND.WALK) return [sx, sy];
-      const [ax, ay] = axisFit(F, xx, yy);
-      if (hasTop(F.lift(j), lowsOf(F, xx, yy), ax, ay)) return [sx, sy];
+      later.push([xx, yy]);
     }
+  }
+  for (const [xx, yy] of later) {
+    const j = yy * w + xx, lq = lowsOf(F, xx, yy);
+    if (!lq.length) return [sx, sy];
+    const [ax, ay] = axisFit(F, xx, yy);
+    if (over(F.lift(j), lq, 8, 8, ax, ay) >= F.lift(j) - 0.5 || hasTop(F.lift(j), lq, ax, ay)) return [sx, sy];
   }
   for (const t of [0.7, 0.5, 0.3, 0.15]) if (hasTop(L, lows, sx * t, sy * t)) return [sx * t, sy * t];
   return [0, 0];
@@ -385,7 +393,10 @@ function lowerNear(dim: Dimension, i: number): boolean {
 export function levelAt(dim: Dimension, i: number): boolean {
   if ((kindAt(dim, i) & (3 | KIND.WALK)) || !lowerNear(dim, i)) return true;
   const F = fieldOf(dim), x = i % dim.w, y = (i / dim.w) | 0, L = liftAt(dim, i);
-  const lows = lowsOf(F, x, y), [sx, sy] = fitOf(F, x, y, lows);
+  const lows = lowsOf(F, x, y);
+  // (faces are only ever fitted smaller: level under full-size faces is level, without working the fit out)
+  if (FOOTPRINT.every(([px, py]) => over(L, lows, px, py, 1, 1) >= L - 0.5)) return true;
+  const [sx, sy] = fitOf(F, x, y, lows);
   return FOOTPRINT.every(([px, py]) => over(L, lows, px, py, sx, sy) >= L - 0.5);
 }
 
@@ -522,13 +533,17 @@ export function facedAt(dim: Dimension, i: number): boolean {
  * all face when the ground behind it carries the top; what may not happen is ground that is
  * marked high and never gets there.
  */
-export function reachesTop(dim: Dimension, i: number): boolean {
+export function reachesTop(dim: Dimension, i: number, memo?: Int8Array): boolean {
   if ((kindAt(dim, i) & (3 | KIND.WALK)) || !lowerNear(dim, i)) return true;
   const F = fieldOf(dim), { w, h } = dim, L = liftAt(dim, i), x = i % w, y = (i / w) | 0;
   const topOn = (xx: number, yy: number): boolean => {
-    if (F.kind(yy * w + xx) & KIND.WALK) return true;
+    const j = yy * w + xx;
+    if (F.kind(j) & KIND.WALK) return true;
+    if (memo && memo[j]) return memo[j] === 1;
     const lows = lowsOf(F, xx, yy), [sx, sy] = fitOf(F, xx, yy, lows);
-    return hasTop(F.lift(yy * w + xx), lows, sx, sy);
+    const ok = over(F.lift(j), lows, 8, 8, sx, sy) >= F.lift(j) - 0.5 || hasTop(F.lift(j), lows, sx, sy);
+    if (memo) memo[j] = ok ? 1 : 2;
+    return ok;
   };
   if (topOn(x, y)) return true;
   for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {

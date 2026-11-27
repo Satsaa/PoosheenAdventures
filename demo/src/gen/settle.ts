@@ -273,8 +273,8 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   for (let i = 0; i < n; i++) {
     // (which walls are cut is the wall table's business: core/shape.ts)
     // closed ground and walkable shores alike: any tile can be cut (what may be is cornerAt's business)
-    if (keep(i) || nearHouse(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut') continue;
-    if (cornerAt(dim, i) && !thinAt(dim, i)) cut[i] = 1;
+    if (!cornerAt(dim, i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || thinAt(dim, i) || nearHouse(i)) continue;
+    cut[i] = 1;
   }
   // A diagonal wall is as deep as the straight walls it joins, so the edge of the top above it is
   // diagonal too: every tile the wall crosses is closed. Where a walkable tile is in the way and
@@ -305,8 +305,8 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
     if (!changed) break;
     // closing tiles can make new corners
     for (let i = 0; i < n; i++) {
-      if (cut[i] || square.has(i) || keep(i) || nearHouse(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut') continue;
-      if (cornerAt(dim, i) && !thinAt(dim, i)) cut[i] = 1;
+      if (cut[i] || !cornerAt(dim, i) || square.has(i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || thinAt(dim, i) || nearHouse(i)) continue;
+      cut[i] = 1;
     }
   }
   for (let i = 0; i < n; i++) if (cut[i] && !cornerAt(dim, i)) cut[i] = 0;

@@ -526,12 +526,15 @@ float shadowRay(vec3 P, vec3 S) {
   vec2 d = S.xy / lxy;
   float tanE = S.z / lxy;
   float maxT = min(9.0, 7.0 / max(tanE, 0.05));
-  // one texel of the caster map per step: nothing as thin as a trunk can fall between two samples
-  float stepT = 1.0 / uCastR;
-  for (int i = 1; i <= 96; i++) {
-    float t = float(i) * stepT;
+  // Steps start one texel of the caster map long, so that nothing as thin as a trunk falls between
+  // two samples where its shadow begins, and grow with the distance: far along the ray a shadow
+  // is wide, and a longer step still lands in it.
+  float t = 0.0;
+  for (int i = 0; i < 40; i++) {
+    t += max(1.0 / uCastR, t * 0.1);
     if (t > maxT) break;
     float hz = P.z + t * tanE;
+    if (hz > P.z + 6.0) break;
     vec3 c = castAt(P.xy + d * t);
     if (c.x * uTerrainSh > hz + 0.03 || (c.y > hz + 0.03 && c.z <= hz + 0.03)) return 1.0;
   }
