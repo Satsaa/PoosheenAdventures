@@ -357,6 +357,11 @@ export class LitRenderer {
     this.freeDims();
   }
 
+  /** Texels per tile for every texture (16, 32, 64 or 128). Call between frames: it drops what was composed, and the fog mask must be sent again. */
+  setResolution(pxPerTile: number) {
+    this.useResolution(pxPerTile || 16);
+  }
+
   /** The shape of the terrain changed (wall face sizes): every composed chunk is stale. */
   resetTerrain() {
     this.freeDims();
@@ -690,7 +695,6 @@ export class LitRenderer {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     this.mipSprites = G.mipmaps;
-    this.useResolution(G.spriteResolution || 16);
     this.spriteRes = this.texS * 16;
     const pb = this.pBlit;
     gl.useProgram(pb.p);

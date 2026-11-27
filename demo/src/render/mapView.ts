@@ -274,6 +274,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     const r = LitRenderer.create(gc);
     if (!r) { gc.remove(); glFailed = true; return; }
     lit = r;
+    r.setResolution(G.spriteResolution);
     glCanvas = gc;
     r.onLost = () => start();
     r.onRestored = () => { maskDirty = true; start(); };
@@ -310,7 +311,10 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
       // walls changed shape: what stands on them moves, and the terrain is composed again
       if (dim && dr) lay = layout(dim, dr.ve, dr.voidElev);
       lit?.resetTerrain();
+      maskDirty = true;
     }
+    lit?.setResolution(G.spriteResolution);
+    maskDirty = true;
     particles.density = G.particles;
     particles.cap = Math.round(300 * Math.min(1.5, G.particles));
     start();
