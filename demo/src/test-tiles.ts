@@ -78,7 +78,8 @@ const expect = (name: string, d: Dimension, wants: RegExp, fixable: boolean) => 
 {
   const d = over(fresh());
   // (a block of 3 by 4, the smallest raised place there may be: anything smaller is tidied away, which is another rule's business)
-  const free = (k: number) => !d.solid[k] && d.ground[k] === T.GRASS && !d.objects.some((o) => Math.abs(o.x - (k % d.w)) < 3 && Math.abs(o.y - ((k / d.w) | 0)) < 3);
+  const open = new Set<number>([T.GRASS, T.SAND, T.STONE, T.SNOW, T.DIRT]);
+  const free = (k: number) => !d.solid[k] && open.has(d.ground[k]) && !d.objects.some((o) => Math.abs(o.x - (k % d.w)) < 2 && Math.abs(o.y - ((k / d.w) | 0)) < 2);
   const block = (k: number) => [0, 1, 2, 3].flatMap((r) => [0, 1, 2].map((c) => k + r * d.w + c));
   const around = (k: number) => [-1, 0, 1, 2, 3, 4].flatMap((r) => [-1, 0, 1, 2, 3].map((c) => k + r * d.w + c));
   const i = find(d, (k) => k > 2 * d.w && k < d.w * (d.h - 6) && around(k).every(free));
