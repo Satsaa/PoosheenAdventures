@@ -102,12 +102,34 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
   const scr = new Int32Array(n);
   const blocky = bp.regions.map((r) => !!r.blocky), anyBlocky = blocky.some(Boolean);
   const isBlocky = (s: number) => bp.part.cell[s] >= 0 && blocky[bp.part.cell[s]];
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+  // Outlines are made of straight runs and 45 degree runs only, never a staircase of single tiles:
+  // the warp is sampled once per block of Q x Q tiles, which gives outlines of straight pieces at
+  // least Q long, and then every corner of a block where the two blocks beside it belong to another
+  // region is cut off diagonally, half a block along each side. A corner that sticks out and the
+  // corner that goes in next to it are cut the same way, so blocks that step diagonally become one
+  // straight 45 degree line, and a shallower slope becomes straight runs joined by 45 degree runs.
+  const Q = 4, qw = Math.ceil(w / Q), qh = Math.ceil(h / Q);
+  const qs = new Int32Array(qw * qh);
+  for (let by = 0; by < qh; by++) for (let bx = 0; bx < qw; bx++) {
+    const x = Math.min(w - 1, bx * Q + Q / 2), y = Math.min(h - 1, by * Q + Q / 2);
     const wx = x + (valueNoise(seed, x / 9, y / 9) - 0.5) * 2 * A;
     const wy = y + (valueNoise(seed ^ 0x51ed, x / 9, y / 9) - 0.5) * 2 * A;
     const sx = Math.max(0, Math.min(gw - 1, Math.floor(wx / SW)));
     const sy = Math.max(0, Math.min(gh - 1, Math.floor(wy / SH)));
-    let s = sy * gw + sx;
+    qs[by * qw + bx] = sy * gw + sx;
+  }
+  const qAt = (bx: number, by: number) => qs[Math.max(0, Math.min(qh - 1, by)) * qw + Math.max(0, Math.min(qw - 1, bx))];
+  const cellOf = (sc: number) => bp.part.cell[sc];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const bx = (x / Q) | 0, by = (y / Q) | 0, u = x - bx * Q, v = y - by * Q;
+    let s = qAt(bx, by);
+    // the nearest corner of the block, and how far in from it this tile is
+    const cx = u < Q / 2 ? -1 : 1, cy = v < Q / 2 ? -1 : 1;
+    const du = cx < 0 ? u + 0.5 : Q - u - 0.5, dv = cy < 0 ? v + 0.5 : Q - v - 0.5;
+    if (du + dv < Q / 2) {
+      const hs = qAt(bx + cx, by), vs = qAt(bx, by + cy);
+      if (cellOf(hs) === cellOf(vs) && cellOf(hs) !== cellOf(s)) s = hs;
+    }
     if (anyBlocky) { const plain = ((y / SH) | 0) * gw + ((x / SW) | 0); if (isBlocky(plain) || isBlocky(s)) s = plain; }
     scr[y * w + x] = s;
     reg[y * w + x] = bp.part.cell[s];
