@@ -224,7 +224,7 @@ $('btnBack').addEventListener('click', () => {
 });
 $('btnFit').addEventListener('click', () => map.fitAll());
 // a handle for the console and for automated checks
-(window as unknown as Record<string, unknown>).poosheen = { show: (id: DimId) => { showDim(id); map.fitAll(); }, world: () => world };
+(window as unknown as Record<string, unknown>).poosheen = { show: (id: DimId) => { showDim(id); map.fitAll(); }, world: () => world, time: (h: number) => view.setTime?.(h) };
 
 // fullscreen for the map: the browser's own where it is allowed, otherwise the stage fills the page
 const stage = document.querySelector('.stage') as HTMLElement;

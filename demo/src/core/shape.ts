@@ -11,11 +11,21 @@ import { T, type Dimension, type DimKind } from './types';
 export const isWallG = (g: number): boolean => g === T.WALL || g === T.CAVEWALL;
 /** walls stand this much taller than their level says, so rooms read as solid blocks */
 export const WALL_BOOST = 0.6;
+/**
+ * Land stands this much (in levels; about 3 px) above water and lava of its own level, so every
+ * shore has a bank: a short slope from the land down into the liquid.
+ */
+export const BANK_RISE = 0.5;
+/** the run of a bank in px, on every side; short enough that the middle of the tile stays level */
+export const BANK_RUN = 4;
+/** steps down to liquid of at most this many px are banks on the south side too (taller ones are cliffs there) */
+export const BANK_STEP = 4;
 /** px of lift per level (a tile is 16 px) */
 export const LIFT_PX = 6.4;
 
 /** Height of a tile in levels as drawn: its level, plus the boost for wall material. */
-export const veAt = (dim: Dimension, i: number): number => dim.elev[i] + (isWallG(dim.ground[i]) ? WALL_BOOST : 0);
+export const veAt = (dim: Dimension, i: number): number =>
+  dim.elev[i] + (isWallG(dim.ground[i]) ? WALL_BOOST : 0) + (dim.ground[i] === T.WATER || dim.ground[i] === T.DEEP || dim.ground[i] === T.LAVA ? 0 : BANK_RISE);
 export const liftOf = (ve: number): number => Math.round(ve * LIFT_PX);
 /** Lift of a tile's top in px. */
 export const liftAt = (dim: Dimension, i: number): number => liftOf(veAt(dim, i));
@@ -51,7 +61,8 @@ export function patternsFor(kind: DimKind, s: WallShape = DEFAULT_WALLS): WallPa
 export const KIND = { GROUND: 0, VOID: 1, LIQUID: 2, LIP: 4, SLOPED: 8, WALK: 16 } as const;
 /**
  * Two guarantees of the model, so that no tile can lose its top however faces crowd it:
- *  - a tile that can be walked on is level: its sides are upright, no face ever runs across it;
+ *  - a tile that can be walked on is level where things stand on it: no face ever runs across it.
+ *    Its only slopes are the banks into water or lava beside it, BANK_RUN wide along that edge;
  *  - where faces rise from both sides of raised ground (a hill, a ridge, a thin wall), their runs
  *    shrink together until at least this much level top is left between them.
  * Both are about shape only: they never change which tiles can be walked on.
@@ -69,13 +80,15 @@ export function tileKinds(dim: Dimension, liftPx: ArrayLike<number>): Uint8Array
   for (let i = 0; i < n; i++) kind[i] = kindAt(dim, i);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const i = y * w + x;
-    if (kind[i] & (3 | KIND.WALK)) continue; // liquid, nothing and walkable ground have no sloped sides
+    if (kind[i] & 3) continue; // liquid and nothing have no sloped sides
+    const walk = (kind[i] & KIND.WALK) !== 0; // walkable ground only banks into liquid right beside it
+    const R = walk ? 1 : 2;
     let sloped = false;
-    for (let dy = -2; dy <= 2 && !sloped; dy++) for (let dx = -2; dx <= 2; dx++) {
+    for (let dy = -R; dy <= R && !sloped; dy++) for (let dx = -R; dx <= R; dx++) {
       const xx = x + dx, yy = y + dy;
       if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
       const j = yy * w + xx;
-      if ((kind[j] & 3) !== KIND.VOID && liftPx[j] < liftPx[i]) { sloped = true; break; }
+      if ((walk ? (kind[j] & 3) === KIND.LIQUID : (kind[j] & 3) !== KIND.VOID) && liftPx[j] < liftPx[i]) { sloped = true; break; }
     }
     if (sloped) kind[i] |= KIND.SLOPED;
   }
@@ -93,7 +106,9 @@ export interface Field {
 }
 
 /** The run in px of a face of this tile toward a neighbour `dL` px lower, before fitting. */
-function runOf(F: Field, lip: boolean, sideways: boolean, south: boolean, kq: number, dL: number): number {
+function runOf(F: Field, lip: boolean, sideways: boolean, south: boolean, kq: number, dL: number, walk = false): number {
+  // into water or lava: a bank, except where a cliff of some height looks south over it
+  if (kq === KIND.LIQUID && (walk || sideways || !south || dL <= BANK_STEP)) return BANK_RUN;
   const W = lip || kq === KIND.LIQUID ? F.pat.lip : F.pat.main;
   return sideways ? W[3] : Math.min(32, south ? Math.max(0, W[0] - W[1] * dL) : W[2] + dL);
 }
@@ -103,17 +118,17 @@ interface Low { ox: number; oy: number; Lq: number; dL: number; rx: number; ry: 
 
 /** Everything lower than tile (x, y) within a face's reach, looked up once. */
 function lowsOf(F: Field, x: number, y: number): Low[] {
-  const { w, h } = F, i = y * w + x, L = F.lift(i), lip = (F.kind(i) & KIND.LIP) !== 0;
+  const { w, h } = F, i = y * w + x, L = F.lift(i), lip = (F.kind(i) & KIND.LIP) !== 0, walk = (F.kind(i) & KIND.WALK) !== 0;
   const out: Low[] = [];
   for (let j = -2; j <= 2; j++) for (let k = -2; k <= 2; k++) {
     if (!j && !k) continue;
     const xx = x + k, yy = y + j;
     if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
     const q = yy * w + xx, kq = F.kind(q) & 3;
-    if (kq === KIND.VOID) continue;
+    if (kq === KIND.VOID || (walk && kq !== KIND.LIQUID)) continue;
     const Lq = F.lift(q);
     if (Lq >= L) continue;
-    out.push({ ox: k * 16, oy: j * 16, Lq, dL: L - Lq, rx: runOf(F, lip, true, false, kq, L - Lq), ry: runOf(F, lip, false, j > 0, kq, L - Lq) });
+    out.push({ ox: k * 16, oy: j * 16, Lq, dL: L - Lq, rx: runOf(F, lip, true, false, kq, L - Lq, walk), ry: runOf(F, lip, false, j > 0, kq, L - Lq, walk) });
   }
   return out;
 }
@@ -193,7 +208,7 @@ export function fitOf(F: Field, x: number, y: number, lows: Low[] = lowsOf(F, x,
 /** Lift in px of the surface at point (px, py) of tile (x, y), px and py in 0..16. */
 export function surface(F: Field, x: number, y: number, px: number, py: number): number {
   const i = y * F.w + x;
-  if (F.kind(i) & (3 | KIND.WALK)) return F.lift(i);
+  if (F.kind(i) & 3) return F.lift(i);
   const lows = lowsOf(F, x, y), [sx, sy] = fitOf(F, x, y, lows);
   return over(F.lift(i), lows, px, py, sx, sy);
 }

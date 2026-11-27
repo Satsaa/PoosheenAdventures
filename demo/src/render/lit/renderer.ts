@@ -773,7 +773,7 @@ export class LitRenderer {
         if (fade > 0) { pi.push(o.x * TILE_PX - frm.ox + dx, lay.top + o.y * TILE_PX - L - frm.oy + dy, frm.w, frm.h, frm.x, frm.y, -2, alpha, L / TILE_PX, o.x, o.y, 64 | 1024, tint[0], tint[1], tint[2], e); nObj++; }
         if (shadowsOn && !dy && alpha > 0.5) pushCaster(ci, frm, o.x + dx / TILE_PX, o.y, L / TILE_PX, false);
       }
-      const ca = charAtlas(this.texS);
+      const ca = charAtlas(this.texS, G.animationFps);
       for (const a of f.actors) {
         const dir = a.dir === 'w' ? 'e' : a.dir;
         const cf = ca.get(a.kind, a.clip, dir) || ca.get(a.kind, 'idle', dir) || ca.get(a.kind, 'idle', 's');
@@ -1091,12 +1091,12 @@ export class LitRenderer {
     const s = (this.sheet = bakeAtlas(S));
     this.atlas = [s.albedo, s.normal, s.emissive].map((d) => texture(gl, s.w, s.h, { data: new Uint8Array(d.buffer, d.byteOffset, d.byteLength) }));
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    this.topTex = texture(gl, s.w, s.h, { internal: gl.R8, format: gl.RED, data: s.top });
+    this.topTex = texture(gl, s.w, s.h, { internal: gl.RG8, format: gl.RG, data: s.top });
     if (s.dirty) s.dirty.length = 0;
     this.charTex.forEach((t) => delTexture(gl, t));
     const ca = charAtlas(S);
     this.charTex = [0, 1, 2].map(() => texture(gl, ca.w, ca.h));
-    this.charTex.push(texture(gl, ca.w, ca.h, { internal: gl.R8, format: gl.RED }));
+    this.charTex.push(texture(gl, ca.w, ca.h, { internal: gl.RG8, format: gl.RG }));
     this.charVersion = -1;
     ca.markAll();
     this.useSprites(S * 16);
@@ -1111,7 +1111,7 @@ export class LitRenderer {
     this.spr = sh;
     this.sprTex = [0, 1, 2].map(() => texture(gl, sh.w, sh.h));
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    this.sprTex.push(texture(gl, sh.w, sh.h, { internal: gl.R8, format: gl.RED }));
+    this.sprTex.push(texture(gl, sh.w, sh.h, { internal: gl.RG8, format: gl.RG }));
     // these textures are empty: whatever the sheet held for an earlier renderer is baked again
     for (const key of sh.frames.keys()) sh.queue.push(key);
     sh.frames.clear();
@@ -1134,7 +1134,7 @@ export class LitRenderer {
           g2.texSubImage2D(g2.TEXTURE_2D, 0, x, y, sp.w, sp.h, g2.RGBA, g2.UNSIGNED_BYTE, new Uint8Array(layers[i].buffer, layers[i].byteOffset, layers[i].byteLength));
         }
         g2.bindTexture(g2.TEXTURE_2D, this.sprTex[3]);
-        g2.texSubImage2D(g2.TEXTURE_2D, 0, x, y, sp.w, sp.h, g2.RED, g2.UNSIGNED_BYTE, sp.top);
+        g2.texSubImage2D(g2.TEXTURE_2D, 0, x, y, sp.w, sp.h, g2.RG, g2.UNSIGNED_BYTE, sp.top);
       }
       up.length = 0;
     }
@@ -1152,7 +1152,7 @@ export class LitRenderer {
         gl.texSubImage2D(gl.TEXTURE_2D, 0, r.x, r.y, r.w, r.h, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(layers[i].buffer));
       }
       gl.bindTexture(gl.TEXTURE_2D, this.topTex);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, r.x, r.y, r.w, r.h, gl.RED, gl.UNSIGNED_BYTE, sh.top);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, r.x, r.y, r.w, r.h, gl.RG, gl.UNSIGNED_BYTE, sh.top);
     }
     gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
     gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
@@ -1163,6 +1163,7 @@ export class LitRenderer {
   /** upload character frames baked since the last frame */
   private syncChars() {
     const ca = charAtlas(this.texS);
+    // a new atlas (another frame rate) starts empty: every slot is filled and uploaded again as it is baked
     ca.step(6);
     if (!ca.dirty.length) return;
     const gl = this.gl;
@@ -1177,7 +1178,7 @@ export class LitRenderer {
         gl.texSubImage2D(gl.TEXTURE_2D, 0, r.x, r.y, r.w, r.h, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(layers[i].buffer));
       }
       gl.bindTexture(gl.TEXTURE_2D, this.charTex[3]);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, r.x, r.y, r.w, r.h, gl.RED, gl.UNSIGNED_BYTE, ca.top);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, r.x, r.y, r.w, r.h, gl.RG, gl.UNSIGNED_BYTE, ca.top);
     }
     gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
     gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);

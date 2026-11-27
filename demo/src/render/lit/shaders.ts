@@ -40,7 +40,8 @@ void loadNb(ivec2 t) {
     nbL[j * 5 + i] = L; nbK[j * 5 + i] = K;
   }
 }
-float runOf(bool sideways, bool south, float kq, float dL, bool lip) {
+float runOf(bool sideways, bool south, float kq, float dL, bool lip, bool walk) {
+  if (kq > 1.5 && (walk || sideways || !south || dL <= 4.0)) return 4.0;   // a bank into water or lava
   vec4 W = (lip || kq > 1.5) ? uWallL : uWallP;
   return sideways ? W.w : min(32.0, south ? max(0.0, W.x - W.y * dL) : W.z + dL);
 }
@@ -51,7 +52,8 @@ float runOf(bool sideways, bool south, float kq, float dL, bool lip) {
 float terrH(vec2 p, out int dir, out float lowL, out float run) {
   float L = nbL[12], K = nbK[12];
   dir = 0; lowL = L; run = 0.0;
-  if (mod(K, 4.0) > 0.5 || K >= 15.5) return L;
+  if (mod(K, 4.0) > 0.5) return L;
+  bool walk = K >= 15.5;   // walkable ground: only banks into liquid beside it
   bool lip = mod(K, 8.0) >= 3.5;
   float sx = nbFit.x, sy = nbFit.y;
   float h = L;
@@ -59,15 +61,15 @@ float terrH(vec2 p, out int dir, out float lowL, out float run) {
     int n = j * 5 + i;
     if (n == 12) continue;
     float kq = mod(nbK[n], 4.0);
-    if (kq > 0.5 && kq < 1.5) continue;
+    if ((kq > 0.5 && kq < 1.5) || (walk && kq < 1.5)) continue;
     float Lq = nbL[n];
     if (Lq >= L) continue;
     float dL = L - Lq;
     float ox = float(i - 2) * 16.0, oy = float(j - 2) * 16.0;
     float gx = max(max(ox - p.x, p.x - (ox + 16.0)), 0.0);
     float gy = max(max(oy - p.y, p.y - (oy + 16.0)), 0.0);
-    float rx = runOf(true, false, kq, dL, lip) * sx;
-    float ry = runOf(false, j > 2, kq, dL, lip) * sy;
+    float rx = runOf(true, false, kq, dL, lip, walk) * sx;
+    float ry = runOf(false, j > 2, kq, dL, lip, walk) * sy;
     float dx = gx <= 0.0 ? 0.0 : (rx < 0.25 ? 9.0 : gx / rx);
     float dy = gy <= 0.0 ? 0.0 : (ry < 0.25 ? 9.0 : gy / ry);
     float hq = Lq + dL * min(max(dx, dy), 1.0);
@@ -328,7 +330,9 @@ void main() {
 }`;
 
 // ---------------------------------------------------------------- world-space shadow caster height map
-// R = props / characters (max height in tiles * 40 / 255), G = terrain lift. Instances use SPRITE_VS
+// R = top of props / characters (height in tiles * 40 / 255), B = 1 - their underside, G = terrain lift.
+// What stands on the ground is a volume between an underside and a top, not a solid column: the
+// space under a tree's crown or under something that flies lets light through. Instances use SPRITE_VS
 // with dst in ground px (16 per tile), mapped into the caster map.
 export const CASTER_FS = HDR + `
 uniform sampler2D uTop, uA;
@@ -345,7 +349,7 @@ void main() {
   ivec2 tSize = ivec2(vSize * uS + 0.5);
   ivec2 lp = clamp(ivec2(floor(vLocal * uS)), ivec2(0), tSize - 1);
   int lx = flip ? tSize.x - 1 - lp.x : lp.x;
-  float hh;
+  float hh, hb = 0.0;
   if ((flags & 256) != 0) {
     // flat card: the silhouette column above this base pixel, as a vertical card
     int oy = int(vSrc.z * uS + 0.5);
@@ -354,11 +358,14 @@ void main() {
     if (r >= oy) discard;
     hh = float(oy - r) / (16.0 * uS);
   } else {
-    float v = texelFetch(uTop, ivec2(vSrc.xy) + ivec2(lx, lp.y), 0).r * 255.0;
-    if (v < 0.5) discard;
-    hh = (v - 1.0) / 40.0;
+    vec2 tb = texelFetch(uTop, ivec2(vSrc.xy) + ivec2(lx, lp.y), 0).rg * 255.0;
+    if (tb.r < 0.5) discard;
+    hh = (tb.r - 1.0) / 40.0;
+    hb = tb.g / 40.0;
   }
-  o = vec4(clamp((vInst.x + hh) * 40.0 / 255.0, 0.0, 1.0), 0.0, 0.0, 0.0);
+  // R: the highest point of what stands here; B: one minus its lowest point (the blend keeps the
+  // maximum of each, so where several things overlap the volume runs from the lowest to the highest)
+  o = vec4(clamp((vInst.x + hh) * 40.0 / 255.0, 0.0, 1.0), 0.0, 1.0 - clamp((vInst.x + hb) * 40.0 / 255.0, 0.0, 1.0), 0.0);
 }`;
 
 export const TERRAIN_H_FS = HDR + TERRAIN_SHAPE + `
@@ -455,11 +462,12 @@ uniform vec4 uGhost0;   // on, ghost top (dim px), ghost overview px per dim px
 uniform vec2 uGhostSize;
 out vec4 o;
 float dh(vec4 n) { return n.a * 255.0 / 40.0 - 1.0; }
-float castH(vec2 q) {
+// what is over world point q: (terrain height, top of what stands there, its underside), in tiles
+vec3 castAt(vec2 q) {
   vec2 uv = (q - uCastO) * uCastR;
-  if (uv.x < 0.0 || uv.y < 0.0 || uv.x >= uCastSize.x || uv.y >= uCastSize.y) return -9.0;
+  if (uv.x < 0.0 || uv.y < 0.0 || uv.x >= uCastSize.x || uv.y >= uCastSize.y) return vec3(-9.0, -9.0, 9.0);
   vec4 c = texelFetch(uCast, ivec2(uv), 0);
-  return max(c.r, c.g * uTerrainSh) * 255.0 / 40.0;
+  return vec3(c.g * uTerrainSh, c.r, 1.0 - c.b) * 255.0 / 40.0;
 }
 float shadowRay(vec3 P, vec3 S) {
   float lxy = length(S.xy);
@@ -467,13 +475,14 @@ float shadowRay(vec3 P, vec3 S) {
   vec2 d = S.xy / lxy;
   float tanE = S.z / lxy;
   float maxT = min(9.0, 7.0 / max(tanE, 0.05));
-  float stepT = max(1.0 / uCastR, maxT / 40.0);
-  for (int i = 1; i <= 40; i++) {
+  // one texel of the caster map per step: nothing as thin as a trunk can fall between two samples
+  float stepT = 1.0 / uCastR;
+  for (int i = 1; i <= 160; i++) {
     float t = float(i) * stepT;
     if (t > maxT) break;
     float hz = P.z + t * tanE;
-    float H = castH(P.xy + d * t);
-    if (H > hz + 0.03) return 1.0;
+    vec3 c = castAt(P.xy + d * t);
+    if (c.x > hz + 0.03 || (c.y > hz + 0.03 && c.z <= hz + 0.03)) return 1.0;
   }
   return 0.0;
 }
@@ -527,8 +536,10 @@ float lightOcc(vec3 P, vec3 Lp) {
     // Only the light's own fixture is exempt (a torch bracket, a crystal). This used to skip
     // 0.55 tile, which is most of the wall a torch hangs on, and let its light through that wall.
     if (len * (1.0 - u) < 0.22) break;
-    float H = castH(P.xy + dxy * u);
-    occ = max(occ, smoothstep(0.02, 0.05 + uLSSoft * 0.35, H - mix(P.z, Lp.z, u)));
+    vec3 c = castAt(P.xy + dxy * u);
+    float zr = mix(P.z, Lp.z, u);
+    // the ray is blocked by ground above it, or by something standing there whose volume it passes through
+    occ = max(occ, max(smoothstep(0.02, 0.05 + uLSSoft * 0.35, c.x - zr), smoothstep(0.02, 0.05 + uLSSoft * 0.35, c.y - zr) * step(c.z, zr + 0.03)));
     if (occ >= 0.999) break;
   }
   return occ;

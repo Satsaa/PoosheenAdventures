@@ -151,7 +151,16 @@ export function renderModel(m: Model, seed = 1, scale = 1): Sprite {
         let z = m.zMax + 0.02;
         for (let k = 0; k < 48; k++) {
           const d = m.sdf(gx, gy, z);
-          if (d < 0.004) { if (z > 0.03) s.top[j * w + i] = Math.min(255, Math.round(z * 40) + 1); break; }
+          if (d < 0.004) {
+            if (z > 0.03) {
+              s.top[(j * w + i) * 2] = Math.min(255, Math.round(z * 40) + 1);
+              // and from the ground up: where the model starts over this point (a crown's underside, a flier's belly)
+              let zb = 0;
+              for (let n = 0; n < 48 && zb < z; n++) { const db = m.sdf(gx, gy, zb); if (db < 0.004) break; zb += Math.max(db, 0.006); }
+              s.top[(j * w + i) * 2 + 1] = Math.min(254, Math.floor(Math.min(zb, z) * 40));
+            }
+            break;
+          }
           z -= Math.max(d, 0.006);
           if (z < 0.02) break;
         }

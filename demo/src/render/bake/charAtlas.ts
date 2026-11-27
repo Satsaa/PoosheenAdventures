@@ -2,7 +2,7 @@
 // (a few frames per animation tick, kinds in view first) into fixed slots so the page never stalls.
 // Same layer layout as the main AssetSheet (albedo / normal / emissive / top), its own texture.
 // A real skinned-model renderer would replace `bakeOne` (render the posed mesh into the slot).
-import { CLIPS, CREATURES, DIRS, creatureFor, creatureModel, type Dir } from './creatures';
+import { CLIPS, CREATURES, DEFAULT_ANIM_FPS, DIRS, clipFrames, creatureFor, creatureModel, type Dir } from './creatures';
 import { renderModel } from './sdf';
 import type { Frame } from './sheet';
 
@@ -35,13 +35,13 @@ export class CharAtlas {
   bakeMs = 0;
 
   /** @param scale texels per design px the frames are baked at */
-  constructor(readonly scale = 1) {
+  constructor(readonly scale = 1, readonly animFps = DEFAULT_ANIM_FPS) {
     this.w = CHAR_W * scale;
     this.h = CHAR_H * scale;
     this.albedo = new Uint8ClampedArray(this.w * this.h * 4);
     this.normal = new Uint8ClampedArray(this.w * this.h * 4);
     this.emissive = new Uint8ClampedArray(this.w * this.h * 4);
-    this.top = new Uint8Array(this.w * this.h);
+    this.top = new Uint8Array(this.w * this.h * 2);
   }
 
   key(kind: string, clip: string, dir: Dir) { return `${kind}:${clip}:${dir}`; }
@@ -49,7 +49,8 @@ export class CharAtlas {
   /** frames of one clip/direction, or null while not baked yet */
   get(kind: string, clip: 'idle' | 'walk', dir: Dir): CharFrames | null {
     const f = this.clips.get(this.key(kind, clip, dir));
-    return f && f.length === CLIPS[clip].frames && f.every(Boolean) ? { frames: f, fps: CLIPS[clip].fps } : null;
+    const nF = clipFrames(clip, this.animFps);
+    return f && f.length === nF && f.every(Boolean) ? { frames: f, fps: nF / CLIPS[clip].cycle } : null;
   }
 
   /** ask for a kind; its idle frames facing south are baked first */
@@ -59,7 +60,7 @@ export class CharAtlas {
     this.queued.add(kind);
     const jobs: Job[] = [];
     const clipsFor: ('idle' | 'walk')[] = kind === 'npc' || kind === 'hero' ? ['idle'] : ['idle', 'walk'];
-    for (const clip of clipsFor) for (const dir of DIRS) for (let f = 0; f < CLIPS[clip].frames; f++) jobs.push({ kind, clip, dir, f });
+    for (const clip of clipsFor) for (const dir of DIRS) for (let f = 0, nF = clipFrames(clip, this.animFps); f < nF; f++) jobs.push({ kind, clip, dir, f });
     jobs.sort((a, b) => (a.clip === 'idle' && a.dir === 's' ? 0 : 1) - (b.clip === 'idle' && b.dir === 's' ? 0 : 1));
     this.queue.push(...jobs);
   }
@@ -82,7 +83,7 @@ export class CharAtlas {
   private bakeOne(j: Job) {
     if (this.next >= COLS * ROWS) return;
     const sc = this.scale, W = this.w;
-    const s = renderModel(creatureModel(j.kind, j.dir, j.clip, j.f), j.f + 1, sc);
+    const s = renderModel(creatureModel(j.kind, j.dir, j.clip, j.f, clipFrames(j.clip, this.animFps)), j.f + 1, sc);
     const slot = this.next++;
     // slot origin and size in texels; the sprite's w/h are multiples of sc, so the clipped size is too
     const SWt = SW * sc, SHt = SH * sc;
@@ -93,7 +94,7 @@ export class CharAtlas {
       this.albedo.set(s.alb.subarray(so, so + w * 4), d);
       this.normal.set(s.nrm.subarray(so, so + w * 4), d);
       this.emissive.set(s.emi.subarray(so, so + w * 4), d);
-      this.top.set(s.top.subarray(r * s.w, r * s.w + w), (y0 + r) * W + x0);
+      this.top.set(s.top.subarray(r * s.w * 2, (r * s.w + w) * 2), ((y0 + r) * W + x0) * 2);
     }
     const k = this.key(j.kind, j.clip, j.dir);
     let list = this.clips.get(k);
@@ -110,8 +111,9 @@ let shared: CharAtlas | null = null;
  * none). With `scale`: the current one if it has that scale, else a fresh empty atlas at that scale,
  * which becomes current (kinds must be requested again).
  */
-export function charAtlas(scale?: number): CharAtlas {
+export function charAtlas(scale?: number, animFps?: number): CharAtlas {
   if (scale === undefined) return shared || (shared = new CharAtlas(1));
-  if (!shared || shared.scale !== scale) shared = new CharAtlas(scale);
+  const fps = animFps ?? shared?.animFps ?? DEFAULT_ANIM_FPS;
+  if (!shared || shared.scale !== scale || shared.animFps !== fps) shared = new CharAtlas(scale, fps);
   return shared;
 }

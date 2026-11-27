@@ -11,7 +11,11 @@ type Part = [F, number];
 
 export type Dir = 's' | 'e' | 'n';
 export const DIRS: Dir[] = ['s', 'e', 'n'];
-export const CLIPS = { idle: { frames: 2, fps: 2.5 }, walk: { frames: 4, fps: 7 } } as const;
+/** how long one cycle of each clip lasts, in seconds; how many frames it is drawn in follows from the frame rate */
+export const CLIPS = { idle: { cycle: 0.8, maxFrames: 2 }, walk: { cycle: 4 / 7, maxFrames: 10 } } as const;
+export const DEFAULT_ANIM_FPS = 7;
+/** frames of a clip at a frame rate: as many as its cycle holds, within what the atlas has room for */
+export const clipFrames = (clip: 'idle' | 'walk', fps: number): number => Math.max(2, Math.min(CLIPS[clip].maxFrames, Math.round(CLIPS[clip].cycle * fps)));
 
 /** kinds with baked animation; unknown enemy ids fall back to 'generic' */
 export const CREATURES = ['knoblin', 'snapjaw', 'frostmite', 'dustling', 'rockback', 'bat', 'wisp', 'puff', 'pinjata', 'generic', 'npc', 'hero'] as const;
@@ -87,8 +91,7 @@ function biped(p: Pose, body: Mat, head: Mat, opts: { ears?: boolean; club?: boo
   return [mats, parts, hz2 + 0.4 * k];
 }
 
-export function creatureModel(kind: string, dir: Dir, clip: 'idle' | 'walk', frame: number): Model {
-  const nF = CLIPS[clip].frames;
+export function creatureModel(kind: string, dir: Dir, clip: 'idle' | 'walk', frame: number, nF: number): Model {
   const p: Pose = { walk: frame / nF, idle: frame / nF, moving: clip === 'walk' };
   switch (kind) {
     case 'knoblin': {

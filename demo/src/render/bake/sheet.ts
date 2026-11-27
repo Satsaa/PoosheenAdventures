@@ -74,7 +74,8 @@ export interface AssetSheet {
   albedo: Uint8ClampedArray;
   normal: Uint8ClampedArray;
   emissive: Uint8ClampedArray;
-  /** top-down height map (1 byte/px, (height * 40) + 1, 0 = empty) used to cast world-space shadows */
+  /** top-down volume map used to cast world-space shadows, 2 bytes/px: the top ((height * 40) + 1, 0 = empty)
+   *  and the underside (height * 40) of what stands over each ground point */
   top: Uint8Array;
   /** key -> variants. Keys are listed in ./index.ts (ASSET_KEYS doc). */
   frames: Map<string, Frame[]>;
@@ -98,7 +99,7 @@ export function addToSheet(sheet: AssetSheet, key: string, s: Sprite): boolean {
     sheet.albedo.set(s.alb.subarray(so, so + s.w * 4), d);
     sheet.normal.set(s.nrm.subarray(so, so + s.w * 4), d);
     sheet.emissive.set(s.emi.subarray(so, so + s.w * 4), d);
-    sheet.top.set(s.top.subarray(r * s.w, r * s.w + s.w), (py + r) * W + px);
+    sheet.top.set(s.top.subarray(r * s.w * 2, (r + 1) * s.w * 2), ((py + r) * W + px) * 2);
   }
   c.x += s.w + 1;
   c.rowH = Math.max(c.rowH, s.h);
@@ -121,7 +122,7 @@ export class Sprite {
   /** texels per px (all of w, h, ox, oy, ty are in texels and multiples of this) */
   scale = 1;
   constructor(readonly w: number, readonly h: number, readonly ox: number, readonly oy: number) {
-    this.top = new Uint8Array(w * h);
+    this.top = new Uint8Array(w * h * 2);
     this.alb = new Uint8ClampedArray(w * h * 4);
     this.nrm = new Uint8ClampedArray(w * h * 4);
     this.emi = new Uint8ClampedArray(w * h * 4);
@@ -196,7 +197,7 @@ export function packSheet(sprites: Map<string, Sprite[]>, width = 1024, minH = 1
   let h = 1;
   while (h < Math.max(minH, y + rowH + 1)) h *= 2;
   const albedo = new Uint8ClampedArray(width * h * 4), normal = new Uint8ClampedArray(width * h * 4), emissive = new Uint8ClampedArray(width * h * 4);
-  const top = new Uint8Array(width * h);
+  const top = new Uint8Array(width * h * 2);
   const frames = new Map<string, Frame[]>();
   items.forEach((it, k) => {
     const [px, py] = pos[k];
@@ -204,7 +205,7 @@ export function packSheet(sprites: Map<string, Sprite[]>, width = 1024, minH = 1
     for (let r = 0; r < s.h; r++) {
       const so = r * s.w * 4, d = ((py + r) * width + px) * 4;
       albedo.set(s.alb.subarray(so, so + s.w * 4), d);
-      top.set(s.top.subarray(r * s.w, r * s.w + s.w), (py + r) * width + px);
+      top.set(s.top.subarray(r * s.w * 2, (r + 1) * s.w * 2), ((py + r) * width + px) * 2);
       normal.set(s.nrm.subarray(so, so + s.w * 4), d);
       emissive.set(s.emi.subarray(so, so + s.w * 4), d);
     }
