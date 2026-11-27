@@ -252,7 +252,7 @@ export class LitRenderer {
     const t0 = performance.now();
     this.useResolution(16);
     litStats.atlasMs = lastBakeMs || performance.now() - t0;
-    this.castTex = texture(gl, 1024, 1024);
+    this.castTex = texture(gl, 1024, 1024, { min: gl.LINEAR, mag: gl.LINEAR });
     this.castFbo = framebuffer(gl, [this.castTex]);
     this.pCaster = program(gl, SPRITE_VS, CASTER_FS, 'caster');
     this.pTerrH = program(gl, FULL_VS, TERRAIN_H_FS, 'terrainH');

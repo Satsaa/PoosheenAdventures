@@ -123,13 +123,13 @@ float terrH(vec2 p, out int dir, out float lowL, out float run) {
     float rx = cgR[c].x * sx, ry = cgR[c].y * sy;
     float dx = gx <= 0.0 ? 0.0 : (rx < 0.25 ? 9.0 : gx / rx);
     float dy = gy <= 0.0 ? 0.0 : (ry < 0.25 ? 9.0 : gy / ry);
-    float rd = (rx + ry) * 0.5, past = abs(p.x - cgC[c].x) + abs(p.y - cgC[c].y) - 16.0;
+    float rd = rx + ry, past = abs(p.x - cgC[c].x) + abs(p.y - cgC[c].y) - 16.0;
     float dd = past <= 0.0 ? 0.0 : (rd < 0.25 ? 9.0 : past / rd);
     float d = max(max(dx, dy), dd);
     float hq = cgL[c] + (L - cgL[c]) * min(d, 1.0);
     if (hq < h) {
       h = hq; lowL = cgL[c];
-      if (dd >= max(dx, dy)) { dir = 5 + int(cgS[c]); run = rd * 0.707; }
+      if (dd >= max(dx, dy)) { dir = 5 + int(cgS[c]); run = rd * 0.354; }
       else if (dx >= dy) { dir = cgO[c].x < 0.0 ? 3 : 4; run = rx; } else { dir = cgO[c].y > 0.0 ? 1 : 2; run = ry; }
     }
   }
@@ -518,7 +518,10 @@ vec3 castAt(vec2 q) {
   vec2 uv = (q - uCastO) * uCastR;
   if (uv.x < 0.0 || uv.y < 0.0 || uv.x >= uCastSize.x || uv.y >= uCastSize.y) return vec3(-9.0, -9.0, 9.0);
   vec4 c = texelFetch(uCast, ivec2(uv), 0);
-  return vec3(c.g, c.r, 1.0 - c.b) * 255.0 / 40.0;
+  // the ground's height is read smoothly between the map's texels: read texel by texel, a ray that
+  // skims a slope is over it on one texel and under it on the next, and the shadow comes out hatched
+  float g = texture(uCast, uv / vec2(textureSize(uCast, 0))).g;
+  return vec3(g, c.r, 1.0 - c.b) * 255.0 / 40.0;
 }
 float shadowRay(vec3 P, vec3 S) {
   float lxy = length(S.xy);

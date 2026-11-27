@@ -229,8 +229,11 @@ function over(L: number, lows: Low[], px: number, py: number, sx: number, sy: nu
     const dx = gx <= 0 ? 0 : rx < 0.25 ? 9 : gx / rx, dy = gy <= 0 ? 0 : ry < 0.25 ? 9 : gy / ry;
     let d = Math.max(dx, dy);
     if (q.cx !== undefined) {
-      // a cut half: how far past the diagonal, across a wall as deep as the two it joins
-      const rd = (rx + ry) / 2, past = Math.abs(px - q.cx) + Math.abs(py - q.cy!) - 16;
+      // A cut half is lower ground like any other, measured by the same rule: a wall reaches rx
+      // sideways and ry up or down from the ground it rises from. From a diagonal edge that is
+      // rx + ry measured across and down together, which is exactly the two straight walls on
+      // either side of the corner carried round it. (One rule, so walls always meet.)
+      const rd = rx + ry, past = Math.abs(px - q.cx) + Math.abs(py - q.cy!) - 16;
       d = Math.max(d, past <= 0 ? 0 : rd < 0.25 ? 9 : past / rd);
     }
     const hq = q.Lq + q.dL * Math.min(d, 1);
@@ -253,7 +256,7 @@ export function overInfo(L: number, lows: Low[], px: number, py: number, sx: num
     const dx = gx <= 0 ? 0 : rx < 0.25 ? 9 : gx / rx, dy = gy <= 0 ? 0 : ry < 0.25 ? 9 : gy / ry;
     let d = Math.max(dx, dy), dd = -1, rd = 0;
     if (q.cx !== undefined) {
-      rd = (rx + ry) / 2;
+      rd = rx + ry;
       const past = Math.abs(px - q.cx) + Math.abs(py - q.cy!) - 16;
       dd = past <= 0 ? 0 : rd < 0.25 ? 9 : past / rd;
       d = Math.max(d, dd);
@@ -263,7 +266,7 @@ export function overInfo(L: number, lows: Low[], px: number, py: number, sx: num
     out.h = hq; out.lowL = q.Lq;
     if (q.cx !== undefined && dd >= Math.max(dx, dy)) {
       const east = q.cx > q.ox, south = q.cy! > q.oy;
-      out.dir = east ? (south ? 6 : 5) : south ? 7 : 8; out.run = rd * 0.707;
+      out.dir = east ? (south ? 6 : 5) : south ? 7 : 8; out.run = rd * 0.354;
     } else if (dx >= dy) { out.dir = q.ox < 0 ? 3 : 4; out.run = rx; } else { out.dir = q.oy > 0 ? 1 : 2; out.run = ry; }
   }
   return out;
@@ -473,7 +476,7 @@ export function bareEdge(dim: Dimension, i: number): number {
 export function diagDepth(dim: Dimension, sy: number, dL: number): number {
   const W = GAME_WALLS[dim.kind].main;
   void dL;
-  return (Math.min(MAX_RUN, W[3]) + Math.min(MAX_RUN, sy > 0 ? W[0] : W[2])) / 2;
+  return Math.min(MAX_RUN, W[3]) + Math.min(MAX_RUN, sy > 0 ? W[0] : W[2]);
 }
 
 /**

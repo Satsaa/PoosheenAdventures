@@ -46,7 +46,7 @@ function relevant(lows: Low[], sx: number, sy: number): Low[] {
     let d = Math.max(gx <= 0 ? 0 : rx < 0.25 ? 9 : gx / rx, gy <= 0 ? 0 : ry < 0.25 ? 9 : gy / ry);
     if (q.cx !== undefined) {
       // the nearest the tile comes to the cut's diagonal
-      const u = Math.max(q.cx - 16, -q.cx, 0), v = Math.max(q.cy! - 16, -q.cy!, 0), rd = (rx + ry) / 2, past = u + v - 16;
+      const u = Math.max(q.cx - 16, -q.cx, 0), v = Math.max(q.cy! - 16, -q.cy!, 0), rd = rx + ry, past = u + v - 16;
       d = Math.max(d, past <= 0 ? 0 : rd < 0.25 ? 9 : past / rd);
     }
     return d < 1;
