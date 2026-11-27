@@ -74,6 +74,15 @@ export function bakeAtlas(scale = 1): AssetSheet {
       put('mc:' + dir, cornerMask(dir, v, scale));
     }
   for (let c = 0; c < 4; c++) put('mi:' + c, innerMask(c, scale));
+  // dg:<corner>  the half of a tile toward a corner (0 NE, 1 SE, 2 SW, 3 NW): where ground of one
+  //              kind ends in a 45 degree line against another kind on the same level
+  for (let c = 0; c < 4; c++) {
+    const N = 16 * scale, m = new Sprite(N, N, 0, 0);
+    m.scale = scale;
+    const cx = c < 2 ? N : 0, cy = c === 1 || c === 2 ? N : 0;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (Math.abs(x + 0.5 - cx) + Math.abs(y + 0.5 - cy) < N) m.set(x, y, [255, 255, 255], 0, 0, 1, 0, null, 0);
+    put('dg:' + c, m);
+  }
   for (const shape of ['round', 'chamfer', 'rock'] as Shape[]) for (let bits = 0; bits < 16; bits++) put(`wm:${shape}:${bits}`, topMask(shape, bits, scale));
   for (const g of EDGE_GROUNDS) {
     for (let i = 0; i < 4; i++) { put(`w:${g}:e${i}`, rimPiece(g, 'e', i, scale)); put(`w:${g}:oc${i}`, rimPiece(g, 'oc', i, scale)); put(`w:${g}:ic${i}`, rimPiece(g, 'ic', i, scale)); }

@@ -32,7 +32,7 @@ import { type PropGrid, buildPropGrid, forProps, propLook } from '../props';
 import type { Gfx } from '../graphics';
 import { defaultGraphics, gfx as toGfx } from '../graphics';
 import {
-  BLIT_FS, BLUR_FS, BRIGHT_FS, CASTER_FS, COMPOSITE_FS, FULL_VS, LIGHT_FS, MAX_LIGHTS, POINT_FS, POINT_VS, QUAD_VS, SPRITE_FS, SPRITE_VS, TERRAIN_H_FS,
+  BLIT_FS, BLUR_FS, BRIGHT_FS, CASTER_FS, COMPOSITE_FS, FULL_VS, LIGHT_FS, MAX_LIGHTS, POINT_FS, POINT_VS, QUAD_VS, SPRITE_FS, SPRITE_VS, TERRAIN_H_FS, CASTBLIT_FS,
 } from './shaders';
 
 export interface DimMetaIn {
@@ -195,6 +195,7 @@ export class LitRenderer {
   private charVersion = -1;
   private pCaster!: Prog;
   private pTerrH!: Prog;
+  private pCastBlit!: Prog;
   private castTex: WebGLTexture | null = null;
   private castFbo: WebGLFramebuffer | null = null;
   private occTex: WebGLTexture | null = null;
@@ -254,6 +255,7 @@ export class LitRenderer {
     this.castFbo = framebuffer(gl, [this.castTex]);
     this.pCaster = program(gl, SPRITE_VS, CASTER_FS, 'caster');
     this.pTerrH = program(gl, FULL_VS, TERRAIN_H_FS, 'terrainH');
+    this.pCastBlit = program(gl, QUAD_VS, CASTBLIT_FS, 'castBlit');
     this.colors = this.atlasColors(false);
     this.colorsUnder = this.atlasColors(true);
     this.pSprite = program(gl, SPRITE_VS, SPRITE_FS, 'sprite');
@@ -419,6 +421,14 @@ export class LitRenderer {
     const wi = computeWater(dim, meta.ve);
     // B: river flow code 1..4, or 16 + distance to land for rough (deep) water
     for (let i = 0; i < n; i++) { maskData[i * 4 + 2] = wi.kind[i] === 2 ? 16 + wi.dist[i] : wi.flow[i]; maskData[i * 4 + 3] = wi.kind[i]; }
+    // a shore tile cut at 45 degrees shows water on its cut half: that water is of the kind beside it
+    for (let y = 1; y < dim.h - 1; y++) for (let x = 1; x < dim.w - 1; x++) {
+      const i = y * dim.w + x;
+      if (wi.kind[i]) continue;
+      const wet = [i - dim.w, i + 1, i + dim.w, i - 1].filter((j) => wi.kind[j]);
+      if (wet.length < 2) continue;
+      maskData[i * 4 + 2] = maskData[wet[0] * 4 + 2]; maskData[i * 4 + 3] = maskData[wet[0] * 4 + 3];
+    }
     const mask = texture(gl, dim.w, dim.h, { data: maskData });
     // R = lift in px, G = what the tile is for the height model, B and A = how much its faces
     // are scaled sideways and up-down (see TERRAIN_SHAPE; all of it worked out by core/shape.ts)
@@ -545,6 +555,7 @@ export class LitRenderer {
       y1: Math.ceil((y1px - lay.top + lay.maxLiftPx + 80) / TILE_PX) + 1,
     };
     buildStatic(d.dim, lay, this.sheet, this.seed, rect, this.chunkInst);
+    this.syncAtlas(); // wall tiles baked for this chunk go to the GPU before it is drawn
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.viewport(0, 0, T, T);
     gl.disable(gl.BLEND);
@@ -769,7 +780,7 @@ export class LitRenderer {
         if (!look) return;
         const x = i % W, y = (i / W) | 0, L = standOf(lay, i), fm = look.frame;
         if (fade > 0 && x >= wx0 && x <= wx1 && y >= wy0 && y <= wy1)
-          pi.push(x * TILE_PX - fm.ox, lay.top + y * TILE_PX - L - fm.oy, fm.w, fm.h, fm.x, fm.y, -1, -1, L / TILE_PX, x, y, 2048, look.r, look.g, look.b, look.windows ? night * 1.2 : 1);
+          pi.push(x * TILE_PX - fm.ox, lay.top + y * TILE_PX - fm.oy, fm.w, fm.h, fm.x, fm.y, -1, -1, L / TILE_PX, x, y, 2048, look.r, look.g, look.b, look.windows ? night * 1.2 : 1);
         if (shadowsOn && x >= cr.x0 && x <= cr.x1 && y >= cr.y0 && y <= cr.y1) pushCaster(ci, fm, x, y, L / TILE_PX, false);
       });
     }
@@ -786,7 +797,7 @@ export class LitRenderer {
         const dy = attach && wallStyle(o, key) ? -13 : 0;
         const dx = o.kind === 'gate' && o.gate === 'guard' && done ? 9 : 0;
         const e = (o.gate as string) === 'moon' ? 0.3 + night * 1.4 : (o.gate as string) === 'sun' ? 0.3 + (1 - night) * 1.4 : 1;
-        if (fade > 0) { pi.push(o.x * TILE_PX - frm.ox + dx, lay.top + o.y * TILE_PX - L - frm.oy + dy, frm.w, frm.h, frm.x, frm.y, -2, alpha, L / TILE_PX, o.x, o.y, 64 | 1024, tint[0], tint[1], tint[2], e); nObj++; }
+        if (fade > 0) { pi.push(o.x * TILE_PX - frm.ox + dx, lay.top + o.y * TILE_PX - frm.oy + dy, frm.w, frm.h, frm.x, frm.y, -2, alpha, L / TILE_PX, o.x, o.y, 64 | 1024, tint[0], tint[1], tint[2], e); nObj++; }
         if (shadowsOn && !dy && alpha > 0.5) pushCaster(ci, frm, o.x + dx / TILE_PX, o.y, L / TILE_PX, false);
       }
       const ca = charAtlas(this.texS, G.animationFps);
@@ -798,7 +809,7 @@ export class LitRenderer {
         const flip = a.dir === 'w';
         const L = standOf(lay, a.tile);
         const tx = a.tile % f.dim.w, ty = (a.tile / f.dim.w) | 0;
-        if (fade > 0) ai.push(Math.round(a.x * TILE_PX) - frm.ox, lay.top + Math.round(a.y * TILE_PX) - L - frm.oy, frm.w, frm.h, frm.x, frm.y, -2, a.alpha, L / TILE_PX, tx, ty, 64 | 512 | (flip ? 128 : 0), a.tint[0], a.tint[1], a.tint[2], a.e);
+        if (fade > 0) ai.push(Math.round(a.x * TILE_PX) - frm.ox, lay.top + Math.round(a.y * TILE_PX) - frm.oy, frm.w, frm.h, frm.x, frm.y, -2, a.alpha, L / TILE_PX, tx, ty, 64 | 512 | (flip ? 128 : 0), a.tint[0], a.tint[1], a.tint[2], a.e);
         if (shadowsOn && a.alpha > 0.5) pushCaster(aci, frm, a.x, a.y, L / TILE_PX, flip);
       }
     }
@@ -819,18 +830,23 @@ export class LitRenderer {
       const cw = (cr.x1 - cr.x0) * castR, ch = (cr.y1 - cr.y0) * castR;
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.castFbo);
       gl.viewport(0, 0, cw, ch);
-      const pt = this.pTerrH;
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      // the height of the ground: copied from the composed terrain (the map is a flat grid, so a
+      // chunk is already a top-down picture of it)
+      const pt = this.pCastBlit;
       gl.useProgram(pt.p);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, d.liftTex);
-      gl.uniform1i(pt.u.uLift, 0);
-      gl.uniform4fv(pt.u.uWallP, lay.walls!.main);
-      gl.uniform4fv(pt.u.uWallL, lay.walls!.lip);
-      gl.uniform2f(pt.u.uOrigin, cr.x0, cr.y0);
-      gl.uniform1f(pt.u.uR, castR);
-      gl.uniform2i(pt.u.uDim, f.dim.w, f.dim.h);
+      gl.uniform1i(pt.u.uA, 0); gl.uniform1i(pt.u.uN, 1);
+      gl.uniform1f(pt.u.uK, castR / (TILE_PX * texS));
+      gl.uniform2f(pt.u.uTex, CPX * texS, CPX * texS);
+      gl.uniform2f(pt.u.uTarget, cw, ch);
       gl.bindVertexArray(this.vaoEmpty);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      for (const c of visible) {
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, c.tex[0]);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, c.tex[1]);
+        gl.uniform2f(pt.u.uOff, (c.cx * CPX / TILE_PX - cr.x0) * castR, ((c.cy * CPX - lay.top) / TILE_PX - cr.y0) * castR);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      }
       if (shadowsOn && (ci.n || aci.n)) {
         gl.enable(gl.BLEND);
         gl.blendEquation(gl.MAX);

@@ -38,8 +38,7 @@ float runOf(bool sideways, bool south, float kq, float dL, bool lip, bool walk) 
   if (kq > 1.5 && dL <= 4.0) return 4.0;   // a bank into water or lava on its own level
   if (walk) return 0.0;
   vec4 W = lip ? uWallL : uWallP;
-  // (north: the depth plus the height of the step, so that the face shows exactly its tile)
-  return min(48.0, sideways ? W.w : south ? W.x : W.z + dL);
+  return min(48.0, sideways ? W.w : south ? W.x : W.z);
 }
 void loadNb(ivec2 t) {
   ivec2 sz = textureSize(uLift, 0);
@@ -98,6 +97,11 @@ float terrH(vec2 p, out int dir, out float lowL, out float run) {
     if (kq > 0.5 && kq < 1.5) continue;
     float dL = L - Lq;
     if (walk && (kq < 1.5 || dL > 4.0)) continue;
+    if (i != 3 && j != 3) {
+      // past two tiles cut at 45 degrees: the wall there is their diagonal, not a square corner
+      int na = n - (j > 3 ? 7 : -7), nb = n - (i > 3 ? 1 : -1);
+      if (nbK[na] >= 31.5 && nbK[nb] >= 31.5 && nbL[na] >= L && nbL[nb] >= L) continue;
+    }
     float ox = float(i - 3) * 16.0, oy = float(j - 3) * 16.0;
     float gx = max(max(ox - p.x, p.x - (ox + 16.0)), 0.0);
     float gy = max(max(oy - p.y, p.y - (oy + 16.0)), 0.0);
@@ -180,41 +184,16 @@ void main() {
   ivec2 lp = clamp(ivec2(floor(vLocal)), ivec2(0), ivec2(vSize) - 1);
   int flags = int(vInst.w + 0.5);
   if (vSrc.z < -2.5) {
-    // ---- the sloped sides of raised ground. The instance covers everything this tile's surface can
-    // project to; for each pixel, walk down from the tile's top until the sight line meets the surface.
+    // ---- the wall faces of raised ground. The map is a flat grid: this instance covers its own
+    // tile, and each pixel shows the surface right there (the top itself is the tile's own sprite).
     loadNb(ivec2(int(vInst.y + 0.5), int(vInst.z + 0.5)));
-    float L = nbL[24], lowest = vTint.r;
+    float L = nbL[24];
     // (px of the tile grid, with the texel's own sub-px position when the terrain is baked finer)
     vec2 tc = (floor(vLocal * uS) + 0.5) / uS;
-    float ys = tc.y - L, px = tc.x;
-    float stepH = 0.5 / uS;
-    bool southOpen = mod(nbK[31], 4.0) < 0.5 || mod(nbK[31], 4.0) > 1.5;
-    int dir = 0; float lowL = L, run = 0.0, hh = -99.0;
-    bool wasSouth = false, was = false;
-    for (int s2 = 0; s2 <= 1200; s2++) {
-      float h2 = L - float(s2) * stepH;
-      if (h2 < lowest - 0.5) break;
-      float py = ys + h2;
-      if (py < 0.0) break;
-      if (py >= 16.0) { wasSouth = true; continue; }
-      int d2; float l2, r2;
-      float H = terrH(vec2(px, py), d2, l2, r2);
-      if (H >= h2 - 0.3) {
-        if (!was && !wasSouth) break;                       // the top itself: its own sprite draws that
-        if (!was) {                                         // came in over the south edge: an upright face
-          // (also where the tile to the south is as high but its own faces start lower there:
-          // neighbours can fit their faces differently, and the step between them is drawn here.
-          // Where that tile really is higher it is drawn later and covers this.)
-          if (!southOpen) break;
-          d2 = 1; l2 = nbL[31] < L ? nbL[31] : L - 48.0; r2 = 0.0;
-          if (h2 < l2) break;
-        }
-        hh = h2; dir = d2 == 0 ? 1 : d2; lowL = l2; run = r2;
-        break;
-      }
-      was = true;
-    }
-    if (hh < -90.0) discard;
+    float px = tc.x, ys = tc.y - L;
+    int dir = 0; float lowL = L, run = 0.0;
+    float hh = terrH(tc, dir, lowL, run);
+    if (hh >= L - 0.3) discard;
     float dL = max(L - lowL, 0.01);
     float frac = clamp((hh - lowL) / dL, 0.0, 1.0);
     // the cut half of a tile cut at 45 degrees is the lower ground itself: that ground is drawn
@@ -223,9 +202,9 @@ void main() {
     // how long the face is on screen, to lay the texture down it at an even scale
     int cutDir = dir;                              // 5 NE, 6 SE, 7 SW, 8 NW: laid out like the south or north face they lean toward
     if (dir >= 5) dir = (dir == 6 || dir == 7) ? 1 : 2;
-    float ext = dir == 1 ? run + dL : dir == 2 ? max(run - dL, 3.0) : max(run, dL);
+    float ext = max(run, 2.0);
     float down = (1.0 - frac) * ext;
-    float py2 = ys + hh;
+    float py2 = tc.y;
     float uF = clamp(dir <= 2 ? px : py2, 0.0, 15.999);
     float vF = down;
     if (vF >= 48.0) vF = 4.0 + mod(vF - 4.0, 44.0);
@@ -318,12 +297,6 @@ void main() {
     if ((float(m[(p.y & 3) * 4 + (p.x & 3)]) + 0.5) / 16.0 >= fadeA) discard;
   }
   int myRow = int(vInst.z + 0.5);
-  if (uOccOn == 1) {
-    // hidden behind raised ground further south (row order + elevation)
-    ivec3 tb = ivec3(texelFetch(uOcc, ivec2(gl_FragCoord.xy), 0).rgb * 255.0 + 0.5);
-    ivec2 tt = ivec2(tb.x + (tb.z & 15) * 256, tb.y + (tb.z >> 4) * 256);
-    if (tt.y > myRow && texelFetch(uLift, tt, 0).r * 255.0 > vInst.x * 16.0 + 0.5) discard;
-  }
   if (uDepthOn > 0.5) gl_FragDepth = 1.0 - (float(myRow) * 2.0 + ((flags & 64) != 0 ? 1.0 : 0.0) + 2.0) / 16384.0;
   if (vSrc.z >= 0.0 && texelFetch(uA, ivec2(vSrc.zw) + lq, 0).a < 0.5) discard;
   vec4 n = texelFetch(uN, st, 0);
@@ -383,10 +356,13 @@ void main() {
   }
   oA = vec4(alb, 1.0);
   oN = vec4(nn * 0.5 + 0.5, clamp((h + 1.0) * 40.0 / 255.0, 0.0, 1.0));
-  oE = vec4(e.rgb * vTint.a, float(mat) / 255.0);
+  // (the material's high bit marks objects: chests, doors, characters)
+  oE = vec4(e.rgb * vTint.a, float(mat + ((flags & 64) != 0 ? 128 : 0)) / 255.0);
   int tx = int(vInst.y + 0.5), ty = int(vInst.z + 0.5);
   oT = vec4(float(tx & 255), float(ty & 255), float((tx >> 8) + (ty >> 8) * 16), 0.0) / 255.0;
-  oT.a = (flags & 64) != 0 ? 1.0 : 0.0;
+  // The map is a flat grid: ground is drawn where it is, whatever its height. Only what stands on
+  // the ground is drawn higher up the screen, by its height above that ground: this is that height.
+  oT.a = uOccOn == 1 && !face ? clamp((h - vInst.x) * 40.0 / 255.0, 0.0, 1.0) : 0.0;
 }`;
 
 // ---------------------------------------------------------------- world-space shadow caster height map
@@ -448,6 +424,20 @@ void main() {
     }
   }
   o = vec4(0.0, clamp(L / 16.0 * 40.0 / 255.0, 0.0, 1.0), 0.0, 0.0);
+}`;
+
+// terrain heights for the shadow caster map: copied from a composed chunk (its normal layer's alpha)
+export const CASTBLIT_FS = HDR + `
+uniform sampler2D uA, uN;
+uniform vec2 uOff;
+uniform float uK;
+uniform vec2 uTex;
+out vec4 o;
+void main() {
+  vec2 uv = (gl_FragCoord.xy - uOff) / uK / uTex;
+  if (uv.x < 0.0 || uv.y < 0.0 || uv.x >= 1.0 || uv.y >= 1.0) discard;
+  if (texture(uA, uv).a < 0.5) discard;
+  o = vec4(0.0, max(texture(uN, uv).a - 40.0 / 255.0, 0.0), 0.0, 0.0);
 }`;
 
 // ---------------------------------------------------------------- static terrain layers (overview or chunk) -> screen G-buffer
@@ -528,7 +518,7 @@ vec3 castAt(vec2 q) {
   vec2 uv = (q - uCastO) * uCastR;
   if (uv.x < 0.0 || uv.y < 0.0 || uv.x >= uCastSize.x || uv.y >= uCastSize.y) return vec3(-9.0, -9.0, 9.0);
   vec4 c = texelFetch(uCast, ivec2(uv), 0);
-  return vec3(c.g * uTerrainSh, c.r, 1.0 - c.b) * 255.0 / 40.0;
+  return vec3(c.g, c.r, 1.0 - c.b) * 255.0 / 40.0;
 }
 float shadowRay(vec3 P, vec3 S) {
   float lxy = length(S.xy);
@@ -543,7 +533,7 @@ float shadowRay(vec3 P, vec3 S) {
     if (t > maxT) break;
     float hz = P.z + t * tanE;
     vec3 c = castAt(P.xy + d * t);
-    if (c.x > hz + 0.03 || (c.y > hz + 0.03 && c.z <= hz + 0.03)) return 1.0;
+    if (c.x * uTerrainSh > hz + 0.03 || (c.y > hz + 0.03 && c.z <= hz + 0.03)) return 1.0;
   }
   return 0.0;
 }
@@ -600,7 +590,7 @@ float lightOcc(vec3 P, vec3 Lp) {
     vec3 c = castAt(P.xy + dxy * u);
     float zr = mix(P.z, Lp.z, u);
     // the ray is blocked by ground above it, or by something standing there whose volume it passes through
-    occ = max(occ, max(smoothstep(0.02, 0.05 + uLSSoft * 0.35, c.x - zr), smoothstep(0.02, 0.05 + uLSSoft * 0.35, c.y - zr) * step(c.z, zr + 0.03)));
+    occ = max(occ, max(smoothstep(0.02, 0.05 + uLSSoft * 0.35, c.x * uTerrainSh - zr), smoothstep(0.02, 0.05 + uLSSoft * 0.35, c.y - zr) * step(c.z, zr + 0.03)));
     if (occ >= 0.999) break;
   }
   return occ;
@@ -670,13 +660,17 @@ void main() {
   vec3 N = normalize(Nn.rgb * 2.0 - 1.0);
   float h = dh(Nn);
   vec4 E = texelFetch(gE, fc, 0);
-  int mat = int(E.a * 255.0 + 0.5);
+  int matRaw = int(E.a * 255.0 + 0.5);
+  int mat = matRaw >= 128 ? matRaw - 128 : matRaw;
   vec4 Tt = texelFetch(gT, fc, 0);
   ivec3 tb = ivec3(Tt.rgb * 255.0 + 0.5);
   ivec2 tile = ivec2(tb.x + (tb.z & 15) * 256, tb.y + (tb.z >> 4) * 256);
   vec4 M = texelFetch(uMask, tile, 0);
   float fog = M.r, fresh = M.g;
-  vec3 P = vec3(X, Ys + h, h);
+  // The map is a flat grid: a pixel of ground is where it is drawn. What stands on the ground is
+  // drawn higher up the screen by its height above that ground (hp); h is its height in the world.
+  float hp = Tt.a * 255.0 / 40.0;
+  vec3 P = vec3(X, Ys + hp, h);
   float t = uTime * uMotion * uWaterK;
   vec3 emi = E.rgb * 1.8;
   int flowC = int(M.b * 255.0 + 0.5), wk = int(M.a * 255.0 + 0.5);
@@ -757,7 +751,7 @@ void main() {
   float ao = 1.0 - min(occ * 0.55, 0.6) * uContact / 0.6;
   vec3 amb = mix(uAmbBot, uAmbTop, N.z * 0.5 + 0.5) * ao * uAmbK;
   // dynamic objects (chests, doors, NPCs, gates) get a lift + rim so they stay easy to spot
-  float isObj = Tt.a;
+  float isObj = matRaw >= 128 ? 1.0 : 0.0;
   amb += vec3(0.3, 0.28, 0.34) * isObj;
   vec3 key = uKeyCol * uSunK * toon(max(nl, 0.0)) * sh;
   vec3 V = vec3(0.0, 0.7071, 0.7071);

@@ -5,7 +5,7 @@
 // fits faces to the room they have, see core/shape.ts.)
 import { D, T, type Dimension } from '../core/types';
 import { NEEDS, PROPS, tileCtx } from '../core/tileset';
-import { bareEdge, cornerAt, isWallG, levelAt, liftAt, shortFace, thinAt, thinPairs, wallStyle } from '../core/shape';
+import { bareEdge, cornerAt, cutsOf, diagDepth, fieldOf, isWallG, levelAt, liftAt, shortFace, thinAt, thinPairs, wallStyle } from '../core/shape';
 
 /**
  * Would closing walkable tile c leave everything around it as connected as before? True when the
@@ -243,6 +243,40 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
     if (keep(i) || nearHouse(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut') continue;
     if (cornerAt(dim, i) && !thinAt(dim, i)) cut[i] = 1;
   }
+  // A diagonal wall is as deep as the straight walls it joins, so the edge of the top above it is
+  // diagonal too: every tile the wall crosses is closed. Where a walkable tile is in the way and
+  // cannot be closed, the corner is left square: a wall is never diagonal below and square above.
+  const F = fieldOf(dim), square = new Set<number>();
+  for (let round = 0; round < 4; round++) {
+    let changed = false;
+    for (let i = 0; i < n; i++) {
+      if (!cut[i]) continue;
+      const x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
+      let ok = true;
+      const close: number[] = [];
+      for (const [sx, sy, Lc] of cutsOf(F, x, y)) {
+        const rd = diagDepth(dim, sy, L - Lc);
+        for (let a = 0; a <= 3 && ok; a++) for (let b = 0; b <= 3; b++) {
+          if ((!a && !b) || 16 * (a + b) - 16 >= rd - 0.01) continue;
+          const xx = x - sx * a, yy = y - sy * b;
+          if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+          const t = yy * w + xx;
+          if (dim.solid[t] || dim.ground[t] === T.VOID || liftAt(dim, t) < L) continue;
+          if (keep(t) || !spare(dim, t, keep)) { ok = false; break; }
+          close.push(t);
+        }
+      }
+      if (!ok) { cut[i] = 0; square.add(i); changed = true; continue; }
+      for (const t of close) { if (dim.solid[t]) continue; dim.solid[t] = 1; dim.zone[t] = -1; dim.deco[t] = D.NONE; changed = true; }
+    }
+    if (!changed) break;
+    // closing tiles can make new corners
+    for (let i = 0; i < n; i++) {
+      if (cut[i] || square.has(i) || keep(i) || nearHouse(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut') continue;
+      if (cornerAt(dim, i) && !thinAt(dim, i)) cut[i] = 1;
+    }
+  }
+  for (let i = 0; i < n; i++) if (cut[i] && !cornerAt(dim, i)) cut[i] = 0;
 }
 
 export function settleTiles(dim: Dimension, keepTile?: (i: number) => boolean): void {

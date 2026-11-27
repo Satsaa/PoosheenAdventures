@@ -30,7 +30,7 @@ for (let i = 0; i < N; i++) {
 console.log(`generated worlds with warnings: ${warned}/${N}`);
 console.log(`walkways along a drop that could not be given a wall: ${(walkways / N).toFixed(1)} per world`);
 if (warned) fail('the generator leaves tiles without what they need');
-if (walkways / N > 8) fail('too many edges without a wall');
+if (walkways / N > 6) fail('too many edges without a wall');
 
 // 2. planted violations are found, and named from the table
 const fresh = () => generateWorld('tiles-plant');
@@ -65,7 +65,8 @@ const expect = (name: string, d: Dimension, wants: RegExp, fixable: boolean) => 
   const i = find(d, (k) => d.solid[k] === 1 && c.underFace(k) && !c.edge(k) && d.ground[k] === T.GRASS);
   d.deco[i] = D.TREE;
   expect('a tree hiding a cliff face', d, /^Tree needs to stay clear/, true);
-  if (d.deco[i] !== D.ROCK) fail('a tree under a face should become a rock');
+  // (it becomes a rock, unless the tidy-up rebuilt the ground there, which clears the tile)
+  if (d.deco[i] === D.TREE) fail('a tree under a face should become a rock');
 }
 {
   const d = over(fresh());

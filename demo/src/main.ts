@@ -1,5 +1,6 @@
 // Page wiring: seed bar, map stage, sphere scrubber, info card, side panels.
-import type { DimId, LocId, MapObject, World } from './core/types';
+import { D, T, type Dimension, type DimId, type LocId, type MapObject, type World } from './core/types';
+import { settleTiles } from './gen/settle';
 import { fmtReq } from './core/req';
 import { phaseAt, stateAt, type WorldState } from './core/view';
 import { normalizeGraphics, type GraphicsSettings } from './render/graphics';
@@ -224,7 +225,36 @@ $('btnBack').addEventListener('click', () => {
 });
 $('btnFit').addEventListener('click', () => map.fitAll());
 // a handle for the console and for automated checks
-(window as unknown as Record<string, unknown>).poosheen = { show: (id: DimId) => { showDim(id); map.fitAll(); }, world: () => world, time: (h: number) => view.setTime?.(h) };
+/**
+ * A hand-drawn test map in place of the overworld (or of an interior), for checking the terrain on screen.
+ * One character per tile: . grass  , sand  h closed grass a level up  H walkable grass a level up
+ * k closed stone two levels up  K walkable stone two levels up  ~ sea  r shallow water
+ * p planks on the water's level  P planks a level up  W built wall  f floor  t tree
+ */
+function scene(rows: string[], opts: { settle?: boolean; kind?: 'overworld' | 'interior' } = {}): void {
+  const kind = opts.kind ?? 'overworld';
+  const idx = world.dims.findIndex((d) => d.kind === kind);
+  const old = world.dims[idx], w = Math.max(...rows.map((r) => r.length)), h = rows.length, n = w * h;
+  const start = world.dims.flatMap((d) => d.objects.filter((o) => o.kind === 'start').map((o) => d.zoneLoc[d.zone[o.y * d.w + o.x]]))[0];
+  const dim: Dimension = { ...old, w, h, ground: new Uint8Array(n), deco: new Uint8Array(n), elev: new Int8Array(n), solid: new Uint8Array(n),
+    region: new Int16Array(n).fill(kind === 'overworld' ? 0 : -1), zone: new Int32Array(n).fill(-1), zoneLoc: [start], regions: old.regions.slice(0, 1), objects: [], lip: undefined, cut: undefined, flow: undefined };
+  const L: Record<string, [number, number, number, number?]> = {
+    '.': [T.GRASS, 1, 0], ',': [T.SAND, 1, 0], h: [T.GRASS, 2, 1], H: [T.GRASS, 2, 0], k: [T.STONE, 3, 1], K: [T.STONE, 3, 0],
+    '~': [T.DEEP, 1, 1], r: [T.WATER, 1, 1], p: [T.PLANK, 1, 0], P: [T.PLANK, 2, 0], W: [T.WALL, 1, 1], f: [T.FLOOR, 1, 0], t: [T.GRASS, 1, 1, D.TREE], ' ': [T.VOID, 0, 1],
+  };
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const [g, e, so, de] = L[rows[y][x] ?? ' '] ?? L['.'], i = y * w + x;
+    dim.ground[i] = g; dim.elev[i] = e; dim.solid[i] = so; dim.deco[i] = de ?? 0;
+    if (!so) dim.zone[i] = 0;
+    if (g === T.DEEP) dim.region[i] = -1;
+  }
+  if (opts.settle) settleTiles(dim);
+  world.dims[idx] = dim;
+  map.setWorld(world);
+  showDim(dim.id);
+  map.fitAll();
+}
+(window as unknown as Record<string, unknown>).poosheen = { show: (id: DimId) => { showDim(id); map.fitAll(); }, world: () => world, time: (h: number) => view.setTime?.(h), scene };
 
 // fullscreen for the map: the browser's own where it is allowed, otherwise the stage fills the page
 const stage = document.querySelector('.stage') as HTMLElement;

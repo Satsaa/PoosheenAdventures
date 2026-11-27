@@ -15,7 +15,7 @@ export const WALL_BOOST = 0.6;
  * Land stands this much (in levels; about 3 px) above water and lava of its own level, so every
  * shore has a bank: a short slope from the land down into the liquid.
  */
-export const BANK_RISE = 0.5;
+export const BANK_RISE = 0;
 /** the run of a bank in px, on every side; short enough that the middle of the tile stays level */
 export const BANK_RUN = 4;
 /** steps down to liquid of at most this many px are banks on the south side too (taller ones are cliffs there) */
@@ -117,7 +117,7 @@ export function tileKinds(dim: Dimension, liftPx: ArrayLike<number>): Uint8Array
       const j = yy * w + xx;
       // lower ground within a face's reach, or a tile cut at 45 degrees close enough for its diagonal wall to cross this one
       if ((walk ? (kind[j] & 3) === KIND.LIQUID && liftPx[i] - liftPx[j] <= BANK_STEP : (kind[j] & 3) !== KIND.VOID) && liftPx[j] < liftPx[i]) { sloped = true; break; }
-      if ((kind[j] & KIND.CUT) && Math.abs(dx) <= (walk ? 1 : 2) && Math.abs(dy) <= (walk ? 1 : 2)) { sloped = true; break; }
+      if ((kind[j] & KIND.CUT) && liftPx[j] >= liftPx[i] && Math.abs(dx) <= (walk ? 1 : 2) && Math.abs(dy) <= (walk ? 1 : 2)) { sloped = true; break; }
     }
     if (sloped) kind[i] |= KIND.SLOPED;
   }
@@ -140,16 +140,15 @@ const MAX_RUN = REACH * 16;
 
 /**
  * The run in px of a face of this tile toward a neighbour `dL` px lower, before fitting.
- * South and sideways it is the depth the wall table gives. North it is that plus the height of
- * the step: a face that looks away from the camera is foreshortened by its height on screen, and
- * it is to show exactly its tile.
+ * It is the depth the wall table gives, whatever the height of the step: the map is drawn as a
+ * flat grid of tiles, so a face covers exactly the tiles it stands on.
  */
 function runOf(F: Field, lip: boolean, sideways: boolean, south: boolean, kq: number, dL: number, walk = false): number {
   // into water or lava on its own level: a bank. A real step down to water is a wall like any other.
   if (kq === KIND.LIQUID && dL <= BANK_STEP) return BANK_RUN;
   if (walk) return 0;
   const W = lip ? F.pat.lip : F.pat.main;
-  return Math.min(MAX_RUN, sideways ? W[3] : south ? W[0] : W[2] + dL);
+  return Math.min(MAX_RUN, sideways ? W[3] : south ? W[0] : W[2]);
 }
 
 /**
@@ -157,7 +156,7 @@ function runOf(F: Field, lip: boolean, sideways: boolean, south: boolean, kq: nu
  * half of a tile cut at 45 degrees (then `cx, cy` is the corner the cut half lies at).
  * All positions are px relative to the tile's own north-west corner.
  */
-interface Low { ox: number; oy: number; Lq: number; dL: number; rx: number; ry: number; cx?: number; cy?: number }
+export interface Low { ox: number; oy: number; Lq: number; dL: number; rx: number; ry: number; cx?: number; cy?: number }
 /** the four corners of a tile, by the way they point */
 export const CORNERS: [number, number][] = [[1, -1], [1, 1], [-1, 1], [-1, -1]];
 
@@ -184,7 +183,7 @@ export function cutsOf(F: Field, qx: number, qy: number): [number, number, numbe
 }
 
 /** Everything lower than tile (x, y) within a face's reach, looked up once. */
-function lowsOf(F: Field, x: number, y: number): Low[] {
+export function lowsOf(F: Field, x: number, y: number): Low[] {
   const { w, h } = F, i = y * w + x, L = F.lift(i), lip = (F.kind(i) & KIND.LIP) !== 0, walk = (F.kind(i) & KIND.WALK) !== 0;
   const out: Low[] = [];
   for (let j = -REACH; j <= REACH; j++) for (let k = -REACH; k <= REACH; k++) {
@@ -196,6 +195,13 @@ function lowsOf(F: Field, x: number, y: number): Low[] {
     if (Lq < L) {
       if (!j && !k) continue;
       if (walk && (kq !== KIND.LIQUID || L - Lq > BANK_STEP)) continue;
+      // lower ground diagonally beside this tile, reached past two tiles that are cut at 45 degrees:
+      // the wall there is the diagonal one of those cuts, not a square corner around that ground
+      if (j && k) {
+        // (the two tiles that close that ground in on this tile's side: beside it and above or below it)
+        const a = (yy - Math.sign(j)) * w + xx, b = yy * w + xx - Math.sign(k);
+        if ((F.kind(a) & KIND.CUT) && (F.kind(b) & KIND.CUT) && F.lift(a) >= L && F.lift(b) >= L) continue;
+      }
       out.push({ ox: k * 16, oy: j * 16, Lq, dL: L - Lq, rx: runOf(F, lip, true, false, kq, L - Lq, walk), ry: runOf(F, lip, false, j > 0, kq, L - Lq, walk) });
       continue;
     }
@@ -226,6 +232,36 @@ function over(L: number, lows: Low[], px: number, py: number, sx: number, sy: nu
     }
     const hq = q.Lq + q.dL * Math.min(d, 1);
     if (hq < out) out = hq;
+  }
+  return out;
+}
+
+/**
+ * The surface at a point with what a picture of it needs: its height, which way the face there
+ * looks (0 top, 1 south, 2 north, 3 west, 4 east, 5..8 a 45 degree cut that faces NE, SE, SW, NW),
+ * the level it rises from and how deep the face is. Used to bake wall tiles into sprites; the
+ * shader has the same in terrH().
+ */
+export function overInfo(L: number, lows: Low[], px: number, py: number, sx: number, sy: number): { h: number; dir: number; lowL: number; run: number } {
+  const out = { h: L, dir: 0, lowL: L, run: 0 };
+  for (const q of lows) {
+    const gx = Math.max(q.ox - px, px - (q.ox + 16), 0), gy = Math.max(q.oy - py, py - (q.oy + 16), 0);
+    const rx = q.rx * sx, ry = q.ry * sy;
+    const dx = gx <= 0 ? 0 : rx < 0.25 ? 9 : gx / rx, dy = gy <= 0 ? 0 : ry < 0.25 ? 9 : gy / ry;
+    let d = Math.max(dx, dy), dd = -1, rd = 0;
+    if (q.cx !== undefined) {
+      rd = (rx + ry) / 2;
+      const past = Math.abs(px - q.cx) + Math.abs(py - q.cy!) - 16;
+      dd = past <= 0 ? 0 : rd < 0.25 ? 9 : past / rd;
+      d = Math.max(d, dd);
+    }
+    const hq = q.Lq + q.dL * Math.min(d, 1);
+    if (hq >= out.h) continue;
+    out.h = hq; out.lowL = q.Lq;
+    if (q.cx !== undefined && dd >= Math.max(dx, dy)) {
+      const east = q.cx > q.ox, south = q.cy! > q.oy;
+      out.dir = east ? (south ? 6 : 5) : south ? 7 : 8; out.run = rd * 0.707;
+    } else if (dx >= dy) { out.dir = q.ox < 0 ? 3 : 4; out.run = rx; } else { out.dir = q.oy > 0 ? 1 : 2; out.run = ry; }
   }
   return out;
 }
@@ -405,11 +441,19 @@ export function bareEdge(dim: Dimension, i: number): number {
   return -1;
 }
 
+/** How deep a wall is across a 45 degree cut that looks south (sy > 0) or north, for a step of dL px: as the model draws it. */
+export function diagDepth(dim: Dimension, sy: number, dL: number): number {
+  const W = GAME_WALLS[dim.kind].main;
+  void dL;
+  return (Math.min(MAX_RUN, W[3]) + Math.min(MAX_RUN, sy > 0 ? W[0] : W[2])) / 2;
+}
+
 /** How many tiles of closed raised ground a face needs behind its edge: its footprint in whole tiles. */
 export function faceDepth(dim: Dimension, dx: number, dy: number, dL = LIFT_PX): number {
   const W = GAME_WALLS[dim.kind].main;
   // (a face that looks north reaches further in by the height of its step: see runOf)
-  return Math.ceil(Math.min(MAX_RUN, dx !== 0 ? W[3] : dy > 0 ? W[0] : W[2] + dL) / 16 - 1e-6);
+  void dL;
+  return Math.ceil(Math.min(MAX_RUN, dx !== 0 ? W[3] : dy > 0 ? W[0] : W[2]) / 16 - 1e-6);
 }
 
 /**

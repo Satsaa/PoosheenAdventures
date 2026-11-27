@@ -141,7 +141,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
 
   function tileElevY(x: number, y: number): number {
     if (!dim || !lay || x < 0 || y < 0 || x >= dim.w || y >= dim.h) return 0;
-    return dim.ground[y * dim.w + x] === T.VOID ? 0 : standT(y * dim.w + x);
+    return 0; // a flat grid: nothing is drawn higher up the screen for its height
   }
 
   /** screen -> tile, accounting for elevation (southernmost covering tile wins). */
@@ -155,8 +155,8 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
     for (let y = yHi; y >= yLo; y--) {
       const i = y * dim.w + tx;
       if (dim.ground[i] === T.VOID) continue;
-      const top = y - liftT(i);
-      if (wpt.y >= top && wpt.y < top + 1 + faceT(i)) return { x: tx, y };
+      const top = y;
+      if (wpt.y >= top && wpt.y < top + 1) return { x: tx, y };
     }
     return null;
   }

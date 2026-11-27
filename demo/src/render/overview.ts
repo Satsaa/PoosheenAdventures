@@ -85,7 +85,7 @@ export function buildOverview(
       const g = ground[i];
       if (g === T.VOID) continue;
       const L = lift[i];
-      const oy0 = Math.round((topT + y - L) * opx);
+      const oy0 = Math.round((topT + y) * opx);
       const LS = y + 1 < h && ground[i + w] !== T.VOID ? lift[i + w] : voidLift;
       const oy1 = Math.round((topT + y + 1 - Math.min(L, LS)) * opx);
       const base = col.ground(g);
@@ -99,13 +99,13 @@ export function buildOverview(
       if (sloped) {
         // sample the surface north to south and put every sample where the projection takes it:
         // a face that leans toward the camera stretches, so there are three samples per pixel row
-        const fc = col.face(g), rows = Math.max(3, opx * 3), Lpx = shape!.liftPx[i];
+        const fc = col.face(g), rows = opx, Lpx = shape!.liftPx[i];
         for (let sy = 0; sy < rows; sy++)
           for (let px = 0; px < opx; px++) {
             const fx = ((px + 0.5) / opx) * 16, fy = ((sy + 0.5) / rows) * 16;
             const H = surfacePx(dim, shape!.liftPx, shape!.kind, shape!.fits, shape!.walls, x, y, fx, fy);
             const top = H >= Lpx - 0.3;
-            const row = Math.floor((topT + y + fy / 16 - H / 16) * opx);
+            const row = oy0 + sy;
             let c = top ? base : fc;
             if (top && dc && (opx === 1 || (px + sy) % 2 === 0)) c = mixed(base, dc);
             put(x * opx + px, row, c, top, H / 16, top ? e : null, top ? mat : 0, x, y, top ? shadeTop * jit : 0.62);
@@ -118,7 +118,7 @@ export function buildOverview(
           put(x * opx + px, oy0 + py, c, true, L, e, mat, x, y, shadeTop * jit);
         }
       // cliff face below
-      if (LS < L && (!sloped || y + 1 >= h || ground[i + w] === T.VOID) && !(dim.kind === 'overworld' && y + 1 >= h)) {
+      if (false && LS < L && (!sloped || y + 1 >= h || ground[i + w] === T.VOID) && !(dim.kind === 'overworld' && y + 1 >= h)) {
         const fc = col.face(g);
         for (let py = oy0 + opx; py < oy1; py++)
           for (let px = 0; px < opx; px++) put(x * opx + px, py, fc, false, L - (py - oy0 - opx) / opx, null, 0, x, y, 0.62);
