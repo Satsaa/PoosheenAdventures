@@ -58,10 +58,10 @@ export const GRAPHICS_DEFS: GraphicsDef[] = [
   { key: 'particles', label: 'Particle density', group: DT, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'Fireflies, embers, snow, mist and sparkles.', keywords: 'effects ambient' },
   { key: 'animation', label: 'Creature animation', group: DT, type: 'bool', default: true, help: 'Animate enemies and NPCs (they always stand still with reduced motion).', keywords: 'motion wander enemies' },
   // walls
-  { key: 'wallRoom', label: 'Wall faces: rooms', group: WL, type: 'float', min: 4, max: 24, step: 1, default: 14, help: 'Indoors and underground every wall leans away from the floor, so all four show a face. This is how wide each face is on screen, in texture pixels (a tile is 16).', keywords: 'dungeon cave interior wall face size splay' },
-  { key: 'wallSouth', label: 'Wall faces: outdoors, facing south', group: WL, type: 'float', min: 0, max: 24, step: 1, default: 10, help: 'Outdoors the face that looks toward the camera is the tall one. This is added to its height: 0 is an upright wall.', keywords: 'cliff castle wall face size overworld' },
-  { key: 'wallSide', label: 'Wall faces: outdoors, sides', group: WL, type: 'float', min: 0, max: 16, step: 1, default: 5, help: 'Width of the faces that look east and west outdoors.', keywords: 'cliff castle wall face size overworld left right' },
-  { key: 'wallNorth', label: 'Wall faces: outdoors, facing north', group: WL, type: 'float', min: 0, max: 16, step: 1, default: 6, help: 'Width of the face that looks away from the camera outdoors. A wall never covers the ground behind it, whatever this is set to.', keywords: 'cliff castle wall face size overworld up back' },
+    { key: 'faceRoom', label: 'Wall faces: rooms', group: WL, type: 'float', min: 4, max: 32, step: 1, default: 32, help: 'Indoors and underground every wall leans away from the floor, so all four show a face. This is how much of the screen each face takes, in texture pixels (a tile is 16): two tiles by default. Where a wall is too thin for that, its faces share the room there is.', keywords: 'dungeon cave room wall face size' },
+  { key: 'faceSouth', label: 'Wall faces: outdoors, facing south', group: WL, type: 'float', min: 0, max: 32, step: 1, default: 32, help: 'Outdoors the face that looks toward the camera is the tall one: two tiles on screen by default.', keywords: 'cliff castle wall face size overworld bottom' },
+  { key: 'faceSide', label: 'Wall faces: outdoors, sides', group: WL, type: 'float', min: 0, max: 32, step: 1, default: 16, help: 'Width of the faces that look east and west outdoors: one tile by default.', keywords: 'cliff castle wall face size overworld left right' },
+  { key: 'faceNorth', label: 'Wall faces: outdoors, facing north', group: WL, type: 'float', min: 0, max: 32, step: 1, default: 16, help: 'How much of the screen the face that looks away from the camera takes outdoors: one tile by default.', keywords: 'cliff castle wall face size overworld back' },
   { key: 'wallLip', label: 'Wall faces: thin bevel', group: WL, type: 'float', min: 0, max: 6, step: 0.5, default: 1.5, help: 'Width of the bevel on walls that show no side faces (low walls, kerbs, water edges).', keywords: 'lip bevel kerb' },
   // water
   { key: 'water', label: 'Water animation', group: W, type: 'float', min: 0, max: 2, step: 0.05, default: 1, help: 'How strongly water, lava and waterfalls move.', keywords: 'waves river flow' },
@@ -114,7 +114,7 @@ export interface Gfx {
   shadows: 'baked' | 'flat' | 'off'; shadowStrength: number; shadowSoftness: number; terrainShadows: boolean; contactShadows: number;
   detailDistance: number; detailFade: number; dither: boolean; mipmaps: boolean; spriteResolution: number; renderScale: number; maxPixels: number;
   particles: number; water: number; waterFoam: number; animation: boolean;
-  wallRoom: number; wallSouth: number; wallSide: number; wallNorth: number; wallLip: number;
+  faceRoom: number; faceSouth: number; faceSide: number; faceNorth: number; wallLip: number;
   waterGlint: number; waterGlintDensity: number; waterGlintSize: number; waterGlintCrest: number; waterGlintLowSun: number; waterGlintLights: number;
   saturation: number; contrast: number; vignette: number; fogDarkness: number; fogDesaturation: number;
   pixelSnap: 'world' | 'screen' | 'none'; integerZoom: boolean;

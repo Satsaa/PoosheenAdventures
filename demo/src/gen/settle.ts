@@ -80,9 +80,9 @@ function raise(dim: Dimension, c: number, i: number): void {
  * The shape of raised ground, before anything is checked:
  *  - raised ground is never one tile wide: where it is, the lower ground on one side of it is
  *    raised to match, if that changes nothing about where one can walk;
- *  - rooms get corners at 45 degrees here and there (a floor corner becomes wall, cut diagonally);
- *  - natural ground (rock, cliffs, cave walls) is cut at 45 degrees at every outward corner, which
- *    turns a staircase of tiles into one diagonal wall.
+ *  - rooms get corners at 45 degrees (a floor corner becomes wall, cut diagonally);
+ *  - every outward corner of raised ground, built or natural, is cut at 45 degrees, which turns
+ *    a staircase of tiles into one diagonal wall.
  * `keep` names tiles that must stay as they are (gates, anchors of the logic, anything with an object).
  */
 export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = () => false): void {
@@ -152,8 +152,6 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
     for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
       const i = y * w + x;
       if (dim.solid[i] || dim.deco[i] || dim.zone[i] < 0 || keep(i)) continue;
-      // per room (walk zone) and per place: about half of the rooms, all their corners
-      if (((dim.zone[i] * 2654435761) >>> 0) % 100 >= 50) continue;
       for (const [sx, sy] of [[1, -1], [1, 1], [-1, 1], [-1, -1]]) {
         const a = i + sx, b = i + sy * w, c = i + sx + sy * w, oa = i - sx, ob = i - sy * w, oc = i - sx - sy * w;
         if (!isWallG(dim.ground[a]) || !isWallG(dim.ground[b]) || !isWallG(dim.ground[c]) || dim.ground[a] !== dim.ground[b]) continue;
@@ -173,7 +171,7 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
     }
   }
   for (let i = 0; i < n; i++) {
-    if (dim.ground[i] === T.WALL || keep(i) || !dim.solid[i]) continue;
+    if (keep(i) || !dim.solid[i]) continue;
     if (cornerAt(dim, i) && !thinAt(dim, i)) cut[i] = 1;
   }
 }

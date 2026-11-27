@@ -43,7 +43,7 @@ void loadNb(ivec2 t) {
 float runOf(bool sideways, bool south, float kq, float dL, bool lip, bool walk) {
   if (kq > 1.5 && (walk || sideways || !south || dL <= 4.0)) return 4.0;   // a bank into water or lava
   vec4 W = (lip || kq > 1.5) ? uWallL : uWallP;
-  return sideways ? min(16.0, W.w) : south ? min(32.0, max(0.0, W.x - W.y * dL)) : min(16.0, W.z + dL);
+  return sideways ? min(32.0, W.w) : south ? min(32.0, max(0.0, W.x - W.y * dL)) : min(32.0, W.z + dL);
 }
 // Surface lift (px) at point p (px, relative to the centre tile's corner) of the loaded tile.
 // dir: 0 top, 1 faces south, 2 faces north, 3 faces west, 4 faces east, 5..8 a 45 degree cut that
@@ -166,8 +166,11 @@ void main() {
       if (H >= h2 - 0.3) {
         if (!was && !wasSouth) break;                       // the top itself: its own sprite draws that
         if (!was) {                                         // came in over the south edge: an upright face
-          if (!southOpen || nbL[17] >= L) break;
-          d2 = 1; l2 = nbL[17]; r2 = 0.0;
+          // (also where the tile to the south is as high but its own faces start lower there:
+          // neighbours can fit their faces differently, and the step between them is drawn here.
+          // Where that tile really is higher it is drawn later and covers this.)
+          if (!southOpen) break;
+          d2 = 1; l2 = nbL[17] < L ? nbL[17] : L - 48.0; r2 = 0.0;
           if (h2 < l2) break;
         }
         hh = h2; dir = d2 == 0 ? 1 : d2; lowL = l2; run = r2;

@@ -43,7 +43,8 @@ export type WallPattern = [number, number, number, number];
 export interface WallPatterns { main: WallPattern; lip: WallPattern }
 /** Face sizes in px (a tile is 16). */
 export interface WallShape { room: number; south: number; north: number; side: number; lip: number }
-export const DEFAULT_WALLS: WallShape = { room: 14, south: 10, north: 6, side: 5, lip: 1.5 };
+/** indoors every face is two tiles on screen; outdoors the one that looks south is two, the others one */
+export const DEFAULT_WALLS: WallShape = { room: 32, south: 32, north: 16, side: 16, lip: 1.5 };
 
 /**
  * Three ways a wall shows its sides:
@@ -53,7 +54,7 @@ export const DEFAULT_WALLS: WallShape = { room: 14, south: 10, north: 6, side: 5
  * Every map has pattern 1 or 2; a tile can ask for the lip, and steps down to water use it.
  */
 export function patternsFor(kind: DimKind, s: WallShape = DEFAULT_WALLS): WallPatterns {
-  const main: WallPattern = WALL_MODE[kind] === 'room' ? [s.room, 1, s.room, s.room] : [s.south, 0, s.north, s.side];
+  const main: WallPattern = WALL_MODE[kind] === 'room' ? [s.room, 1, s.room, s.room] : [s.south, 1, s.north, s.side];
   return { main, lip: [main[0], main[1], s.lip, s.lip] };
 }
 
@@ -110,8 +111,8 @@ function runOf(F: Field, lip: boolean, sideways: boolean, south: boolean, kq: nu
   // into water or lava: a bank, except where a cliff of some height looks south over it
   if (kq === KIND.LIQUID && (walk || sideways || !south || dL <= BANK_STEP)) return BANK_RUN;
   const W = lip || kq === KIND.LIQUID ? F.pat.lip : F.pat.main;
-  // a face that looks south may take two tiles, any other one tile, whatever the height of the step
-  return sideways ? Math.min(16, W[3]) : south ? Math.min(32, Math.max(0, W[0] - W[1] * dL)) : Math.min(16, W[2] + dL);
+  // no face reaches further than two tiles into the ground it belongs to, whatever the height of the step
+  return sideways ? Math.min(32, W[3]) : south ? Math.min(32, Math.max(0, W[0] - W[1] * dL)) : Math.min(32, W[2] + dL);
 }
 
 /** One lower neighbour of a tile, as far as the tile's surface is concerned. */

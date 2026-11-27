@@ -307,7 +307,7 @@ export function createMapView(canvas: HTMLCanvasElement, opts: MapViewOptions = 
 
   function setGraphics(g: GraphicsSettings) {
     G = toGfx(g);
-    if (setWallShape({ room: G.wallRoom, south: G.wallSouth, north: G.wallNorth, side: G.wallSide, lip: G.wallLip })) {
+    if (setWallShape({ room: G.faceRoom, south: G.faceSouth, north: G.faceNorth, side: G.faceSide, lip: G.wallLip })) {
       // walls changed shape: what stands on them moves, and the terrain is composed again
       if (dim && dr) lay = layout(dim, dr.ve, dr.voidElev);
       lit?.resetTerrain();
