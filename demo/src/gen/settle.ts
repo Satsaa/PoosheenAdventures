@@ -5,7 +5,7 @@
 // fits faces to the room they have, see core/shape.ts.)
 import { D, T, type Dimension } from '../core/types';
 import { NEEDS, PROPS, tileCtx } from '../core/tileset';
-import { bareEdge, cornerAt, cutsOf, diagDepth, fieldOf, isWallG, levelAt, liftAt, shortFace, thinAt, thinPairs, wallStyle } from '../core/shape';
+import { bareEdge, cornerAt, cutsOf, diagDepth, fieldOf, isWallG, levelAt, liftAt, shortFace, stepMask, thinAt, thinPairs, wallStyle } from '../core/shape';
 
 /**
  * Would closing walkable tile c leave everything around it as connected as before? True when the
@@ -135,16 +135,9 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   seaLevel(dim);
   const lowered = new Set<number>(); // what came down is not raised again, so this always settles
   /** tiles within a wall's reach of a step in height, along their row or column: the only ones a wall rule can concern */
-  const nearSteps = (): Uint8Array => {
+  const nearSteps = (R = 5): Uint8Array => {
     // (`only`: the part of the map that changed since the walls were last settled; the rest still holds)
-    const out = new Uint8Array(n), R = 5;
-    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      const i = y * w + x;
-      if ((x + 1 < w && dim.elev[i] !== dim.elev[i + 1]) || (x + 1 < w && isWallG(dim.ground[i]) !== isWallG(dim.ground[i + 1])))
-        for (let k = -R; k <= R + 1; k++) if (x + k >= 0 && x + k < w) out[i + k] = 1;
-      if ((y + 1 < h && dim.elev[i] !== dim.elev[i + w]) || (y + 1 < h && isWallG(dim.ground[i]) !== isWallG(dim.ground[i + w])))
-        for (let k = -R; k <= R + 1; k++) if (y + k >= 0 && y + k < h) out[i + k * w] = 1;
-    }
+    const out = stepMask(dim, R);
     if (only) for (let i = 0; i < n; i++) if (!only[i]) out[i] = 0;
     return out;
   };
@@ -204,7 +197,7 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   const DIRS4: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
   const deepen = (): boolean => {
     let any = false;
-  const cand = nearSteps();
+  const cand = nearSteps(1); // (a face that is cut short, or an edge without a wall, has lower ground right beside it)
   for (let pass = 0; pass < 3; pass++) {
     let changed = false;
     for (let i = 0; i < n; i++) {
@@ -311,16 +304,18 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
       else { dim.ground[i] = g; dim.elev[i] = e; dim.solid[i] = 0; dim.zone[i] = z; }
     }
   }
+  const edge1 = stepMask(dim, 1); // (a corner has lower ground right beside it)
   for (let i = 0; i < n; i++) {
     // (which walls are cut is the wall table's business: core/shape.ts)
     // closed ground and walkable shores alike: any tile can be cut (what may be is cornerAt's business)
-    if (!cornerAt(dim, i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || jamb(i) || thinAt(dim, i) || nearHouse(i)) continue;
+    if (!edge1[i] || !cornerAt(dim, i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || jamb(i) || thinAt(dim, i) || nearHouse(i)) continue;
     cut[i] = 1;
   }
   // A diagonal wall is as deep as the straight walls it joins, so the edge of the top above it is
   // diagonal too: every tile the wall crosses is closed. Where a walkable tile is in the way and
   // cannot be closed, the corner is left square: a wall is never diagonal below and square above.
   const F = fieldOf(dim), square = new Set<number>();
+  let edge2 = edge1;
   for (let round = 0; round < 4; round++) {
     let changed = false;
     for (let i = 0; i < n; i++) {
@@ -349,9 +344,10 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
       }
     }
     if (!changed) break;
+    edge2 = stepMask(dim, 1);
     // closing tiles can make new corners
     for (let i = 0; i < n; i++) {
-      if (cut[i] || !cornerAt(dim, i) || square.has(i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || jamb(i) || thinAt(dim, i) || nearHouse(i)) continue;
+      if (cut[i] || !edge2[i] || !cornerAt(dim, i) || square.has(i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || jamb(i) || thinAt(dim, i) || nearHouse(i)) continue;
       cut[i] = 1;
     }
   }

@@ -9,7 +9,7 @@
 //     fix the table names (remove the prop, or swap it for a low one).
 // The Rust port can load the same table.
 import { D, T, type Dimension, type DimKind, type MapObject } from './types';
-import { WALL_MODE, frozenField, bareEdge, wallStyle, faceDepth, shortFace, cornerAt, facedAt, kindAt, levelAt, liftAt, reachesTop, thinAt, type WallMode } from './shape';
+import { WALL_MODE, frozenField, stepMask, bareEdge, wallStyle, faceDepth, shortFace, cornerAt, facedAt, kindAt, levelAt, liftAt, reachesTop, thinAt, type WallMode } from './shape';
 
 export { WALL_MODE, type WallMode } from './shape';
 
@@ -166,7 +166,7 @@ export function checkTiles(dim: Dimension): TileIssue[] {
   const out: TileIssue[] = [];
   const say = (i: number, what: string, lacks: string) => out.push({ dim: dim.name, x: i % w, y: (i / w) | 0, what, lacks });
   const held = new Set(dim.objects.map((o) => o.y * w + o.x));
-  const frozen = frozenField(dim);
+  const frozen = frozenField(dim), near = stepMask(dim, 5);
   const topMemo = new Int8Array(w * h); // which tiles have some level top: asked many times over along a wall
   const where = dim.kind === 'interior' ? 'an interior' : dim.kind === 'overworld' ? 'the overworld' : dim.kind === 'underworld' ? 'the underworld' : 'the sky';
   for (let i = 0; i < w * h; i++) {
@@ -174,14 +174,15 @@ export function checkTiles(dim: Dimension): TileIssue[] {
     if (!g) { say(i, `Ground ${ground[i]}`, 'an entry in the tile table'); continue; }
     if (g.is === 'none') continue;
     if (!g.on.includes(dim.kind)) say(i, g.name, `to be on a map it belongs on (not ${where})`);
-    if (g.is !== 'liquid' && c.edge(i)) {
+    const walls = near[i] === 1; // (flat ground among flat ground has no wall to answer for)
+    if (walls && g.is !== 'liquid' && c.edge(i)) {
       // it shows faces: it must have this kind of map's pattern, and its faces must leave it a top
       // (the terrain model fits faces to the room they have, so the second can only fail if the model does)
       if (!g.faces.includes(c.mode)) say(i, g.name, `${c.mode} wall faces: it stands above its neighbours in ${where}`);
       if (!reachesTop(dim, i, topMemo, frozen)) say(i, g.name, 'a top: it is marked higher than what is beside it, but its faces leave none of it at that height');
     }
-    if (g.is !== 'liquid' && thinAt(dim, i)) say(i, g.name, 'to be a place of its own: raised ground is at least its walls plus one tile of top across, and up and down');
-    if (g.is !== 'liquid' && solid[i]) for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+    if (walls && g.is !== 'liquid' && thinAt(dim, i)) say(i, g.name, 'to be a place of its own: raised ground is at least its walls plus one tile of top across, and up and down');
+    if (walls && g.is !== 'liquid' && solid[i]) for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
       // (where something stands right behind the edge, stairs or a chest, the face gives way to it)
       const b = shortFace(dim, i, dx, dy);
       // (so does a gate's own tile: closed ground that belongs to a zone)
@@ -189,7 +190,7 @@ export function checkTiles(dim: Dimension): TileIssue[] {
     }
     if (dim.cut?.[i] && wallStyle(dim.kind, ground[i]).corners !== 'cut') say(i, g.name, 'square corners: its kind of wall is not cut at 45 degrees');
     if (dim.cut?.[i] && !cornerAt(dim, i)) say(i, g.name, 'an outward corner to be cut at 45 degrees: lower ground on two sides that meet, and not on the other two');
-    if (!solid[i] && !held.has(i) && ground[i] !== T.PLANK) {
+    if (walls && !solid[i] && !held.has(i) && ground[i] !== T.PLANK) {
       const f = bareEdge(dim, i);
       if (f >= 0 && !held.has(f) && !c.joins.has(f) && solid[f]) say(i, g.name, 'a wall under its edge: it can be walked on and the ground right beside it is lower, with no closed ground between for the wall');
     }

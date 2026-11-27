@@ -476,6 +476,21 @@ export function diagDepth(dim: Dimension, sy: number, dL: number): number {
   return (Math.min(MAX_RUN, W[3]) + Math.min(MAX_RUN, sy > 0 ? W[0] : W[2])) / 2;
 }
 
+/**
+ * Which tiles lie within R tiles, along their row or column, of a step in height: the only ones a
+ * wall rule can concern. Everything else is flat ground among flat ground, and is skipped.
+ */
+export function stepMask(dim: Dimension, R: number): Uint8Array {
+  const { w, h } = dim, out = new Uint8Array(w * h);
+  const differs = (a: number, b: number) => dim.elev[a] !== dim.elev[b] || isWallG(dim.ground[a]) !== isWallG(dim.ground[b]);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    if (x + 1 < w && differs(i, i + 1)) for (let k = -R; k <= R + 1; k++) if (x + k >= 0 && x + k < w) out[i + k] = 1;
+    if (y + 1 < h && differs(i, i + w)) for (let k = -R; k <= R + 1; k++) if (y + k >= 0 && y + k < h) out[i + k * w] = 1;
+  }
+  return out;
+}
+
 /** How many tiles of closed raised ground a face needs behind its edge: its footprint in whole tiles. */
 export function faceDepth(dim: Dimension, dx: number, dy: number, dL = LIFT_PX): number {
   const W = GAME_WALLS[dim.kind].main;
@@ -570,8 +585,13 @@ export function reachesTop(dim: Dimension, i: number, memo?: Int8Array, field?: 
     const j = yy * w + xx;
     if (F.kind(j) & KIND.WALK) return true;
     if (memo && memo[j]) return memo[j] === 1;
+    // nothing lower within two tiles: certainly level (asked first, it settles most tiles at once)
+    let flat = xx >= 2 && yy >= 2 && xx < w - 2 && yy < h - 2;
+    const Lj = F.lift(j);
+    for (let dy = -2; dy <= 2 && flat; dy++) for (let dx = -2; dx <= 2; dx++) { const q = j + dy * w + dx; if (F.lift(q) < Lj && (F.kind(q) & 3) !== KIND.VOID) { flat = false; break; } }
+    if (flat) { if (memo) memo[j] = 1; return true; }
     const lows = lowsOf(F, xx, yy);
-    if (lows.length && over(F.lift(j), lows, 8, 8, 1, 1) < F.lift(j) - 0.5) return false;
+    if (lows.length && over(Lj, lows, 8, 8, 1, 1) < Lj - 0.5) return false;
     if (memo) memo[j] = 1;
     return true;
   };
