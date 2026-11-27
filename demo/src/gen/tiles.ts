@@ -114,20 +114,7 @@ export function realiseTiles(bp: Blueprint, seed: number, canRetry = false): Til
     finishTree(bp.tree, bp.ctx);
   }
   // props and walls get what the tile table says they need (the checker then confirms it)
-  for (const l of layers) {
-    const was = settled.get(l.dim);
-    let only: Uint8Array | undefined;
-    if (was) {
-      const { w, h } = l.dim, R = 7;
-      only = new Uint8Array(w * h);
-      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-        const i = y * w + x;
-        if (was.elev[i] === l.dim.elev[i] && was.solid[i] === l.dim.solid[i] && was.ground[i] === l.dim.ground[i]) continue;
-        for (let yy = Math.max(0, y - R); yy <= Math.min(h - 1, y + R); yy++) only.fill(1, yy * w + Math.max(0, x - R), yy * w + Math.min(w - 1, x + R) + 1);
-      }
-    }
-    settleTiles(l.dim, (i) => l.barriers.has(i) || l.anchors.has(i), (i) => l.barriers.has(i), only);
-  }
+  for (const l of layers) settleTiles(l.dim, (i) => l.barriers.has(i) || l.anchors.has(i), (i) => l.barriers.has(i), settled.get(l.dim));
   verify(layers, bp.graph, problems, wet);
 
   // coordinates the rest of the app wants

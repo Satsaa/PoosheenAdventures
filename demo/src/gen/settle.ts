@@ -77,7 +77,7 @@ function seaLevel(dim: Dimension): void {
       }
       front = next;
     }
-    for (let i = 0; i < n; i++) if (want[i] > dim.elev[i] && dim.ground[i] !== T.DEEP) dim.elev[i] = want[i];
+    for (let i = 0; i < n; i++) if (want[i] >= 0 && want[i] !== dim.elev[i] && dim.ground[i] !== T.DEEP) dim.elev[i] = want[i];
   }
   if (dim.kind !== 'overworld') return;
   const water = (i: number) => dim.ground[i] === T.DEEP || dim.ground[i] === T.WATER;
@@ -108,6 +108,9 @@ function seaLevel(dim: Dimension): void {
   void h;
 }
 
+/** a map's terrain at some moment: what the wall rules read */
+export interface Terrain { elev: Int8Array; solid: Uint8Array; ground: Uint8Array }
+
 /** Make tile c part of the raised ground of tile i. */
 function raise(dim: Dimension, c: number, i: number): void {
   dim.ground[c] = dim.ground[i]; dim.elev[c] = dim.elev[i]; dim.solid[c] = 1; dim.deco[c] = D.NONE; dim.zone[c] = -1;
@@ -124,7 +127,7 @@ function raise(dim: Dimension, c: number, i: number): void {
  *    (dungeons, houses) stay square.
  * `keep` names tiles that must stay as they are (gates, anchors of the logic, anything with an object).
  */
-export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = () => false, gate: (i: number) => boolean = () => false, only?: Uint8Array): void {
+export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = () => false, gate: (i: number) => boolean = () => false, since?: Terrain): void {
   gateAt = gate;
   const { w, h } = dim, n = w * h;
   const held = new Set(dim.objects.map((o) => o.y * w + o.x));
@@ -133,6 +136,18 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   // open sea (not a river or a lake, which the logic knows tile by tile) may give a tile to a wall
   const fixedWater = (j: number) => liquid(j) && !(dim.kind === 'overworld' && dim.region[j] < 0 && dim.zone[j] < 0);
   seaLevel(dim);
+  // `since`: the terrain as the walls were last settled. Only what lies near a change since then
+  // (water levels just set included) is looked at again; the rest still holds.
+  let only: Uint8Array | undefined;
+  if (since) {
+    const R = 7;
+    only = new Uint8Array(n);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (since.elev[i] === dim.elev[i] && since.solid[i] === dim.solid[i] && since.ground[i] === dim.ground[i]) continue;
+      for (let yy = Math.max(0, y - R); yy <= Math.min(h - 1, y + R); yy++) only.fill(1, yy * w + Math.max(0, x - R), yy * w + Math.min(w - 1, x + R) + 1);
+    }
+  }
   const lowered = new Set<number>(); // what came down is not raised again, so this always settles
   /** tiles within a wall's reach of a step in height, along their row or column: the only ones a wall rule can concern */
   const nearSteps = (R = 5): Uint8Array => {
@@ -354,8 +369,8 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   for (let i = 0; i < n; i++) if (cut[i] && !cornerAt(dim, i)) cut[i] = 0;
 }
 
-export function settleTiles(dim: Dimension, keepTile?: (i: number) => boolean, gate?: (i: number) => boolean, only?: Uint8Array): void {
-  settleShape(dim, keepTile, gate, only);
+export function settleTiles(dim: Dimension, keepTile?: (i: number) => boolean, gate?: (i: number) => boolean, since?: Terrain): void {
+  settleShape(dim, keepTile, gate, since);
   const c = tileCtx(dim);
   const n = dim.w * dim.h;
   for (let i = 0; i < n; i++) {

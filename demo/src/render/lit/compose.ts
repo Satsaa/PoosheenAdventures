@@ -2,7 +2,7 @@
 // G-buffer) and the dynamic objects (drawn each frame on top). Same painter order and elevation rules
 // as the flat renderer: row by row north -> south, tile tops shifted up by their lift, cliff faces
 // below where the south neighbour is lower, tall props overlapping the row above.
-import { wallSprite } from '../bake/walls';
+import { NO_FACE, wallSprite } from '../bake/walls';
 import { D, T, type Dimension, type MapObject } from '../../core/types';
 import type { AssetSheet, Frame } from '../bake/sheet';
 import { TILE_PX } from '../bake/sheet';
@@ -178,14 +178,15 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
       const sloped = !!lay.kind && (lay.kind[i] & KIND.SLOPED) !== 0 && !!get('f:' + g);
       // the wall faces on this tile: a baked sprite, shared by every tile with the same surroundings.
       // (Only if the sheet has no room left are they drawn straight from the model.)
-      let wf: Frame | null = null, faceF: Frame | null = null;
+      let wf: Frame | null = null, faceF: Frame | null = null, noFace = false;
       if (sloped) {
         // one face material along a wall, whatever ground lies on top of it (a path, a patch of sand)
         const fg = faceGround(g), fl = get('f:' + fg) ?? get('f:' + g)!, fv = 0; // (one face texture per ground: half as many wall pieces to bake and keep)
         faceF = fl[fv];
-        wf = wallSprite(sheet, dim, { liftPx, kind: lay.kind!, fits: lay.fits!, walls: lay.walls! }, x, y, faceF, fg + ':' + fv);
+        const got = wallSprite(sheet, dim, { liftPx, kind: lay.kind!, fits: lay.fits!, walls: lay.walls! }, x, y, faceF, fg + ':' + fv);
+        if (got === NO_FACE) noFace = true; else wf = got;
       }
-      let flags = sloped && !wf ? FLAG.SLOPED : 0;
+      let flags = sloped && !wf && !noFace ? FLAG.SLOPED : 0;
       // (the void beside a map is not lower ground: no rim, no corner cut and no wall foot toward it)
       const lv = (xx: number, yy: number) => (gAt(xx, yy) === T.VOID ? L : lAt(xx, yy));
       const lN = lv(x, y - 1), lW = lv(x - 1, y), lE = lv(x + 1, y), lNW = lv(x - 1, y - 1), lNE = lv(x + 1, y - 1);
@@ -333,15 +334,15 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
           // a wall face is seen from the lower ground it looks at: it counts as that ground's tile, so
           // it clears of fog with the place in front of it, while the top above keeps its own
           let fx = x, fy = y;
-          for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0], [0, 2], [1, 1], [-1, 1], [1, -1], [-1, -1], [0, -2], [2, 0], [-2, 0], [1, 2], [-1, 2], [0, 3]]) {
-            const xx = x + dx, yy = y + dy;
-            if (xx < 0 || yy < 0 || xx >= w || yy >= h || ground[yy * w + xx] === T.VOID || liftPx[yy * w + xx] >= L) continue;
-            fx = xx; fy = yy;
-            break;
+          let best = 99;
+          for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+            const xx = x + dx, yy = y + dy, d2 = dx * dx + dy * dy - (dy > 0 ? 0.5 : 0); // (of two as near, the one to the south: that face is the one seen most)
+            if (d2 >= best || xx < 0 || yy < 0 || xx >= w || yy >= h || ground[yy * w + xx] === T.VOID || liftPx[yy * w + xx] >= L) continue;
+            best = d2; fx = xx; fy = yy;
           }
           inst.push(px, py, P, P, wf.x, wf.y, -1, 0, L / P, fx, fy, 0);
         }
-        else inst.push(px, py, P, P, faceF!.x, faceF!.y, -3, 1, L / P, x, y, 0, low, 1, 1, 1);
+        else if (!noFace) inst.push(px, py, P, P, faceF!.x, faceF!.y, -3, 1, L / P, x, y, 0, low, 1, 1, 1);
       }
       // (no upright faces below a tile: in a flat grid a wall is the tiles it stands on)
     }

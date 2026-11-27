@@ -83,7 +83,11 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
     const b = i === baseEntry ? BIOMES[0] : others.pop()!;
     const name = rng.shuffle(b.name).find((n) => !usedNames.has(n)) ?? `${b.name[0]} ${i}`;
     usedNames.add(name);
-    return { biome: b.id, elev: S.cliffs ? rng.pick(b.elev) : 1, name, color: b.color };
+    // land that reaches the sea lies on the sea's level, so its coast is a shore and not a cliff;
+    // the high country is inland
+    const picked = S.cliffs ? rng.pick(b.elev) : 1;
+    const coastal = base.regions[i].some((sc) => neighboursOf(GW, GH, sc).some((t) => fill.kind[t] === FILL.OCEAN));
+    return { biome: b.id, elev: coastal ? 1 : picked, name, color: b.color };
   });
   // rivers flow downhill over this land; a region cut in two by one becomes two banks
   // (a course that would leave a bank too small to hold anything is not taken; wider rivers need wider banks)

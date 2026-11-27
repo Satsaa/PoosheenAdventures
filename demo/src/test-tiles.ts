@@ -114,8 +114,14 @@ const expect = (name: string, d: Dimension, wants: RegExp, fixable: boolean) => 
   expect('a tree on a bank above water', d, /^Tree needs level ground/, true);
 }
 {
-  const d = over(fresh()), c = tileCtx(d);
-  const i = find(d, (k) => d.solid[k] === 1 && c.underFace(k) && !c.edge(k) && d.ground[k] === T.GRASS);
+  // (such a tile is rare now that every step has a wall of closed ground: look through a few worlds for one)
+  let d = over(fresh()), i = -1;
+  for (let k = 0; k < 12 && i < 0; k++) {
+    d = over(k ? generateWorld('tiles-plant' + k) : fresh());
+    const c = tileCtx(d);
+    try { i = find(d, (q) => d.solid[q] === 1 && c.underFace(q) && !c.edge(q) && d.ground[q] !== T.WALL && d.ground[q] !== T.WATER && d.ground[q] !== T.DEEP && !d.deco[q]); } catch { i = -1; }
+  }
+  if (i < 0) throw new Error('no closed ground under a wall face in 12 worlds');
   d.deco[i] = D.TREE;
   expect('a tree hiding a cliff face', d, /^Tree needs to stay clear/, true);
   // (it becomes a rock, unless the tidy-up rebuilt the ground there, which clears the tile)

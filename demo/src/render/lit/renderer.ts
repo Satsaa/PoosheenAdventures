@@ -10,6 +10,7 @@
 // Per frame: screen G-buffer (overview + chunks + dynamic object sprites) -> toon-banded lighting with
 // coloured point lights (culled by a spatial grid) and height-field shadows -> additive particles ->
 // bloom -> grade/vignette composite.
+import { resetWallSprites } from '../bake/walls';
 import type { DimId, Dimension, MapObject, World } from '../../core/types';
 import { D, T } from '../../core/types';
 import { type SpriteSheet, bakeAtlas, bakeStep, lastBakeMs, spriteSheet } from '../bake/index';
@@ -357,6 +358,7 @@ export class LitRenderer {
     this.world = world;
     this.seed = seed;
     this.freeDims();
+    resetWallSprites(this.sheet); // (every chunk is composed again for the new world, and bakes the pieces it needs)
   }
 
   /** Texels per tile for every texture (16, 32, 64 or 128). Call between frames: it drops what was composed, and the fog mask must be sent again. */

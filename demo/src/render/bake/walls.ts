@@ -14,6 +14,21 @@ import { type AssetSheet, type Frame, Sprite, addToSheet } from './sheet';
 
 export interface WallShapeData { liftPx: ArrayLike<number>; kind: Uint8Array; fits: Uint8Array; walls: WallPatterns }
 
+/**
+ * Forget every wall piece baked so far and give their room back. Wall pieces belong to a world:
+ * when another world is shown, the last one's pieces would only fill the sheet until none fit,
+ * and walls without a piece are drawn the slow way.
+ */
+export function resetWallSprites(sheet: AssetSheet): void {
+  if (!sheet.spareStart || !sheet.cursor) return;
+  for (const k of [...sheet.frames.keys()]) if (k.startsWith('wl:')) sheet.frames.delete(k);
+  sheet.cursor = { ...sheet.spareStart };
+}
+
+/** what `wallSprite` gives for a tile that turns out to have no wall face on it: nothing is drawn for it */
+export const NO_FACE = 'none' as const;
+const blank = new Set<string>();
+
 /** how many wall tiles were baked, and how many found the sheet full (those are drawn the slow way) */
 export const wallStats = { baked: 0, full: 0 };
 const sig = (lows: Low[], L: number): string => lows.map((q) => `${q.ox / 16},${q.oy / 16},${L - q.Lq},${q.rx},${q.ry}${q.cx !== undefined ? `,${q.cx / 16},${q.cy! / 16}` : ''}`).join(';');
@@ -42,16 +57,17 @@ function relevant(lows: Low[], sx: number, sy: number): Low[] {
 }
 
 /** The baked sprite of the wall faces on tile (x, y), or null when the tile has none or the sheet is full. */
-export function wallSprite(sheet: AssetSheet, dim: Dimension, sh: WallShapeData, x: number, y: number, face: Frame, faceKey: string): Frame | null {
+export function wallSprite(sheet: AssetSheet, dim: Dimension, sh: WallShapeData, x: number, y: number, face: Frame, faceKey: string): Frame | null | typeof NO_FACE {
   if (!sheet.cursor) return null;
   const i = y * dim.w + x, L = sh.liftPx[i];
   const F: Field = { w: dim.w, h: dim.h, lift: (j) => sh.liftPx[j], kind: (j) => sh.kind[j], pat: sh.walls };
   const sx = sh.fits[i * 2] / 255, sy = sh.fits[i * 2 + 1] / 255;
   const lows = relevant(lowsOf(F, x, y), sx, sy);
-  if (!lows.length) return null;
+  if (!lows.length) return NO_FACE;
   const key = `wl:${faceKey}:${(sh.kind[i] & KIND.LIP) ? 1 : 0}:${sh.fits[i * 2]},${sh.fits[i * 2 + 1]}:${sig(lows, L)}`;
   const had = sheet.frames.get(key);
   if (had) return had[0];
+  if (blank.has(key)) return NO_FACE;
   const S = face.s, N = 16 * S, W = sheet.w;
   const s = new Sprite(N, N, 0, 0);
   s.scale = S;
@@ -84,7 +100,7 @@ export function wallSprite(sheet: AssetSheet, dim: Dimension, sh: WallShapeData,
     s.set(tx, ty, rgb, pn[0] / pl + det[0] * 0.6, pn[1] / pl + det[1] * 0.6, pn[2] / pl + det[2] * 0.6, (o.h - L) / 16, er || eg || eb ? [er, eg, eb] : null, sheet.emissive[at + 3]);
     any = true;
   }
-  if (!any) return null;
+  if (!any) { blank.add(key); return NO_FACE; }
   if (!addToSheet(sheet, key, s)) { wallStats.full++; return null; }
   wallStats.baked++;
   return sheet.frames.get(key)![0];

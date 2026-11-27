@@ -86,6 +86,8 @@ export interface AssetSheet {
   cursor?: { x: number; y: number; rowH: number };
   dirty?: { x: number; y: number; w: number; h: number }[];
   version?: number;
+  /** where the sprites added later begin: everything from here on can be dropped and baked again */
+  spareStart?: { x: number; y: number; rowH: number };
 }
 
 /** Place one more sprite into a sheet's free space (progressive baking). Returns false when full. */
@@ -214,7 +216,7 @@ export function packSheet(sprites: Map<string, Sprite[]>, width = 1024, minH = 1
     if (!list) frames.set(it.key, (list = []));
     list[it.idx] = { x: px, y: py, w: s.w / s.scale, h: s.h / s.scale, ox: s.ox / s.scale, oy: s.oy / s.scale, ty: s.ty / s.scale, s: s.scale };
   });
-  return { w: width, h, albedo, normal, emissive, top, frames, anims: new Map(), cursor: { x: 0, y: y + rowH + 1, rowH: 0 }, dirty: [], version: 0 };
+  return { w: width, h, albedo, normal, emissive, top, frames, anims: new Map(), cursor: { x: 0, y: y + rowH + 1, rowH: 0 }, spareStart: { x: 0, y: y + rowH + 1, rowH: 0 }, dirty: [], version: 0 };
 }
 
 export function hexToRgb(hex: string): [number, number, number] {
