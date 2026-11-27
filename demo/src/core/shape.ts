@@ -115,7 +115,7 @@ export function tileKinds(dim: Dimension, liftPx: ArrayLike<number>): Uint8Array
       const xx = x + dx, yy = y + dy;
       if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
       const j = yy * w + xx;
-      if ((walk ? (kind[j] & 3) === KIND.LIQUID : (kind[j] & 3) !== KIND.VOID) && liftPx[j] < liftPx[i]) { sloped = true; break; }
+      if ((walk ? (kind[j] & 3) === KIND.LIQUID && liftPx[i] - liftPx[j] <= BANK_STEP : (kind[j] & 3) !== KIND.VOID) && liftPx[j] < liftPx[i]) { sloped = true; break; }
     }
     if (sloped) kind[i] |= KIND.SLOPED;
   }
@@ -134,9 +134,10 @@ export interface Field {
 
 /** The run in px of a face of this tile toward a neighbour `dL` px lower, before fitting. */
 function runOf(F: Field, lip: boolean, sideways: boolean, south: boolean, kq: number, dL: number, walk = false): number {
-  // into water or lava: a bank, except where a cliff of some height looks south over it
-  if (kq === KIND.LIQUID && (walk || sideways || !south || dL <= BANK_STEP)) return BANK_RUN;
-  const W = lip || kq === KIND.LIQUID ? F.pat.lip : F.pat.main;
+  // into water or lava on its own level: a bank. A real step down to water is a wall like any other.
+  if (kq === KIND.LIQUID && dL <= BANK_STEP) return BANK_RUN;
+  if (walk) return 0;
+  const W = lip ? F.pat.lip : F.pat.main;
   return Math.min(32, sideways ? W[3] : south ? W[0] : W[2]);
 }
 
@@ -165,7 +166,7 @@ function lowsOf(F: Field, x: number, y: number): Low[] {
     const q = yy * w + xx, kq = F.kind(q) & 3;
     if (kq === KIND.VOID || (walk && kq !== KIND.LIQUID)) continue;
     const Lq = F.lift(q);
-    if (Lq >= L) continue;
+    if (Lq >= L || (walk && L - Lq > BANK_STEP)) continue;
     out.push({ ox: k * 16, oy: j * 16, Lq, dL: L - Lq, rx: runOf(F, lip, true, false, kq, L - Lq, walk), ry: runOf(F, lip, false, j > 0, kq, L - Lq, walk) });
   }
   if (F.kind(i) & KIND.CUT) {
@@ -355,6 +356,24 @@ export function thinPairs(dim: Dimension, i: number): [number, number, number][]
   return out;
 }
 export const thinAt = (dim: Dimension, i: number): boolean => thinPairs(dim, i).length > 0;
+
+/**
+ * Does walkable tile i stand at the edge of a drop with no wall under it: is the ground right
+ * beside it lower by more than a bank? Every step down is a wall, and a wall is closed ground;
+ * a walkable tile at a bare edge would show an upright sliver. Returns the lower tile, or -1.
+ * (Where stairs, a ledge or a gate joins the two heights is the caller's to excuse.)
+ */
+export function bareEdge(dim: Dimension, i: number): number {
+  if (!(kindAt(dim, i) & KIND.WALK)) return -1;
+  const { w, h } = dim, x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
+  for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+    const xx = x + dx, yy = y + dy;
+    if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+    const j = yy * w + xx, k = kindAt(dim, j) & 3;
+    if (k !== KIND.VOID && liftAt(dim, j) < L - BANK_STEP) return j;
+  }
+  return -1;
+}
 
 /** How many tiles of closed raised ground a face needs behind its edge: its footprint in whole tiles. */
 export function faceDepth(dim: Dimension, dx: number, dy: number): number {

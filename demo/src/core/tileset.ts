@@ -9,7 +9,7 @@
 //     fix the table names (remove the prop, or swap it for a low one).
 // The Rust port can load the same table.
 import { D, T, type Dimension, type DimKind, type MapObject } from './types';
-import { WALL_MODE, wallStyle, faceDepth, shortFace, cornerAt, facedAt, kindAt, levelAt, liftAt, reachesTop, thinAt, type WallMode } from './shape';
+import { WALL_MODE, bareEdge, wallStyle, faceDepth, shortFace, cornerAt, facedAt, kindAt, levelAt, liftAt, reachesTop, thinAt, type WallMode } from './shape';
 
 export { WALL_MODE, type WallMode } from './shape';
 
@@ -187,6 +187,10 @@ export function checkTiles(dim: Dimension): TileIssue[] {
     }
     if (dim.cut?.[i] && wallStyle(dim.kind, ground[i]).corners !== 'cut') say(i, g.name, 'square corners: its kind of wall is not cut at 45 degrees');
     if (dim.cut?.[i] && !cornerAt(dim, i)) say(i, g.name, 'an outward corner to be cut at 45 degrees: lower ground on two sides that meet, and not on the other two');
+    if (!solid[i] && !held.has(i) && ground[i] !== T.PLANK) {
+      const f = bareEdge(dim, i);
+      if (f >= 0 && !held.has(f) && !c.joins.has(f) && solid[f]) say(i, g.name, 'a wall under its edge: it can be walked on and the ground right beside it is lower, with no closed ground between for the wall');
+    }
     // a step between two walkable tiles is only passable, and only drawn right, with something that joins them
     if (!solid[i] && g.is === 'floor') {
       for (const j of [(i % w) + 1 < w ? i + 1 : -1, i + w < w * h ? i + w : -1]) {

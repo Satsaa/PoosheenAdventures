@@ -41,8 +41,9 @@ void loadNb(ivec2 t) {
   }
 }
 float runOf(bool sideways, bool south, float kq, float dL, bool lip, bool walk) {
-  if (kq > 1.5 && (walk || sideways || !south || dL <= 4.0)) return 4.0;   // a bank into water or lava
-  vec4 W = (lip || kq > 1.5) ? uWallL : uWallP;
+  if (kq > 1.5 && dL <= 4.0) return 4.0;   // a bank into water or lava on its own level
+  if (walk) return 0.0;
+  vec4 W = lip ? uWallL : uWallP;
   return min(32.0, sideways ? W.w : south ? W.x : W.z);
 }
 // Surface lift (px) at point p (px, relative to the centre tile's corner) of the loaded tile.
@@ -64,7 +65,7 @@ float terrH(vec2 p, out int dir, out float lowL, out float run) {
     float kq = mod(nbK[n], 4.0);
     if ((kq > 0.5 && kq < 1.5) || (walk && kq < 1.5)) continue;
     float Lq = nbL[n];
-    if (Lq >= L) continue;
+    if (Lq >= L || (walk && L - Lq > 4.0)) continue;
     float dL = L - Lq;
     float ox = float(i - 2) * 16.0, oy = float(j - 2) * 16.0;
     float gx = max(max(ox - p.x, p.x - (ox + 16.0)), 0.0);

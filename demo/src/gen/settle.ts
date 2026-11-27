@@ -5,31 +5,28 @@
 // fits faces to the room they have, see core/shape.ts.)
 import { D, T, type Dimension } from '../core/types';
 import { NEEDS, PROPS, tileCtx } from '../core/tileset';
-import { cornerAt, isWallG, liftAt, shortFace, thinAt, thinPairs, wallStyle } from '../core/shape';
+import { bareEdge, cornerAt, isWallG, liftAt, shortFace, thinAt, thinPairs, wallStyle } from '../core/shape';
 
 /**
  * Would closing walkable tile c leave everything around it as connected as before? True when the
- * walkable tiles beside it stay joined to each other through the ring of eight around it, so no
- * path anywhere can have depended on c. (Steps of height are not walked without stairs, and
- * tiles with stairs are never offered here, so only equal heights count as joined.)
+ * walkable tiles beside it can still reach each other without it, staying within three tiles of
+ * it, so no path anywhere can have depended on c. (Steps of height are not walked without
+ * stairs, and tiles with stairs are never offered here, so only equal heights count as joined.)
  */
-function spare(dim: Dimension, c: number, keep: (i: number) => boolean): boolean {
-  const { w, h } = dim, x = c % w, y = (c / w) | 0;
-  const ring: number[] = []; // clockwise from north; -1 = not walkable
-  for (const [dx, dy] of [[0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1]]) {
-    const xx = x + dx, yy = y + dy, j = yy * w + xx;
-    if (xx < 0 || yy < 0 || xx >= w || yy >= h) return false; // the map's edge: leave it alone
-    ring.push(dim.solid[j] ? -1 : j);
-  }
-  const sides = [0, 2, 4, 6].filter((k) => ring[k] >= 0);
+function spare(dim: Dimension, c: number, _keep: (i: number) => boolean): boolean {
+  const { w, h } = dim, x = c % w, y = (c / w) | 0, R = 3;
+  if (x < 1 || y < 1 || x >= w - 1 || y >= h - 1) return false; // the map's edge: leave it alone
+  const sides = [c - w, c + 1, c + w, c - 1].filter((j) => !dim.solid[j]);
   if (sides.length <= 1) return true;
-  // walk the ring from the first walkable side; every other walkable side must be reached
   const seen = new Set<number>([sides[0]]);
   const todo = [sides[0]];
   while (todo.length) {
-    const k = todo.pop()!;
-    for (const m of [(k + 1) % 8, (k + 7) % 8]) {
-      if (ring[m] < 0 || seen.has(m) || dim.elev[ring[m]] !== dim.elev[ring[k]]) continue;
+    const k = todo.pop()!, kx = k % w, ky = (k / w) | 0;
+    for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+      const xx = kx + dx, yy = ky + dy;
+      if (xx < 0 || yy < 0 || xx >= w || yy >= h || Math.abs(xx - x) > R || Math.abs(yy - y) > R) continue;
+      const m = yy * w + xx;
+      if (m === c || seen.has(m) || dim.solid[m] || dim.elev[m] !== dim.elev[k]) continue;
       seen.add(m); todo.push(m);
     }
   }
@@ -37,35 +34,39 @@ function spare(dim: Dimension, c: number, keep: (i: number) => boolean): boolean
 }
 
 /**
- * Open water lies on the level of the land it meets, never a step below it: every sea tile takes
- * the level of the nearest region's ground. A shore is then a bank, not a wall. (Mountain ranges
- * that are only scenery do not count: they do rise out of the sea.)
+ * Every body of still water is one level: that of the lowest shore it touches (land, or a river
+ * that runs into it). That goes for the open sea and for every lake with deep water in it. Low
+ * shores then meet the water with a bank, not a wall, and there is never a step, and so never a
+ * wall, between two tiles of water. Higher ground that reaches the water ends in a cliff, as it
+ * should. Rivers keep their own levels: they are the logic's, and they fall where they step.
  */
 function seaLevel(dim: Dimension): void {
   if (dim.kind !== 'overworld') return;
   const { w, h } = dim, n = w * h;
-  const sea = (i: number) => dim.region[i] < 0 && (dim.ground[i] === T.DEEP || dim.ground[i] === T.WATER);
-  const level = new Int16Array(n).fill(-1);
-  let front: number[] = [];
-  for (let i = 0; i < n; i++) {
-    if (sea(i) || dim.ground[i] === T.VOID || dim.ground[i] === T.LAVA) continue;
-    const r = dim.region[i];
-    if (r >= 0) level[i] = dim.regions[r]?.elev ?? dim.elev[i];
-    else if (dim.elev[i] <= 1) level[i] = dim.elev[i];
-    if (level[i] >= 0) front.push(i);
-  }
-  while (front.length) {
-    const next: number[] = [];
-    for (const i of front) {
-      const x = i % w;
+  const water = (i: number) => dim.ground[i] === T.DEEP || dim.ground[i] === T.WATER;
+  const still = (i: number) => water(i) && !(dim.flow && dim.flow[i]) && (dim.ground[i] === T.DEEP || dim.region[i] < 0 || dim.zone[i] < 0);
+  const seen = new Uint8Array(n);
+  for (let s = 0; s < n; s++) {
+    if (seen[s] || !still(s)) continue;
+    const body = [s];
+    seen[s] = 1;
+    let level = 99, wet = 99, deep = false;
+    for (let k = 0; k < body.length; k++) {
+      const i = body[k], x = i % w;
+      if (dim.ground[i] === T.DEEP || dim.region[i] < 0) deep = true;
       for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) {
-        if (j < 0 || j >= n || level[j] >= 0 || !sea(j)) continue;
-        level[j] = level[i];
-        dim.elev[j] = level[i];
-        next.push(j);
+        if (j < 0 || j >= n || seen[j]) continue;
+        if (still(j)) { seen[j] = 1; body.push(j); continue; }
+        if (dim.ground[j] === T.VOID || dim.ground[j] === T.LAVA) continue;
+        const r = dim.region[j];
+        // other water it touches (a lake's shallows, a river mouth) sets the level before any land does
+        if (water(j)) { if (dim.elev[j] < wet) wet = dim.elev[j]; continue; }
+        const e = !dim.solid[j] || r < 0 ? dim.elev[j] : dim.regions[r]?.elev ?? dim.elev[j];
+        if (e < level) level = e;
       }
     }
-    front = next;
+    if (wet !== 99) level = wet;
+    if (deep && level !== 99) for (const i of body) dim.elev[i] = level;
   }
   void h;
 }
@@ -91,6 +92,8 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   const held = new Set(dim.objects.map((o) => o.y * w + o.x));
   const keep = (i: number) => held.has(i) || keepTile(i) || dim.deco[i] === D.HOUSE;
   const liquid = (j: number) => dim.ground[j] === T.WATER || dim.ground[j] === T.DEEP || dim.ground[j] === T.LAVA;
+  // open sea (not a river or a lake, which the logic knows tile by tile) may give a tile to a wall
+  const fixedWater = (j: number) => liquid(j) && !(dim.kind === 'overworld' && dim.region[j] < 0 && dim.zone[j] < 0);
   seaLevel(dim);
   const lowered = new Set<number>(); // what came down is not raised again, so this always settles
   const widen = (): void => {
@@ -150,24 +153,22 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   for (let pass = 0; pass < 3; pass++) {
     let changed = false;
     for (let i = 0; i < n; i++) {
-      if (!dim.solid[i] || dim.ground[i] === T.VOID) continue;
+      if (dim.ground[i] === T.VOID) continue;
+      if (!dim.solid[i]) {
+        // walkable ground right at a drop: the wall needs closed ground. This tile closes, or the
+        // lower tile in front of it comes up as wall; stairs, ledges and gates keep their step.
+        const f = bareEdge(dim, i);
+        if (f < 0 || keep(i) || keep(f) || dim.ground[i] === T.PLANK) continue; // (a bridge or a jetty has no wall)
+        if (spare(dim, i, keep)) { dim.solid[i] = 1; dim.zone[i] = -1; dim.deco[i] = D.NONE; changed = true; }
+        else if (!fixedWater(f) && !lowered.has(f) && (dim.solid[f] || spare(dim, f, keep))) { raise(dim, f, i); changed = true; }
+        continue;
+      }
       for (const [dx, dy] of DIRS4) {
         const b = shortFace(dim, i, dx, dy);
         if (b < 0) continue;
         if (!keep(b) && spare(dim, b, keep)) { raise(dim, b, i); changed = true; continue; }
         const f = i + dx + dy * w;
-        if (!(keep(f) || liquid(f) || lowered.has(f) || !(dim.solid[f] || spare(dim, f, keep)))) { raise(dim, f, i); changed = true; continue; }
-        // neither: the edge itself comes down to the ground in front of it and stays closed, so
-        // the step is a plain upright drop at the walkable tile behind
-        if (keep(i)) continue; // (coming down again is fine: each time it ends lower, so this stops)
-        if (!liquid(f)) dim.ground[i] = dim.ground[f];
-        else if (isWallG(dim.ground[i])) dim.ground[i] = dim.kind === 'overworld' ? T.STONE : T.CAVE;
-        dim.elev[i] = dim.elev[f];
-        if (dim.lip) dim.lip[i] = 0;
-        if (dim.kind !== 'sky' && !liquid(f)) dim.deco[i] = D.ROCK;
-        lowered.add(i);
-        changed = true;
-        break;
+        if (!(keep(f) || fixedWater(f) || lowered.has(f) || !(dim.solid[f] || spare(dim, f, keep)))) { raise(dim, f, i); changed = true; continue; }
       }
     }
     if (!changed) break;
