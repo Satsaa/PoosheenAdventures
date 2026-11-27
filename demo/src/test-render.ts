@@ -20,7 +20,7 @@ const framesOf = (prefix: string) => { const s = new Set<number>(); for (const [
 const liquid = (g: number) => g === T.WATER || g === T.DEEP || g === T.LAVA;
 
 const uncut = new Map<string, number>(), all = new Map<string, number>();
-const tot = { wallTiles: 0, wallBaked: 0, wallLive: 0, faceFogOwn: 0, faceFogLower: 0, cutTiles: 0, cutWithHalf: 0, corners: 0, cornersCut: 0, shoreCorners: 0, shoreDiag: 0,
+const tot = { wallTiles: 0, wallBaked: 0, wallLive: 0, faceFogOwn: 0, faceFogLower: 0, cutTiles: 0, cutWithHalf: 0, corners: 0, cornersCut: 0, shoreCorners: 0, shoreDiag: 0, jambs: 0, jambsCut: 0,
   shorePairs: 0, shoreFlush: 0, shoreWall: 0, bodies: 0, bodiesFlush: 0, waterSteps: 0, waterfallSteps: 0 };
 for (let s = 0; s < N; s++) {
   const world = generateWorld('render' + s);
@@ -53,9 +53,15 @@ for (let s = 0; s < N; s++) {
       }
       // ---- 45 degrees, walls: every outward corner of ground whose kind of wall is cut
       if (dim.solid[i] && !(kindAt(dim, i) & 3) && cornerAt(dim, i) && wallStyle(dim.kind, dim.ground[i]).corners === 'cut') {
-        tot.corners++;
-        all.set(dim.kind, (all.get(dim.kind) ?? 0) + 1);
-        if (dim.cut?.[i]) tot.cornersCut++; else uncut.set(dim.kind, (uncut.get(dim.kind) ?? 0) + 1);
+        // a corner at a gap one tile wide is the jamb of a doorway or a gateway, and those stay upright
+        let jamb = false;
+        for (const d of [1, -1, w, -w]) { const t = i + d, u = t + d; if (t >= 0 && u >= 0 && t < n && u < n && dim.ground[t] !== T.VOID && liftAt(dim, t) < L && dim.ground[u] !== T.VOID && liftAt(dim, u) >= L) jamb = true; }
+        if (jamb) { tot.jambs++; if (dim.cut?.[i]) tot.jambsCut++; }
+        else {
+          tot.corners++;
+          all.set(dim.kind, (all.get(dim.kind) ?? 0) + 1);
+          if (dim.cut?.[i]) tot.cornersCut++; else uncut.set(dim.kind, (uncut.get(dim.kind) ?? 0) + 1);
+        }
       }
       if (dim.cut?.[i] && dim.solid[i]) { tot.cutTiles++; if (halfAt.has(i)) tot.cutWithHalf++; }
       // ---- 45 degrees, ground: land with water on its own level on two sides that meet (and land on the other two)
@@ -95,7 +101,10 @@ console.log(`composed the terrain of ${N} worlds`);
 console.log('  walls drawn the slow way (not from a baked piece):', tot.wallLive, `(wall pieces baked per world: ${Math.round(wallStats.baked / N)}; times the sheet was full: ${wallStats.full})`);
 console.log('  wall pieces that take the fog of lower ground they face:', pct(tot.faceFogLower, tot.faceFogLower + tot.faceFogOwn));
 console.log('  outward corners of raised ground cut at 45 degrees:', pct(tot.cornersCut, tot.corners));
-console.log('    by kind of map (cut of all):', [...all].map(([k, v]) => `${k} ${v - (uncut.get(k) ?? 0)} of ${v}`).join(', '), '(a corner stays square where cutting it would close a passage or touch a gate, a doorway or a building)');
+console.log('    by kind of map (cut of all):', [...all].map(([k, v]) => `${k} ${v - (uncut.get(k) ?? 0)} of ${v}`).join(', '), '(a corner stays square only where an object, a gate or a building stands on or beside it)');
+console.log('  doorway and gateway jambs (kept upright):', tot.jambs, '| cut by mistake:', tot.jambsCut);
+if (tot.cornersCut / Math.max(1, tot.corners) < 0.95) fail('outward corners are not cut at 45 degrees');
+if (tot.jambsCut) fail('a doorway jamb was cut');
 console.log('  cut corners that show the lower ground on their cut half:', pct(tot.cutWithHalf, tot.cutTiles));
 console.log('  shore corners (water on two sides that meet) drawn as a 45 degree line:', pct(tot.shoreDiag, tot.shoreCorners));
 console.log('  bodies of water and lava with a shore flush with the land:', pct(tot.bodiesFlush, tot.bodies));

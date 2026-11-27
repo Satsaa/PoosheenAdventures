@@ -366,7 +366,7 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
       cut[i] = 1;
     }
   }
-  for (let i = 0; i < n; i++) if (cut[i] && !cornerAt(dim, i)) cut[i] = 0;
+  for (let i = 0; i < n; i++) if (cut[i] && (!cornerAt(dim, i) || (dim.solid[i] && jamb(i)))) cut[i] = 0;
 }
 
 export function settleTiles(dim: Dimension, keepTile?: (i: number) => boolean, gate?: (i: number) => boolean, since?: Terrain): void {
