@@ -41,8 +41,41 @@ function spare(dim: Dimension, c: number, _keep: (i: number) => boolean): boolea
  * should. Rivers keep their own levels: they are the logic's, and they fall where they step.
  */
 function seaLevel(dim: Dimension): void {
-  if (dim.kind !== 'overworld') return;
   const { w, h } = dim, n = w * h;
+  // a river or a pool lies on the level of its lower bank, never in a trench below both: each
+  // water tile comes up to the lowest land beside it (tiles in mid-stream follow the ones at the
+  // banks). Where the land steps down, so does the water, and it falls there.
+  if (dim.kind === 'overworld' || dim.kind === 'underworld') {
+    const wet = (i: number) => dim.ground[i] === T.WATER || dim.ground[i] === T.LAVA || dim.ground[i] === T.DEEP;
+    const want = new Int16Array(n).fill(-1);
+    let front: number[] = [];
+    for (let i = 0; i < n; i++) {
+      if (!wet(i)) continue;
+      const x = i % w;
+      let low = 99;
+      for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) {
+        if (j < 0 || j >= n || wet(j) || dim.ground[j] === T.VOID) continue;
+        const r = dim.region[j];
+        const e = !dim.solid[j] || r < 0 ? dim.elev[j] : dim.regions[r]?.elev ?? dim.elev[j];
+        if (e < low) low = e;
+      }
+      if (low !== 99) { want[i] = low; front.push(i); }
+    }
+    while (front.length) {
+      const next: number[] = [];
+      for (const i of front) {
+        const x = i % w;
+        for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) {
+          if (j < 0 || j >= n || !wet(j) || want[j] >= 0) continue;
+          want[j] = want[i];
+          next.push(j);
+        }
+      }
+      front = next;
+    }
+    for (let i = 0; i < n; i++) if (want[i] > dim.elev[i] && dim.ground[i] !== T.DEEP) dim.elev[i] = want[i];
+  }
+  if (dim.kind !== 'overworld') return;
   const water = (i: number) => dim.ground[i] === T.DEEP || dim.ground[i] === T.WATER;
   const still = (i: number) => water(i) && !(dim.flow && dim.flow[i]) && (dim.ground[i] === T.DEEP || dim.region[i] < 0 || dim.zone[i] < 0);
   const seen = new Uint8Array(n);
@@ -65,7 +98,7 @@ function seaLevel(dim: Dimension): void {
         if (e < level) level = e;
       }
     }
-    if (wet !== 99) level = wet;
+    if (wet < level) level = wet;
     if (deep && level !== 99) for (const i of body) dim.elev[i] = level;
   }
   void h;

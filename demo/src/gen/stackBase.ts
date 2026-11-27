@@ -194,8 +194,10 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
       st.fillAt[i] = bp.fill?.of[scr[i]] ?? -1;
       if (kind === FILL.RANGE) {
         const peak = valueNoise(seed ^ 0x99, (i % w) / 5, ((i / w) | 0) / 5);
-        dim.elev[i] = 4 + (peak > 0.55 ? 1 : 0) + (peak > 0.75 ? 1 : 0);
-        dim.ground[i] = dim.elev[i] >= 5 ? T.SNOW : T.STONE;
+        // one height for the whole range (a wall needs room; a height of its own for every tile is a
+        // jumble of walls): the peaks are snow on the same rock
+        dim.elev[i] = 4;
+        dim.ground[i] = peak > 0.55 ? T.SNOW : T.STONE;
         if (st.rng.chance(0.1)) dim.deco[i] = D.ROCK;
       } else if (kind === FILL.THICKET) {
         // a wall of trees nobody gets through

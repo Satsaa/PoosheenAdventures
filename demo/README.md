@@ -160,6 +160,31 @@ What the generator guarantees for this: interior walls are two tiles thick, the 
 room is a real gap in its south wall, and a height step never lies between two walkable tiles
 except at a stairs object (a ledge inside a room has a solid edge row with a gap for the stairs).
 
+### A flat grid of tiles, walls as baked sprites
+
+The map is drawn as a flat grid: no ground is shifted up the screen for its height. A wall is the
+tiles it stands on. Each wall tile is a sprite baked from the terrain model (`src/render/bake/walls.ts`):
+for every texel the height of the surface there and the face it belongs to, and from those the
+face texture, its shading, its normal and its height for lighting and shadows. Tiles with the same
+surroundings share one sprite (key `wl:<ground>:<variant>:<shape>`), so a straight wall is a
+handful of pieces, and a hand-drawn sheet can replace them key for key. The shader can still
+draw a wall tile straight from the model; that path is only used if the sheet runs out of room.
+
+Diagonals come in two kinds, and every ground supports both:
+
+- **A wall cut at 45 degrees.** The corner tile of raised ground is cut: its outer half is the
+  lower ground beside it (land or water), and the wall runs along the diagonal, as deep as the
+  walls it joins. The tiles the diagonal wall crosses are closed ground, so the edge of the top
+  above it is diagonal too; where a walkable tile is in the way and cannot be closed, the corner
+  is left square.
+- **Two kinds of ground on one level meeting at 45 degrees** (grass against sand, land against
+  water). Where the same other ground lies on two sides of a tile that meet, and not on the other
+  two, that corner's half of the tile is drawn as the other ground (masks `dg:<corner>`).
+
+`poosheen.scene(rows, { settle })` in the browser console replaces the overworld with a hand-drawn
+test map (one character per tile; the legend is in `src/main.ts`), which is how wall shapes are
+checked on screen.
+
 ### The wall table (how walls are sized, and how to add a kind)
 
 `WALL_STYLES` in `src/core/shape.ts` has one row per kind of wall. Each row says how many
@@ -187,9 +212,9 @@ To add a kind of wall: add a row, and name it in `wallStyle()` (which ground on 
 map follows it). One limit: the depths are per kind of map, because the drawing reads them
 once per map; corners can differ from ground to ground.
 
-Water and lava lie on the level of the land beside them. Land stands a bank's height (about
-3 px) above them and slopes in over 4 px; a bank is not a wall, is never cut, and does not
-count as "lower ground" for any of the rules above.
+Water and lava lie exactly on the level of the land beside them: the sea on the level of the
+lowest shore, a river or a pool on the level of its lower bank. There is no bank and no step.
+Higher ground that reaches water ends in a wall like any other.
 
 ## The tile table
 

@@ -528,7 +528,7 @@ float shadowRay(vec3 P, vec3 S) {
   float maxT = min(9.0, 7.0 / max(tanE, 0.05));
   // one texel of the caster map per step: nothing as thin as a trunk can fall between two samples
   float stepT = 1.0 / uCastR;
-  for (int i = 1; i <= 160; i++) {
+  for (int i = 1; i <= 96; i++) {
     float t = float(i) * stepT;
     if (t > maxT) break;
     float hz = P.z + t * tanE;
