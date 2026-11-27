@@ -9,7 +9,7 @@
 //     fix the table names (remove the prop, or swap it for a low one).
 // The Rust port can load the same table.
 import { D, T, type Dimension, type DimKind, type MapObject } from './types';
-import { WALL_MODE, faceDepth, shortFace, cornerAt, facedAt, kindAt, levelAt, liftAt, reachesTop, thinAt, type WallMode } from './shape';
+import { WALL_MODE, wallStyle, faceDepth, shortFace, cornerAt, facedAt, kindAt, levelAt, liftAt, reachesTop, thinAt, type WallMode } from './shape';
 
 export { WALL_MODE, type WallMode } from './shape';
 
@@ -185,6 +185,7 @@ export function checkTiles(dim: Dimension): TileIssue[] {
       // (so does a gate's own tile: closed ground that belongs to a zone)
       if (b >= 0 && !held.has(b) && !held.has(i) && dim.zone[i] < 0) { say(i, g.name, `closed ground ${faceDepth(dim, dx, dy)} tiles deep behind its wall face: walkable ground begins before the face ends`); break; }
     }
+    if (dim.cut?.[i] && wallStyle(dim.kind, ground[i]).corners !== 'cut') say(i, g.name, 'square corners: its kind of wall is not cut at 45 degrees');
     if (dim.cut?.[i] && !cornerAt(dim, i)) say(i, g.name, 'an outward corner to be cut at 45 degrees: lower ground on two sides that meet, and not on the other two');
     // a step between two walkable tiles is only passable, and only drawn right, with something that joins them
     if (!solid[i] && g.is === 'floor') {

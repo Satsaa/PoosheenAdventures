@@ -5,7 +5,7 @@
 // fits faces to the room they have, see core/shape.ts.)
 import { D, T, type Dimension } from '../core/types';
 import { NEEDS, PROPS, tileCtx } from '../core/tileset';
-import { cornerAt, isWallG, liftAt, shortFace, thinAt, thinPairs } from '../core/shape';
+import { cornerAt, isWallG, liftAt, shortFace, thinAt, thinPairs, wallStyle } from '../core/shape';
 
 /**
  * Would closing walkable tile c leave everything around it as connected as before? True when the
@@ -188,7 +188,7 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
       if (dim.solid[i] || dim.deco[i] || dim.zone[i] < 0 || keep(i)) continue;
       for (const [sx, sy] of [[1, -1], [1, 1], [-1, 1], [-1, -1]]) {
         const a = i + sx, b = i + sy * w, c = i + sx + sy * w, oa = i - sx, ob = i - sy * w, oc = i - sx - sy * w;
-        if (dim.ground[a] !== T.CAVEWALL || dim.ground[b] !== T.CAVEWALL || dim.ground[c] !== T.CAVEWALL) continue;
+        if (!isWallG(dim.ground[a]) || dim.ground[a] !== dim.ground[b] || dim.ground[a] !== dim.ground[c] || wallStyle(dim.kind, dim.ground[a]).corners !== 'cut') continue;
         if (dim.solid[oa] || dim.solid[ob] || dim.solid[oc] || dim.elev[oa] !== dim.elev[i] || dim.elev[ob] !== dim.elev[i] || dim.elev[oc] !== dim.elev[i]) continue;
         fills.push([i, a]);
         break;
@@ -205,8 +205,8 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
     }
   }
   for (let i = 0; i < n; i++) {
-    // (built walls indoors stay square: dungeons and houses are rectangular)
-    if (keep(i) || !dim.solid[i] || (dim.ground[i] === T.WALL && dim.kind === 'interior')) continue;
+    // (which walls are cut is the wall table's business: core/shape.ts)
+    if (keep(i) || !dim.solid[i] || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut') continue;
     if (cornerAt(dim, i) && !thinAt(dim, i)) cut[i] = 1;
   }
 }

@@ -43,8 +43,34 @@ export type WallPattern = [number, number, number, number];
 export interface WallPatterns { main: WallPattern; lip: WallPattern }
 /** Face sizes in px (a tile is 16). */
 export interface WallShape { room: number; south: number; north: number; side: number; lip: number }
-/** indoors every face is two tiles deep; outdoors the one that looks south is two, the others one */
-export const DEFAULT_WALLS: WallShape = { room: 32, south: 32, north: 16, side: 16, lip: 1.5 };
+/**
+ * THE WALL TABLE. One row per kind of wall; everything else follows from it: how the terrain is
+ * shaped and drawn, how deep the generator closes the ground behind a face, how small a raised
+ * place may be (its walls plus one tile of top), where corners are cut, and what the checker
+ * reports. To add a kind of wall, add a row and name it in `wallStyle` below.
+ *   north / south / side: how many tiles each face reaches into the raised ground
+ *   corners: 'cut' = outward corners at 45 degrees (a raised place ends up eight-sided),
+ *            'square' = left as they are
+ * One limit: the depths belong to the kind of map (all walls of a map share them, the drawing
+ * reads them once per map); corners can differ from ground to ground.
+ */
+export interface WallStyle { north: number; south: number; side: number; corners: 'cut' | 'square' }
+export const WALL_STYLES = {
+  /** cliffs, hills, ramparts under the open sky: one tile on three sides, two looking south */
+  outdoor: { north: 1, south: 2, side: 1, corners: 'cut' },
+  /** caves and the underworld: two tiles all round, rounded off */
+  cave: { north: 2, south: 2, side: 2, corners: 'cut' },
+  /** built rooms (dungeons, houses): two tiles all round, rectangular */
+  built: { north: 2, south: 2, side: 2, corners: 'square' },
+} as const satisfies Record<string, WallStyle>;
+/** Which row of the wall table raised ground of this material follows on this kind of map. */
+export function wallStyle(kind: DimKind, ground: number): WallStyle {
+  if (WALL_MODE[kind] === 'outdoor') return WALL_STYLES.outdoor;
+  return ground === T.WALL && kind === 'interior' ? WALL_STYLES.built : WALL_STYLES.cave;
+}
+export const DEFAULT_WALLS: WallShape = {
+  room: WALL_STYLES.cave.south * 16, south: WALL_STYLES.outdoor.south * 16, north: WALL_STYLES.outdoor.north * 16, side: WALL_STYLES.outdoor.side * 16, lip: 1.5,
+};
 
 /**
  * Three ways a wall shows its sides:

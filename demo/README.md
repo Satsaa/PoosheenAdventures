@@ -160,6 +160,37 @@ What the generator guarantees for this: interior walls are two tiles thick, the 
 room is a real gap in its south wall, and a height step never lies between two walkable tiles
 except at a stairs object (a ledge inside a room has a solid edge row with a gap for the stairs).
 
+### The wall table (how walls are sized, and how to add a kind)
+
+`WALL_STYLES` in `src/core/shape.ts` has one row per kind of wall. Each row says how many
+tiles each face reaches into the raised ground, and whether outward corners are cut at 45
+degrees:
+
+| kind | north | south | sides | corners |
+| --- | --- | --- | --- | --- |
+| `outdoor` (cliffs, hills, ramparts) | 1 | 2 | 1 | cut |
+| `cave` (caves, the underworld) | 2 | 2 | 2 | cut |
+| `built` (dungeons, houses) | 2 | 2 | 2 | square |
+
+Everything else follows from the row, nothing is written twice:
+
+- the terrain model and its shader twin slope the faces to that depth;
+- the generator's tidy-up (`src/gen/settle.ts`) closes the ground behind a face to that depth,
+  so a face is never cut short by walkable ground;
+- a raised place is never smaller than its walls plus one tile of top: 3 by 4 tiles outdoors,
+  5 by 5 in rooms. Something one tile short grows by a tile where that changes nothing about
+  where one can walk; anything smaller comes down to the ground beside it and stays closed;
+- outward corners of `cut` kinds are cut, so a raised place ends up eight-sided;
+- the tile checker reports every one of these that does not hold.
+
+To add a kind of wall: add a row, and name it in `wallStyle()` (which ground on which kind of
+map follows it). One limit: the depths are per kind of map, because the drawing reads them
+once per map; corners can differ from ground to ground.
+
+Water and lava lie on the level of the land beside them. Land stands a bank's height (about
+3 px) above them and slopes in over 4 px; a bank is not a wall, is never cut, and does not
+count as "lower ground" for any of the rules above.
+
 ## The tile table
 
 `core/tileset.ts` is the one place that says what every ground, prop and object is: where it
