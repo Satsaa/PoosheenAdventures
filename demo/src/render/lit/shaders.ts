@@ -27,71 +27,106 @@ void main() {
 const TERRAIN_SHAPE = `
 uniform sampler2D uLift;
 uniform vec4 uWallP, uWallL;
-float nbL[25];
-float nbK[25];
+// the 7 x 7 tiles around the loaded one (index j * 7 + i, the tile itself is 24)
+float nbL[49];
+float nbK[49];
 vec2 nbFit;
-void loadNb(ivec2 t) {
-  ivec2 sz = textureSize(uLift, 0);
-  nbFit = texelFetch(uLift, clamp(t, ivec2(0), sz - 1), 0).ba;
-  for (int j = 0; j < 5; j++) for (int i = 0; i < 5; i++) {
-    ivec2 q = t + ivec2(i - 2, j - 2);
-    float L = 0.0, K = 1.0;
-    if (q.x >= 0 && q.y >= 0 && q.x < sz.x && q.y < sz.y) { vec4 v = texelFetch(uLift, q, 0); L = v.r * 255.0; K = floor(v.g * 255.0 + 0.5); }
-    nbL[j * 5 + i] = L; nbK[j * 5 + i] = K;
-  }
-}
+// cut halves of tiles cut at 45 degrees near the loaded one: rect origin (px), corner point (px), low level, runs
+vec2 cgO[10]; vec2 cgC[10]; float cgL[10]; vec2 cgR[10]; float cgS[10];
+int cgN;
 float runOf(bool sideways, bool south, float kq, float dL, bool lip, bool walk) {
   if (kq > 1.5 && dL <= 4.0) return 4.0;   // a bank into water or lava on its own level
   if (walk) return 0.0;
   vec4 W = lip ? uWallL : uWallP;
-  return min(32.0, sideways ? W.w : south ? W.x : W.z);
+  // (north: the depth plus the height of the step, so that the face shows exactly its tile)
+  return min(48.0, sideways ? W.w : south ? W.x : W.z + dL);
+}
+void loadNb(ivec2 t) {
+  ivec2 sz = textureSize(uLift, 0);
+  nbFit = texelFetch(uLift, clamp(t, ivec2(0), sz - 1), 0).ba;
+  for (int j = 0; j < 7; j++) for (int i = 0; i < 7; i++) {
+    ivec2 q = t + ivec2(i - 3, j - 3);
+    float L = 0.0, K = 1.0;
+    if (q.x >= 0 && q.y >= 0 && q.x < sz.x && q.y < sz.y) { vec4 v = texelFetch(uLift, q, 0); L = v.r * 255.0; K = floor(v.g * 255.0 + 0.5); }
+    nbL[j * 7 + i] = L; nbK[j * 7 + i] = K;
+  }
+  // (the twin of cutsOf() and the cut lows of lowsOf() in core/shape.ts)
+  cgN = 0;
+  float L = nbL[24], K = nbK[24];
+  if (mod(K, 4.0) > 0.5) return;
+  bool walk = mod(K, 32.0) >= 15.5, lip = mod(K, 8.0) >= 3.5;
+  for (int j = 1; j < 6; j++) for (int i = 1; i < 6; i++) {
+    int n = j * 7 + i;
+    if (nbK[n] < 31.5 || mod(nbK[n], 4.0) > 0.5 || nbL[n] < L) continue;
+    float top = nbL[n];
+    for (int c = 0; c < 4; c++) {
+      int sx = c < 2 ? 1 : -1, sy = (c == 1 || c == 2) ? 1 : -1;
+      int na = n + sx, nb = n + sy * 7;
+      float ka = mod(nbK[na], 4.0), kb = mod(nbK[nb], 4.0);
+      if ((ka > 0.5 && ka < 1.5) || (kb > 0.5 && kb < 1.5) || nbL[na] >= top || nbL[nb] >= top) continue;
+      float Lc = max(nbL[na], nbL[nb]);
+      bool bank = (ka > 1.5 || kb > 1.5) && top - Lc <= 4.0;
+      if (Lc >= L || (walk && !bank) || cgN >= 10) continue;
+      float kc = bank ? 2.0 : 0.0;
+      vec2 o = vec2(float(i - 3), float(j - 3)) * 16.0;
+      cgO[cgN] = o; cgC[cgN] = o + vec2(sx > 0 ? 16.0 : 0.0, sy > 0 ? 16.0 : 0.0); cgL[cgN] = Lc;
+      cgR[cgN] = vec2(runOf(true, false, kc, L - Lc, lip, walk), runOf(false, sy > 0, kc, L - Lc, lip, walk));
+      cgS[cgN] = float(c);
+      cgN++;
+    }
+  }
 }
 // Surface lift (px) at point p (px, relative to the centre tile's corner) of the loaded tile.
 // dir: 0 top, 1 faces south, 2 faces north, 3 faces west, 4 faces east, 5..8 a 45 degree cut that
 // faces NE, SE, SW, NW; lowL: the ground it rises from.
-// (the twin of rawSurface() in core/shape.ts. How much a tile's faces are scaled so that a top
+// (the twin of over() in core/shape.ts. How much a tile's faces are scaled so that a top
 // is always left is worked out there, once per tile, and arrives in the lift texture.)
 float terrH(vec2 p, out int dir, out float lowL, out float run) {
-  float L = nbL[12], K = nbK[12];
+  float L = nbL[24], K = nbK[24];
   dir = 0; lowL = L; run = 0.0;
   if (mod(K, 4.0) > 0.5) return L;
   bool walk = mod(K, 32.0) >= 15.5;   // walkable ground: only banks into liquid beside it
   bool lip = mod(K, 8.0) >= 3.5;
   float sx = nbFit.x, sy = nbFit.y;
   float h = L;
-  for (int j = 0; j < 5; j++) for (int i = 0; i < 5; i++) {
-    int n = j * 5 + i;
-    if (n == 12) continue;
-    float kq = mod(nbK[n], 4.0);
-    if ((kq > 0.5 && kq < 1.5) || (walk && kq < 1.5)) continue;
+  for (int j = 0; j < 7; j++) for (int i = 0; i < 7; i++) {
+    int n = j * 7 + i;
+    if (n == 24) continue;
     float Lq = nbL[n];
-    if (Lq >= L || (walk && L - Lq > 4.0)) continue;
+    if (Lq >= L) continue;
+    float kq = mod(nbK[n], 4.0);
+    if (kq > 0.5 && kq < 1.5) continue;
     float dL = L - Lq;
-    float ox = float(i - 2) * 16.0, oy = float(j - 2) * 16.0;
+    if (walk && (kq < 1.5 || dL > 4.0)) continue;
+    float ox = float(i - 3) * 16.0, oy = float(j - 3) * 16.0;
     float gx = max(max(ox - p.x, p.x - (ox + 16.0)), 0.0);
     float gy = max(max(oy - p.y, p.y - (oy + 16.0)), 0.0);
     float rx = runOf(true, false, kq, dL, lip, walk) * sx;
-    float ry = runOf(false, j > 2, kq, dL, lip, walk) * sy;
+    float ry = runOf(false, j > 3, kq, dL, lip, walk) * sy;
     float dx = gx <= 0.0 ? 0.0 : (rx < 0.25 ? 9.0 : gx / rx);
     float dy = gy <= 0.0 ? 0.0 : (ry < 0.25 ? 9.0 : gy / ry);
     float hq = Lq + dL * min(max(dx, dy), 1.0);
     if (hq < h) {
       h = hq; lowL = Lq;
-      if (dx >= dy) { dir = i < 2 ? 3 : 4; run = rx; } else { dir = j > 2 ? 1 : 2; run = ry; }
+      if (dx >= dy) { dir = i < 3 ? 3 : 4; run = rx; } else { dir = j > 3 ? 1 : 2; run = ry; }
     }
   }
-  if (K >= 31.5) {
-    // a corner cut at 45 degrees (the twin of the CUT lows in core/shape.ts)
-    for (int c = 0; c < 4; c++) {
-      int sx = c < 2 ? 1 : -1, sy = (c == 1 || c == 2) ? 1 : -1;
-      int na = 12 + sx, nb = 12 + sy * 5;
-      float ka = mod(nbK[na], 4.0), kb = mod(nbK[nb], 4.0);
-      // (a bank into water or lava is not a wall: it is never cut)
-      if ((ka > 0.5 && ka < 1.5) || (kb > 0.5 && kb < 1.5) || nbL[na] >= L - (ka > 1.5 ? 4.0 : 0.0) || nbL[nb] >= L - (kb > 1.5 ? 4.0 : 0.0)) continue;
-      float Lq = max(nbL[na], nbL[nb]);
-      vec2 cp = vec2(sx > 0 ? 16.0 : 0.0, sy > 0 ? 16.0 : 0.0);
-      float hq = Lq + (L - Lq) * min((abs(p.x - cp.x) + abs(p.y - cp.y)) / 16.0, 1.0);
-      if (hq < h) { h = hq; lowL = Lq; dir = 5 + c; run = 11.3; }
+  for (int c = 0; c < 10; c++) {
+    if (c >= cgN) break;
+    vec2 o = cgO[c];
+    float gx = max(max(o.x - p.x, p.x - (o.x + 16.0)), 0.0);
+    float gy = max(max(o.y - p.y, p.y - (o.y + 16.0)), 0.0);
+    float rx = cgR[c].x * sx, ry = cgR[c].y * sy;
+    float dx = gx <= 0.0 ? 0.0 : (rx < 0.25 ? 9.0 : gx / rx);
+    float dy = gy <= 0.0 ? 0.0 : (ry < 0.25 ? 9.0 : gy / ry);
+    float rd = (rx + ry) * 0.5, past = abs(p.x - cgC[c].x) + abs(p.y - cgC[c].y) - 16.0;
+    float dd = past <= 0.0 ? 0.0 : (rd < 0.25 ? 9.0 : past / rd);
+    float d = max(max(dx, dy), dd);
+    float hq = cgL[c] + (L - cgL[c]) * min(d, 1.0);
+    if (hq < h) {
+      h = hq; lowL = cgL[c];
+      if (dd >= max(dx, dy)) { dir = 5 + int(cgS[c]); run = rd * 0.707; }
+      else if (dx >= dy) { dir = cgO[c].x < 0.0 ? 3 : 4; run = rx; } else { dir = cgO[c].y > 0.0 ? 1 : 2; run = ry; }
     }
   }
   return h;
@@ -148,12 +183,12 @@ void main() {
     // ---- the sloped sides of raised ground. The instance covers everything this tile's surface can
     // project to; for each pixel, walk down from the tile's top until the sight line meets the surface.
     loadNb(ivec2(int(vInst.y + 0.5), int(vInst.z + 0.5)));
-    float L = nbL[12], lowest = vTint.r;
+    float L = nbL[24], lowest = vTint.r;
     // (px of the tile grid, with the texel's own sub-px position when the terrain is baked finer)
     vec2 tc = (floor(vLocal * uS) + 0.5) / uS;
     float ys = tc.y - L, px = tc.x;
     float stepH = 0.5 / uS;
-    bool southOpen = mod(nbK[17], 4.0) < 0.5 || mod(nbK[17], 4.0) > 1.5;
+    bool southOpen = mod(nbK[31], 4.0) < 0.5 || mod(nbK[31], 4.0) > 1.5;
     int dir = 0; float lowL = L, run = 0.0, hh = -99.0;
     bool wasSouth = false, was = false;
     for (int s2 = 0; s2 <= 1200; s2++) {
@@ -171,7 +206,7 @@ void main() {
           // neighbours can fit their faces differently, and the step between them is drawn here.
           // Where that tile really is higher it is drawn later and covers this.)
           if (!southOpen) break;
-          d2 = 1; l2 = nbL[17] < L ? nbL[17] : L - 48.0; r2 = 0.0;
+          d2 = 1; l2 = nbL[31] < L ? nbL[31] : L - 48.0; r2 = 0.0;
           if (h2 < l2) break;
         }
         hh = h2; dir = d2 == 0 ? 1 : d2; lowL = l2; run = r2;
@@ -182,6 +217,9 @@ void main() {
     if (hh < -90.0) discard;
     float dL = max(L - lowL, 0.01);
     float frac = clamp((hh - lowL) / dL, 0.0, 1.0);
+    // the cut half of a tile cut at 45 degrees is the lower ground itself: that ground is drawn
+    // under this tile, and shows where the wall has come all the way down
+    if (dir >= 5 && frac < 0.02) discard;
     // how long the face is on screen, to lay the texture down it at an even scale
     int cutDir = dir;                              // 5 NE, 6 SE, 7 SW, 8 NW: laid out like the south or north face they lean toward
     if (dir >= 5) dir = (dir == 6 || dir == 7) ? 1 : 2;
@@ -221,7 +259,7 @@ void main() {
     // the top of a tile with sloped sides: only where the surface really is at the top
     loadNb(ivec2(int(vInst.y + 0.5), int(vInst.z + 0.5)));
     int d3; float l3, r3;
-    if (terrH((floor(vLocal * uS) + 0.5) / uS, d3, l3, r3) < nbL[12] - 0.3) discard;
+    if (terrH((floor(vLocal * uS) + 0.5) / uS, d3, l3, r3) < nbL[24] - 0.3) discard;
   }
   ivec2 lq = flip ? ivec2(tSize.x - 1 - lp.x, lp.y) : lp;
   ivec2 st = ivec2(vSrc.xy) + lq;

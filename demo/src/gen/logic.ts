@@ -138,7 +138,7 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
       for (let j = 0; j < k; j++) if (seaOf(isles[j]) === f) seaPairs.push([first + k, first + j, f]);
       const look = irng.pick(ISLAND_BIOMES);
       const b = BIOMES.find((x) => x.id === look)!;
-      themes.push({ biome: b.id, elev: b.id === 'beach' || !S.cliffs ? (S.cliffs ? 0 : 1) : 1, name: names[k % names.length] + (k >= names.length ? ` ${1 + Math.floor(k / names.length)}` : ''), color: b.color });
+      themes.push({ biome: b.id, elev: 1, name: names[k % names.length] + (k >= names.length ? ` ${1 + Math.floor(k / names.length)}` : ''), color: b.color });
     });
     for (const screens of isles) for (const s of screens) {
       isIsle[s] = 1;

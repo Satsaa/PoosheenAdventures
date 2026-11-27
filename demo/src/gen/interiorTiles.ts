@@ -30,7 +30,7 @@ export interface InteriorTiles {
 interface Rect { x0: number; y0: number; x1: number; y1: number }
 
 /** wall thickness in tiles */
-const WT = 5;
+const WT = 6;
 
 export function realiseInterior(bp: InteriorBP, seed: number): InteriorTiles {
   const rng = new Rng(childSeed(seed, bp.id));

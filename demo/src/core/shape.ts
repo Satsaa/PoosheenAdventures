@@ -98,7 +98,7 @@ export const MIN_TOP = 4;
 export const isLiquidG = (g: number): boolean => g === T.WATER || g === T.DEEP || g === T.LAVA;
 /** What a tile is for the shape: ground, nothing, liquid; plus the lip flag. */
 export const kindAt = (dim: Dimension, i: number): number =>
-  dim.ground[i] === T.VOID ? KIND.VOID : isLiquidG(dim.ground[i]) ? KIND.LIQUID : (dim.lip?.[i] ? KIND.LIP : KIND.GROUND) | (dim.solid[i] ? (dim.cut?.[i] ? KIND.CUT : 0) : KIND.WALK);
+  dim.ground[i] === T.VOID ? KIND.VOID : isLiquidG(dim.ground[i]) ? KIND.LIQUID : (dim.lip?.[i] ? KIND.LIP : KIND.GROUND) | (dim.solid[i] ? 0 : KIND.WALK) | (dim.cut?.[i] ? KIND.CUT : 0);
 
 /** Per tile: its kind, and whether it has lower ground within reach of a slope (precomputed for drawing). */
 export function tileKinds(dim: Dimension, liftPx: ArrayLike<number>): Uint8Array {
@@ -109,13 +109,15 @@ export function tileKinds(dim: Dimension, liftPx: ArrayLike<number>): Uint8Array
     const i = y * w + x;
     if (kind[i] & 3) continue; // liquid and nothing have no sloped sides
     const walk = (kind[i] & KIND.WALK) !== 0; // walkable ground only banks into liquid right beside it
-    const R = walk ? 1 : 2;
-    let sloped = false;
+    const R = walk ? 1 : REACH;
+    let sloped = (kind[i] & KIND.CUT) !== 0;
     for (let dy = -R; dy <= R && !sloped; dy++) for (let dx = -R; dx <= R; dx++) {
       const xx = x + dx, yy = y + dy;
       if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
       const j = yy * w + xx;
+      // lower ground within a face's reach, or a tile cut at 45 degrees close enough for its diagonal wall to cross this one
       if ((walk ? (kind[j] & 3) === KIND.LIQUID && liftPx[i] - liftPx[j] <= BANK_STEP : (kind[j] & 3) !== KIND.VOID) && liftPx[j] < liftPx[i]) { sloped = true; break; }
+      if ((kind[j] & KIND.CUT) && Math.abs(dx) <= (walk ? 1 : 2) && Math.abs(dy) <= (walk ? 1 : 2)) { sloped = true; break; }
     }
     if (sloped) kind[i] |= KIND.SLOPED;
   }
@@ -132,51 +134,78 @@ export interface Field {
   pat: WallPatterns;
 }
 
-/** The run in px of a face of this tile toward a neighbour `dL` px lower, before fitting. */
+/** how many tiles away lower ground can still shape a tile: the deepest face is three tiles */
+export const REACH = 3;
+const MAX_RUN = REACH * 16;
+
+/**
+ * The run in px of a face of this tile toward a neighbour `dL` px lower, before fitting.
+ * South and sideways it is the depth the wall table gives. North it is that plus the height of
+ * the step: a face that looks away from the camera is foreshortened by its height on screen, and
+ * it is to show exactly its tile.
+ */
 function runOf(F: Field, lip: boolean, sideways: boolean, south: boolean, kq: number, dL: number, walk = false): number {
   // into water or lava on its own level: a bank. A real step down to water is a wall like any other.
   if (kq === KIND.LIQUID && dL <= BANK_STEP) return BANK_RUN;
   if (walk) return 0;
   const W = lip ? F.pat.lip : F.pat.main;
-  return Math.min(32, sideways ? W[3] : south ? W[0] : W[2]);
+  return Math.min(MAX_RUN, sideways ? W[3] : south ? W[0] : W[2] + dL);
 }
 
-/** One lower neighbour of a tile, as far as the tile's surface is concerned. */
-interface Low { ox: number; oy: number; Lq: number; dL: number; rx: number; ry: number; /** a 45 degree cut: the tile corner (px) it is measured from */ cx?: number; cy?: number }
-/** the four corners of a tile: which way they point, and the corner point in px */
+/**
+ * One piece of lower ground, as far as a tile's surface is concerned: a whole tile, or the cut
+ * half of a tile cut at 45 degrees (then `cx, cy` is the corner the cut half lies at).
+ * All positions are px relative to the tile's own north-west corner.
+ */
+interface Low { ox: number; oy: number; Lq: number; dL: number; rx: number; ry: number; cx?: number; cy?: number }
+/** the four corners of a tile, by the way they point */
 export const CORNERS: [number, number][] = [[1, -1], [1, 1], [-1, 1], [-1, -1]];
 
-/** The lift of tile (x, y) if it is ground or liquid lower than L, as a cut sees it; -1 otherwise. */
-function lowBeside(F: Field, x: number, y: number, L: number): number {
-  if (x < 0 || y < 0 || x >= F.w || y >= F.h) return -1;
-  const q = y * F.w + x;
-  const k = F.kind(q) & 3;
-  // (a bank into water or lava is not a wall: it is never cut)
-  return k === KIND.VOID || F.lift(q) >= L - (k === KIND.LIQUID ? BANK_STEP : 0) ? -1 : F.lift(q);
+/**
+ * The cut halves of tile (qx, qy): for each corner where the ground beside it is lower on both
+ * sides that meet there, [sx, sy, level of that lower ground, is it water on the tile's own level].
+ */
+export function cutsOf(F: Field, qx: number, qy: number): [number, number, number, boolean][] {
+  const out: [number, number, number, boolean][] = [];
+  if (!(F.kind(qy * F.w + qx) & KIND.CUT)) return out;
+  const top = F.lift(qy * F.w + qx);
+  const beside = (x: number, y: number): [number, boolean] | null => {
+    if (x < 0 || y < 0 || x >= F.w || y >= F.h) return null;
+    const j = y * F.w + x, k = F.kind(j) & 3;
+    return k === KIND.VOID || F.lift(j) >= top ? null : [F.lift(j), k === KIND.LIQUID];
+  };
+  for (const [sx, sy] of CORNERS) {
+    const a = beside(qx + sx, qy), b = beside(qx, qy + sy);
+    if (!a || !b) continue;
+    const Lc = Math.max(a[0], b[0]);
+    out.push([sx, sy, Lc, (a[1] || b[1]) && top - Lc <= BANK_STEP]);
+  }
+  return out;
 }
 
 /** Everything lower than tile (x, y) within a face's reach, looked up once. */
 function lowsOf(F: Field, x: number, y: number): Low[] {
   const { w, h } = F, i = y * w + x, L = F.lift(i), lip = (F.kind(i) & KIND.LIP) !== 0, walk = (F.kind(i) & KIND.WALK) !== 0;
   const out: Low[] = [];
-  for (let j = -2; j <= 2; j++) for (let k = -2; k <= 2; k++) {
-    if (!j && !k) continue;
+  for (let j = -REACH; j <= REACH; j++) for (let k = -REACH; k <= REACH; k++) {
     const xx = x + k, yy = y + j;
     if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
     const q = yy * w + xx, kq = F.kind(q) & 3;
-    if (kq === KIND.VOID || (walk && kq !== KIND.LIQUID)) continue;
+    if (kq === KIND.VOID) continue;
     const Lq = F.lift(q);
-    if (Lq >= L || (walk && L - Lq > BANK_STEP)) continue;
-    out.push({ ox: k * 16, oy: j * 16, Lq, dL: L - Lq, rx: runOf(F, lip, true, false, kq, L - Lq, walk), ry: runOf(F, lip, false, j > 0, kq, L - Lq, walk) });
-  }
-  if (F.kind(i) & KIND.CUT) {
-    // a corner cut at 45 degrees: where the ground beside it is lower on two sides that meet, the
-    // wall runs along the tile's diagonal and its face falls from there to the corner point
-    for (const [sx, sy] of CORNERS) {
-      const a = lowBeside(F, x + sx, y, L), b = lowBeside(F, x, y + sy, L);
-      if (a < 0 || b < 0) continue;
-      const Lq = Math.max(a, b);
-      out.push({ ox: 0, oy: 0, Lq, dL: L - Lq, rx: 0, ry: 0, cx: sx > 0 ? 16 : 0, cy: sy > 0 ? 16 : 0 });
+    if (Lq < L) {
+      if (!j && !k) continue;
+      if (walk && (kq !== KIND.LIQUID || L - Lq > BANK_STEP)) continue;
+      out.push({ ox: k * 16, oy: j * 16, Lq, dL: L - Lq, rx: runOf(F, lip, true, false, kq, L - Lq, walk), ry: runOf(F, lip, false, j > 0, kq, L - Lq, walk) });
+      continue;
+    }
+    // ground at least as high that is cut at 45 degrees: its cut half is lower ground too,
+    // and the wall follows the diagonal
+    if (!(F.kind(q) & KIND.CUT) || Math.abs(j) > 2 || Math.abs(k) > 2) continue;
+    for (const [sx, sy, Lc, bank] of cutsOf(F, xx, yy)) {
+      if (Lc >= L || (walk && !bank)) continue;
+      const kc = bank ? KIND.LIQUID : KIND.GROUND;
+      out.push({ ox: k * 16, oy: j * 16, Lq: Lc, dL: L - Lc, rx: runOf(F, lip, true, false, kc, L - Lc, walk), ry: runOf(F, lip, false, sy > 0, kc, L - Lc, walk), cx: k * 16 + (sx > 0 ? 16 : 0), cy: j * 16 + (sy > 0 ? 16 : 0) });
     }
   }
   return out;
@@ -186,15 +215,16 @@ function lowsOf(F: Field, x: number, y: number): Low[] {
 function over(L: number, lows: Low[], px: number, py: number, sx: number, sy: number): number {
   let out = L;
   for (const q of lows) {
-    if (q.cx !== undefined) {
-      const hq = q.Lq + q.dL * Math.min((Math.abs(px - q.cx) + Math.abs(py - q.cy!)) / 16, 1);
-      if (hq < out) out = hq;
-      continue;
-    }
     const gx = Math.max(q.ox - px, px - (q.ox + 16), 0), gy = Math.max(q.oy - py, py - (q.oy + 16), 0);
     const rx = q.rx * sx, ry = q.ry * sy;
     const dx = gx <= 0 ? 0 : rx < 0.25 ? 9 : gx / rx, dy = gy <= 0 ? 0 : ry < 0.25 ? 9 : gy / ry;
-    const hq = q.Lq + q.dL * Math.min(Math.max(dx, dy), 1);
+    let d = Math.max(dx, dy);
+    if (q.cx !== undefined) {
+      // a cut half: how far past the diagonal, across a wall as deep as the two it joins
+      const rd = (rx + ry) / 2, past = Math.abs(px - q.cx) + Math.abs(py - q.cy!) - 16;
+      d = Math.max(d, past <= 0 ? 0 : rd < 0.25 ? 9 : past / rd);
+    }
+    const hq = q.Lq + q.dL * Math.min(d, 1);
     if (hq < out) out = hq;
   }
   return out;
@@ -215,7 +245,7 @@ function axisFit(F: Field, x: number, y: number): [number, number] {
   // how far the raised ground goes one way, and the run of the face at its end: lower ground ends
   // it with a face, nothing (the void, the map edge) without one; over two tiles away does not matter
   const end = (dx: number, dy: number): { k: number; run: number } | null => {
-    for (let k = 1; k <= 2; k++) {
+    for (let k = 1; k <= REACH; k++) {
       const xx = x + dx * k, yy = y + dy * k;
       if (xx < 0 || yy < 0 || xx >= w || yy >= h) return { k, run: 0 };
       const q = yy * w + xx, kq = F.kind(q) & 3;
@@ -306,7 +336,7 @@ const FOOTPRINT: [number, number][] = [[8, 8], [8, 4], [8, 12]];
 /** Is anything within a face's reach of the tile lower than it? Most tiles: no, and then they are simply flat. */
 function lowerNear(dim: Dimension, i: number): boolean {
   const { w, h } = dim, x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
-  for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+  for (let dy = -REACH; dy <= REACH; dy++) for (let dx = -REACH; dx <= REACH; dx++) {
     const xx = x + dx, yy = y + dy;
     if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
     const j = yy * w + xx;
@@ -350,7 +380,7 @@ export function thinPairs(dim: Dimension, i: number): [number, number, number][]
     };
     const [a, na] = end(-1), [b, nb] = end(1);
     if (a < 0 || b < 0) continue;
-    const need = faceDepth(dim, -dx, -dy) + 1 + faceDepth(dim, dx, dy);
+    const need = faceDepth(dim, -dx, -dy, L - liftAt(dim, a)) + 1 + faceDepth(dim, dx, dy, L - liftAt(dim, b));
     if (na + nb + 1 < need) out.push([b, a, need - (na + nb + 1)]);
   }
   return out;
@@ -376,9 +406,10 @@ export function bareEdge(dim: Dimension, i: number): number {
 }
 
 /** How many tiles of closed raised ground a face needs behind its edge: its footprint in whole tiles. */
-export function faceDepth(dim: Dimension, dx: number, dy: number): number {
+export function faceDepth(dim: Dimension, dx: number, dy: number, dL = LIFT_PX): number {
   const W = GAME_WALLS[dim.kind].main;
-  return Math.ceil(Math.min(32, dx !== 0 ? W[3] : dy > 0 ? W[0] : W[2]) / 16 - 1e-6);
+  // (a face that looks north reaches further in by the height of its step: see runOf)
+  return Math.ceil(Math.min(MAX_RUN, dx !== 0 ? W[3] : dy > 0 ? W[0] : W[2] + dL) / 16 - 1e-6);
 }
 
 /**
@@ -394,7 +425,7 @@ export function shortFace(dim: Dimension, i: number, dx: number, dy: number): nu
   if (fx < 0 || fy < 0 || fx >= w || fy >= h) return -1;
   const f = fy * w + fx, kf = kindAt(dim, f) & 3;
   if (kf === KIND.VOID || liftAt(dim, f) >= L - (kf === KIND.LIQUID ? BANK_STEP : 0)) return -1; // no face this way
-  for (let k = 1; k < faceDepth(dim, dx, dy); k++) {
+  for (let k = 1, D = faceDepth(dim, dx, dy, L - liftAt(dim, f)); k < D; k++) {
     const bx = x - dx * k, by = y - dy * k;
     if (bx < 0 || by < 0 || bx >= w || by >= h) return -1;
     const b = by * w + bx, kb = kindAt(dim, b);
@@ -406,18 +437,22 @@ export function shortFace(dim: Dimension, i: number, dx: number, dy: number): nu
 }
 
 /**
- * Can this tile be cut at 45 degrees: solid raised ground with lower ground on exactly two sides
- * that meet, and ground at least as high on the other two (so the half that stays joins the rest)?
+ * Can this tile be cut at 45 degrees? Any ground can: lower ground on exactly two sides that
+ * meet, and ground at least as high on the other two, so the half that stays joins the rest.
+ * Closed ground is cut toward any lower ground. Ground one can walk on is cut only toward
+ * water or lava on its own level (a shore), never toward a drop.
  */
 export function cornerAt(dim: Dimension, i: number): boolean {
-  if (kindAt(dim, i) & (3 | KIND.WALK)) return false;
+  const ki = kindAt(dim, i);
+  if (ki & 3) return false;
+  const walk = (ki & KIND.WALK) !== 0;
   const { w, h } = dim, x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
-  const side = (xx: number, yy: number): number => {   // 1 lower, 0 as high or higher, -1 nothing
+  const side = (xx: number, yy: number): number => {   // 1 lower, 0 as high or higher, -1 nothing or not allowed
     if (xx < 0 || yy < 0 || xx >= w || yy >= h) return -1;
-    const j = yy * w + xx;
-    const k = kindAt(dim, j) & 3;
-    // (a bank into water or lava is not a wall: it is never cut)
-    return k === KIND.VOID ? -1 : liftAt(dim, j) < L - (k === KIND.LIQUID ? BANK_STEP : 0) ? 1 : 0;
+    const j = yy * w + xx, k = kindAt(dim, j) & 3;
+    if (k === KIND.VOID) return -1;
+    if (liftAt(dim, j) >= L) return 0;
+    return walk && !(k === KIND.LIQUID && L - liftAt(dim, j) <= BANK_STEP) ? -1 : 1;
   };
   const n = side(x, y - 1), e = side(x + 1, y), s = side(x, y + 1), wst = side(x - 1, y);
   return (n === 1 && e === 1 && s === 0 && wst === 0) || (e === 1 && s === 1 && wst === 0 && n === 0) ||

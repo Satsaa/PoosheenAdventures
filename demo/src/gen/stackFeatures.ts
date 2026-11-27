@@ -1,5 +1,7 @@
 // Put the blueprint's features onto the stacked tile maps: stairs between worlds, buildings,
 // gated alcoves, loose objects; then footpaths and scenery that can never block anything.
+/** the level of the open sea, and of the lowest land (plains, beaches, marshes, sandbars): coasts are flush with the water */
+export const SEA_LEVEL = 1;
 import { D, T, type DimId, type MapObject } from '../core/types';
 import type { Feature, RegionBP } from './blueprint';
 import { STYLES, type ST } from './stackBase';
@@ -350,7 +352,7 @@ function rimAlcove(st: ST, r: number, f: Extract<Feature, { f: 'pocket' }>): boo
 function buildDock(st: ST, r: number, filler: number, ferry: boolean, edgeId?: string): boolean {
   const { w, h, dim } = st;
   const region = st.bp.regions[r];
-  if (region.elev > 2) return false; // no jetties off the top of a cliff
+  if (region.elev > SEA_LEVEL + 1) return false; // a jetty stands on the water's level or one above it, never on a cliff
   const dirs: [number, number, 'n' | 'e' | 's' | 'w'][] = [[0, -1, 'n'], [1, 0, 'e'], [0, 1, 's'], [-1, 0, 'w']];
   for (const g of st.interior[r]) {
     if (st.reserved[g] || dim.solid[g]) continue;
@@ -487,7 +489,7 @@ function stampOutcrops(st: ST, count: number): void {
         k++;
         continue;
       }
-      for (const i of blob) { dim.ground[i] = T.SAND; dim.solid[i] = 0; dim.elev[i] = 0; }
+      for (const i of blob) { dim.ground[i] = T.SAND; dim.solid[i] = 0; dim.elev[i] = SEA_LEVEL; }
       // where to stand (and where a chest would be): the tile deepest inside
       const inside = (i: number) => [i - 1, i + 1, i - w, i + w, i - w - 1, i - w + 1, i + w - 1, i + w + 1].filter((j) => mine[j]).length;
       const heart = blob.reduce((a, b) => (inside(b) > inside(a) ? b : a));

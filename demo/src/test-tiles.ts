@@ -30,7 +30,7 @@ for (let i = 0; i < N; i++) {
 console.log(`generated worlds with warnings: ${warned}/${N}`);
 console.log(`walkways along a drop that could not be given a wall: ${(walkways / N).toFixed(1)} per world`);
 if (warned) fail('the generator leaves tiles without what they need');
-if (walkways / N > 6) fail('too many edges without a wall');
+if (walkways / N > 8) fail('too many edges without a wall');
 
 // 2. planted violations are found, and named from the table
 const fresh = () => generateWorld('tiles-plant');

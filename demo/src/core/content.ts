@@ -71,11 +71,11 @@ export const BIOMES: Biome[] = [
   { id: 'plains', name: ['Pusheen Meadow', 'Whisker Fields', 'Sunny Commons'], elev: [1], color: '#7fc866', likes: ['sword'] },
   { id: 'forest', name: ['Mossback Woods', 'Gnawwood Thicket', 'Tangle Grove'], elev: [1, 2], color: '#3f8f52', likes: ['sword', 'lantern'] },
   { id: 'mountain', name: ['Stonepaw Crags', 'Knoblin Heights', 'Grumble Peaks'], elev: [3], color: '#9a8f86', likes: ['glove', 'bombBag', 'hookshot'] },
-  { id: 'lake', name: ['Shellback Marsh', 'Glimmer Ponds', 'Reedwater'], elev: [0], color: '#4a9fb8', likes: ['flippers'] },
+  { id: 'lake', name: ['Shellback Marsh', 'Glimmer Ponds', 'Reedwater'], elev: [1], color: '#4a9fb8', likes: ['flippers'] },
   { id: 'desert', name: ['Sunspill Dunes', 'Dry Crumb Flats', 'Sunbaked Reach'], elev: [1, 2], color: '#d9b96a', likes: ['bombBag', 'glove'] },
   { id: 'snow', name: ['Frostpaw Ridge', 'Cold Nap Tundra', 'Shiver Shelf'], elev: [2, 3], color: '#cfe3ee', likes: ['hookshot', 'bow'] },
   { id: 'badlands', name: ['Echo Canyon', 'Rustrock Gulch', 'Cracked Mesa'], elev: [2], color: '#b8694a', likes: ['hookshot', 'bombBag', 'bow'] },
-  { id: 'beach', name: ['Saltwhisker Shore', 'Seashell Strand', 'Driftwood Cove'], elev: [0], color: '#e6d59a', likes: ['flippers', 'glove'] },
+  { id: 'beach', name: ['Saltwhisker Shore', 'Seashell Strand', 'Driftwood Cove'], elev: [1], color: '#e6d59a', likes: ['flippers', 'glove'] },
 ];
 
 export const UNDER_BIOMES: Record<string, { id: string; name: string; color: string }> = {

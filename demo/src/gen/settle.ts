@@ -5,7 +5,7 @@
 // fits faces to the room they have, see core/shape.ts.)
 import { D, T, type Dimension } from '../core/types';
 import { NEEDS, PROPS, tileCtx } from '../core/tileset';
-import { bareEdge, cornerAt, isWallG, liftAt, shortFace, thinAt, thinPairs, wallStyle } from '../core/shape';
+import { bareEdge, cornerAt, isWallG, levelAt, liftAt, shortFace, thinAt, thinPairs, wallStyle } from '../core/shape';
 
 /**
  * Would closing walkable tile c leave everything around it as connected as before? True when the
@@ -176,7 +176,39 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   }
     return any;
   };
+  // a building stands on level ground: closed ground within a wall's reach of it that lies lower
+  // comes up to its level (before the walls are settled, so they form further out)
+  for (let i = 0; i < n; i++) {
+    if (dim.deco[i] !== D.HOUSE || levelAt(dim, i)) continue;
+    const x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
+    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+      const xx = x + dx, yy = y + dy, j = yy * w + xx;
+      if (xx < 0 || yy < 0 || xx >= w || yy >= h || !dim.solid[j] || liquid(j) || keep(j) || dim.ground[j] === T.VOID || liftAt(dim, j) >= L) continue;
+      dim.elev[j] = dim.elev[i];
+      if (isWallG(dim.ground[j]) !== isWallG(dim.ground[i])) dim.ground[j] = dim.ground[i];
+    }
+  }
   for (let round = 0; round < 10; round++) { widen(); if (!deepen()) break; }
+  // where a building still has a wall face running under it (a river was cut close behind it),
+  // the ground between takes the thin-bevel pattern: its far faces are a lip, not a wall
+  for (let i = 0; i < n; i++) {
+    if (dim.deco[i] !== D.HOUSE || levelAt(dim, i)) continue;
+    const lip = (dim.lip ??= new Uint8Array(n));
+    const x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
+    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+      const xx = x + dx, yy = y + dy, j = yy * w + xx;
+      if (xx >= 0 && yy >= 0 && xx < w && yy < h && dim.solid[j] && liftAt(dim, j) === L) lip[j] = 1;
+    }
+  }
+  // (a building is placed whole and stands on level ground: no diagonal wall comes within its reach)
+  const nearHouse = (i: number): boolean => {
+    const x = i % w, y = (i / w) | 0;
+    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+      const xx = x + dx, yy = y + dy;
+      if (xx >= 0 && yy >= 0 && xx < w && yy < h && dim.deco[yy * w + xx] === D.HOUSE) return true;
+    }
+    return false;
+  };
   // (settling again keeps the cuts there are, where they still are corners)
   const was = dim.cut;
   const cut = (dim.cut = new Uint8Array(n));
@@ -207,7 +239,8 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   }
   for (let i = 0; i < n; i++) {
     // (which walls are cut is the wall table's business: core/shape.ts)
-    if (keep(i) || !dim.solid[i] || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut') continue;
+    // closed ground and walkable shores alike: any tile can be cut (what may be is cornerAt's business)
+    if (keep(i) || nearHouse(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut') continue;
     if (cornerAt(dim, i) && !thinAt(dim, i)) cut[i] = 1;
   }
 }

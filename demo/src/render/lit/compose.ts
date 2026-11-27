@@ -162,6 +162,19 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
         if (lN <= L && lW <= L && lNW > L) flags |= AUTO.SK_NW;
         if (lN <= L && lE <= L && lNE > L) flags |= AUTO.SK_NE;
       }
+      if (lay.kind && lay.kind[i] & KIND.CUT) {
+        // a tile cut at 45 degrees: its cut half is the lower ground beside it (land or water),
+        // drawn first, at that ground's own height; the tile's top and wall then cover the rest
+        let lg = -1, ll = -1;
+        for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]]) {
+          const xx = x + dx, yy = y + dy;
+          if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+          const j = yy * w + xx;
+          if (ground[j] !== T.VOID && liftPx[j] < L && liftPx[j] > ll) { ll = liftPx[j]; lg = ground[j]; }
+        }
+        const lf = lg >= 0 ? get('g:' + lg) : undefined;
+        if (lf) { const f = lf[variant(x, y, seed + lg, lf.length)]; inst.push(px, top + y * P - ll, P, P, f.x, f.y, -1, 0, ll / P, x, y, 0); }
+      }
       const f0 = gl[variant(x, y, seed + g, gl.length)];
       let flip = g !== T.FLOOR && g !== T.WALL && g !== T.PLANK && g !== T.CAVEWALL && hash2(x, y, seed + 13) < 0.5 ? 128 : 0;
       // corner textures from the sheet (fallback: shader rims from the flags above)
@@ -258,7 +271,7 @@ export function buildStatic(dim: Dimension, lay: Layout, sheet: AssetSheet, seed
         // everything this tile's sloped sides can project to: from its top row at full lift down
         // to its bottom row at the lift of the lowest ground around it
         let low = L;
-        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
           const xx = x + dx, yy = y + dy;
           if (xx < 0 || yy < 0 || xx >= w || yy >= h || (lay.kind![yy * w + xx] & 3) === KIND.VOID) continue;
           low = Math.min(low, liftPx[yy * w + xx]);
