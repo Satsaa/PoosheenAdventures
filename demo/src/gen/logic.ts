@@ -215,14 +215,16 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
     if (S.castle) {
       // a castle's walls are three tiles thick at the sides and four above and below, on both sides
       // of the yard: it needs to be two screens deep everywhere, so every screen of the region must lie
-      // in a block of 2 x 2 of its screens. (Failing that, any region of three screens, as before.)
+      // in a block of 2 x 2 of its screens. A world with no region that has such a block has no castle.
       const fat = (r: RegionBP) => {
         const own = new Set(part.regions[r.idx]);
         const block = (s: number) => [0, -1, -GW, -GW - 1].some((o) => { const t = s + o, x = t % GW; return t >= 0 && x < GW - 1 && own.has(t) && own.has(t + 1) && own.has(t + GW) && own.has(t + GW + 1); });
-        return [...own].every(block);
+        return { all: [...own].every(block), some: [...own].some(block) };
       };
-      let cands = stack.regions.filter((r) => fits(r, 4) && fat(r));
-      if (!cands.length) cands = stack.regions.filter((r) => fits(r, 3));
+      // (best a region that is such a block all over; else one that has such a block somewhere, whose
+      // yard is there and whose narrower parts are mostly wall)
+      let cands = stack.regions.filter((r) => fits(r, 4) && fat(r).all);
+      if (!cands.length) cands = stack.regions.filter((r) => fits(r, 4) && fat(r).some);
       castle = cands.find((r) => lg.assign.get(r.id)!.some((p) => p.kind === 'sanctum')) ?? cands.sort((a, b) => tier(b) - tier(a))[0] ?? null;
       if (castle) { become(castle, 'castle', brng.pick(CASTLE_NAMES), '#b9b4c6'); castle.blocky = true; }
     }

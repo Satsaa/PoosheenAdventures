@@ -124,7 +124,7 @@ function raise(dim: Dimension, c: number, i: number): void {
  *    (dungeons, houses) stay square.
  * `keep` names tiles that must stay as they are (gates, anchors of the logic, anything with an object).
  */
-export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = () => false, gate: (i: number) => boolean = () => false): void {
+export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = () => false, gate: (i: number) => boolean = () => false, only?: Uint8Array): void {
   gateAt = gate;
   const { w, h } = dim, n = w * h;
   const held = new Set(dim.objects.map((o) => o.y * w + o.x));
@@ -136,6 +136,7 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   const lowered = new Set<number>(); // what came down is not raised again, so this always settles
   /** tiles within a wall's reach of a step in height, along their row or column: the only ones a wall rule can concern */
   const nearSteps = (): Uint8Array => {
+    // (`only`: the part of the map that changed since the walls were last settled; the rest still holds)
     const out = new Uint8Array(n), R = 5;
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const i = y * w + x;
@@ -144,6 +145,7 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
       if ((y + 1 < h && dim.elev[i] !== dim.elev[i + w]) || (y + 1 < h && isWallG(dim.ground[i]) !== isWallG(dim.ground[i + w])))
         for (let k = -R; k <= R + 1; k++) if (y + k >= 0 && y + k < h) out[i + k * w] = 1;
     }
+    if (only) for (let i = 0; i < n; i++) if (!only[i]) out[i] = 0;
     return out;
   };
   const widen = (): void => {
@@ -356,8 +358,8 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   for (let i = 0; i < n; i++) if (cut[i] && !cornerAt(dim, i)) cut[i] = 0;
 }
 
-export function settleTiles(dim: Dimension, keepTile?: (i: number) => boolean, gate?: (i: number) => boolean): void {
-  settleShape(dim, keepTile, gate);
+export function settleTiles(dim: Dimension, keepTile?: (i: number) => boolean, gate?: (i: number) => boolean, only?: Uint8Array): void {
+  settleShape(dim, keepTile, gate, only);
   const c = tileCtx(dim);
   const n = dim.w * dim.h;
   for (let i = 0; i < n; i++) {

@@ -202,7 +202,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
     if (!st.border[i]) st.interior[reg[i]].push(i);
   }
   bp.regions.forEach((r, k) => {
-    if (st.interior[k].length < (r.barren ? 6 : 90)) st.problems.push(`${r.name} is too small to hold anything`);
+    if (st.interior[k].length < (r.barren ? 6 : 60)) st.problems.push(`${r.name} is too small to hold anything`);
     st.interior[k] = st.rng.shuffle(st.interior[k]);
   });
 

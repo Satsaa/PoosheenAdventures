@@ -41,6 +41,8 @@ export function realiseTiles(bp: Blueprint, seed: number, canRetry = false): Til
     dropped++;
   };
   const sts = new Map<DimId, ST>();
+  // each stack's terrain as the first wall pass left it: the last pass only looks where it changed since
+  const settled = new Map<Dimension, { elev: Int8Array; solid: Uint8Array; ground: Uint8Array }>();
   for (const s of bp.ctx.stacks) {
     const S = bp.ctx.settings;
     const st = initStack(s, s.part.gw, s.part.gh, seed, S.borderWobble, S.scenery, S.riverWidth, S.lava);
@@ -48,6 +50,7 @@ export function realiseTiles(bp: Blueprint, seed: number, canRetry = false): Til
     // the walls are settled now, on the bare terrain, before anything is placed: every building,
     // object and prop then goes onto ground that already has its final shape
     settleShape(st.dim, (i) => st.barriers.has(i), (i) => st.barriers.has(i));
+    settled.set(st.dim, { elev: st.dim.elev.slice(), solid: st.dim.solid.slice(), ground: st.dim.ground.slice() });
     // the wall pass closes ground: each region keeps the piece of open ground its openings lead to
     // (failing that, its largest), and whatever was cut off from it becomes closed ground too, so
     // nothing is ever placed in a pocket nobody can reach
@@ -111,7 +114,20 @@ export function realiseTiles(bp: Blueprint, seed: number, canRetry = false): Til
     finishTree(bp.tree, bp.ctx);
   }
   // props and walls get what the tile table says they need (the checker then confirms it)
-  for (const l of layers) settleTiles(l.dim, (i) => l.barriers.has(i) || l.anchors.has(i), (i) => l.barriers.has(i));
+  for (const l of layers) {
+    const was = settled.get(l.dim);
+    let only: Uint8Array | undefined;
+    if (was) {
+      const { w, h } = l.dim, R = 7;
+      only = new Uint8Array(w * h);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        if (was.elev[i] === l.dim.elev[i] && was.solid[i] === l.dim.solid[i] && was.ground[i] === l.dim.ground[i]) continue;
+        for (let yy = Math.max(0, y - R); yy <= Math.min(h - 1, y + R); yy++) only.fill(1, yy * w + Math.max(0, x - R), yy * w + Math.min(w - 1, x + R) + 1);
+      }
+    }
+    settleTiles(l.dim, (i) => l.barriers.has(i) || l.anchors.has(i), (i) => l.barriers.has(i), only);
+  }
   verify(layers, bp.graph, problems, wet);
 
   // coordinates the rest of the app wants

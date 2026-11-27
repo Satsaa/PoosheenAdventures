@@ -543,8 +543,8 @@ export function facedAt(dim: Dimension, i: number): boolean {
  * marked high and never gets there.
  */
 export function reachesTop(dim: Dimension, i: number, memo?: Int8Array, field?: Field): boolean {
-  if ((kindAt(dim, i) & (3 | KIND.WALK)) || !lowerNear(dim, i)) return true;
-  const F = field ?? fieldOf(dim), { w, h } = dim, L = liftAt(dim, i), x = i % w, y = (i / w) | 0;
+  const F = field ?? fieldOf(dim), { w, h } = dim, L = F.lift(i), x = i % w, y = (i / w) | 0;
+  if (F.kind(i) & (3 | KIND.WALK)) return true;
   const topOn = (xx: number, yy: number): boolean => {
     const j = yy * w + xx;
     if (F.kind(j) & KIND.WALK) return true;
@@ -556,14 +556,36 @@ export function reachesTop(dim: Dimension, i: number, memo?: Int8Array, field?: 
     if (memo) memo[j] = ok ? 1 : 2;
     return ok;
   };
+  // first what is cheap to tell: the middle of this tile, or of equally high ground within reach,
+  // is level under full-size faces (faces are only ever fitted smaller, so that is a top)
+  const quick = (xx: number, yy: number): boolean => {
+    const j = yy * w + xx;
+    if (F.kind(j) & KIND.WALK) return true;
+    if (memo && memo[j]) return memo[j] === 1;
+    const lows = lowsOf(F, xx, yy);
+    if (lows.length && over(F.lift(j), lows, 8, 8, 1, 1) < F.lift(j) - 0.5) return false;
+    if (memo) memo[j] = 1;
+    return true;
+  };
+  if (quick(x, y)) return true;
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    for (let k = 1; k <= 2; k++) {
+      const xx = x + dx * k, yy = y + dy * k;
+      if (xx < 0 || yy < 0 || xx >= w || yy >= h) return true;
+      const j = yy * w + xx;
+      if ((F.kind(j) & 3) === KIND.VOID) return true;
+      if ((F.kind(j) & 3) || F.lift(j) < L) break;
+      if (quick(xx, yy)) return true;
+    }
+  }
   if (topOn(x, y)) return true;
   for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
     for (let k = 1; k <= 2; k++) {
       const xx = x + dx * k, yy = y + dy * k;
       if (xx < 0 || yy < 0 || xx >= w || yy >= h) return true;
       const j = yy * w + xx;
-      if ((kindAt(dim, j) & 3) === KIND.VOID) return true;
-      if ((kindAt(dim, j) & 3) || liftAt(dim, j) < L) break;
+      if ((F.kind(j) & 3) === KIND.VOID) return true;
+      if ((F.kind(j) & 3) || F.lift(j) < L) break;
       if (topOn(xx, yy)) return true;
     }
   }
