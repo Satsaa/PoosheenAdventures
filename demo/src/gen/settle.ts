@@ -5,7 +5,7 @@
 // fits faces to the room they have, see core/shape.ts.)
 import { D, T, type Dimension } from '../core/types';
 import { NEEDS, PROPS, tileCtx } from '../core/tileset';
-import { bareEdge, cornerAt, cutsOf, diagDepth, fieldOf, isWallG, levelAt, liftAt, shortFace, stepMask, thinAt, thinPairs, wallStyle } from '../core/shape';
+import { bareEdge, cornerAt, cutsOf, diagDepth, fieldOf, isWallG, levelAt, liftAt, shortFace, stepMask, surface, thinAt, thinPairs, wallStyle } from '../core/shape';
 
 /**
  * Would closing walkable tile c leave everything around it as connected as before? True when the
@@ -367,6 +367,30 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
     }
   }
   for (let i = 0; i < n; i++) if (cut[i] && (!cornerAt(dim, i) || (dim.solid[i] && jamb(i)))) cut[i] = 0;
+  // The rock outside a cave begins where the cave's wall face ends. A wall tile at that edge that
+  // is mostly top is not part of any face: it is rock like the rest, and showing it would leave a
+  // ragged fringe of bright patches round every cave.
+  if (dim.kind === 'underworld' && since) {
+    // (once, when the map is finished; each round only looks at what the last one laid bare)
+    const F2 = fieldOf(dim);
+    const atEdge = (i: number) => { const x = i % w, y = (i / w) | 0; return x >= 1 && y >= 1 && x < w - 1 && y < h - 1 && (dim.ground[i - 1] === T.VOID || dim.ground[i + 1] === T.VOID || dim.ground[i - w] === T.VOID || dim.ground[i + w] === T.VOID); };
+    let front: number[] = [];
+    for (let i = 0; i < n; i++) if (isWallG(dim.ground[i]) && atEdge(i)) front.push(i);
+    for (let round = 0; round < 6 && front.length; round++) {
+      const gone: number[] = [];
+      for (const i of front) {
+        if (!isWallG(dim.ground[i]) || keep(i) || !atEdge(i)) continue;
+        const x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
+        let top = 0;
+        for (let b = 0; b < 4; b++) for (let a2 = 0; a2 < 4; a2++) if (surface(F2, x, y, a2 * 4 + 2, b * 4 + 2) >= L - 0.3) top++;
+        if (top >= 6) gone.push(i);
+      }
+      front = [];
+      for (const i of gone) { dim.ground[i] = T.VOID; dim.region[i] = -1; dim.zone[i] = -1; dim.deco[i] = D.NONE; cut[i] = 0; }
+      for (const i of gone) for (const j of [i - 1, i + 1, i - w, i + w]) if (j >= 0 && j < n && isWallG(dim.ground[j])) front.push(j);
+    }
+    for (let i = 0; i < n; i++) if (cut[i] && !cornerAt(dim, i)) cut[i] = 0;
+  }
 }
 
 export function settleTiles(dim: Dimension, keepTile?: (i: number) => boolean, gate?: (i: number) => boolean, since?: Terrain): void {
