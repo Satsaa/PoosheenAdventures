@@ -341,9 +341,24 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
     }
     return false;
   };
+  // (a cut corner's diagonal face needs room behind it, measured along the diagonal: its own depth,
+  // the depth of the face at the far side, and a tile of top between. Rows and columns are measured
+  // by thinAt; a band that runs at 45 degrees can be wide enough across them and still too thin here.)
+  const diagRoom = (i: number): boolean => {
+    const F0 = fieldOf(dim), x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
+    for (const [sx, sy] of cutsOf(F0, x, y)) {
+      const need = (diagDepth(dim, sy, 0) + diagDepth(dim, -sy, 0)) / 32 + 1;
+      for (let k = 1; k <= 8; k++) {
+        const xx = x - sx * k, yy = y - sy * k, t = yy * w + xx;
+        if (xx < 0 || yy < 0 || xx >= w || yy >= h || dim.ground[t] === T.VOID) break;
+        if (liftAt(dim, t) < L) { if (k < need) return false; break; }
+      }
+    }
+    return true;
+  };
   const was = dim.cut;
   const cut = (dim.cut = new Uint8Array(n));
-  if (was) for (let i = 0; i < n; i++) if (was[i]) { dim.cut[i] = 0; if (cornerAt(dim, i) && !jambLate(i) && wallStyle(dim.kind, dim.ground[i]).corners === 'cut' && !(dim.solid[i] && thinAt(dim, i, 1))) cut[i] = 1; }
+  if (was) for (let i = 0; i < n; i++) if (was[i]) { dim.cut[i] = 0; if (cornerAt(dim, i) && !jambLate(i) && wallStyle(dim.kind, dim.ground[i]).corners === 'cut' && !(dim.solid[i] && (thinAt(dim, i, 1) || !diagRoom(i)))) cut[i] = 1; }
   if (dim.kind === 'interior' || dim.kind === 'underworld') {
     const fills: [number, number][] = [];
     // a floor tile in the corner of a room: wall on two sides that meet, floor on the other two
@@ -372,7 +387,7 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   for (let i = 0; i < n; i++) {
     // (which walls are cut is the wall table's business: core/shape.ts)
     // closed ground and walkable shores alike: any tile can be cut (what may be is cornerAt's business)
-    if (!edge1[i] || !cornerAt(dim, i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || jamb(i) || thinAt(dim, i, 1) || nearHouse(i)) continue;
+    if (!edge1[i] || !cornerAt(dim, i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || jamb(i) || thinAt(dim, i, 1) || nearHouse(i) || !diagRoom(i)) continue;
     cut[i] = 1;
   }
   // A diagonal wall is as deep as the straight walls it joins, so the edge of the top above it is
@@ -411,11 +426,11 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
     edge2 = stepMask(dim, 1);
     // closing tiles can make new corners
     for (let i = 0; i < n; i++) {
-      if (cut[i] || !edge2[i] || !cornerAt(dim, i) || square.has(i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || jamb(i) || thinAt(dim, i, 1) || nearHouse(i)) continue;
+      if (cut[i] || !edge2[i] || !cornerAt(dim, i) || square.has(i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || jamb(i) || thinAt(dim, i, 1) || nearHouse(i) || !diagRoom(i)) continue;
       cut[i] = 1;
     }
   }
-  for (let i = 0; i < n; i++) if (cut[i] && (!cornerAt(dim, i) || (dim.solid[i] && jamb(i)))) cut[i] = 0;
+  for (let i = 0; i < n; i++) if (cut[i] && (!cornerAt(dim, i) || (dim.solid[i] && (jamb(i) || !diagRoom(i))))) cut[i] = 0;
   // The rock outside a cave begins where the cave's wall face ends. A wall tile at that edge that
   // is mostly top is not part of any face: it is rock like the rest, and showing it would leave a
   // ragged fringe of bright patches round every cave.

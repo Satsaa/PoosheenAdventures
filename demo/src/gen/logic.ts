@@ -89,6 +89,29 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
     const coastal = base.regions[i].some((sc) => neighboursOf(GW, GH, sc).some((t) => fill.kind[t] === FILL.OCEAN));
     return { biome: b.id, elev: coastal ? 1 : picked, name, color: b.color };
   });
+  // At any point where screens meet, at most two heights: where three or more regions of different
+  // heights meet, their walls collide and there is no clean way to shape the ground (one wall is cut
+  // short, or a stub of top is left over). The highest of three comes down to the next height below
+  // it, until no such point is left. (Sea and plain fillers lie at 1, a mountain range at 4; neither moves.)
+  if (S.cliffs) {
+    const levelOf = (sc: number): number => (base.cell[sc] >= 0 ? baseThemes[base.cell[sc]].elev : fill.kind[sc] === FILL.RANGE ? 4 : 1);
+    for (let round = 0; round < 32; round++) {
+      let changed = false;
+      for (let cy = 1; cy < GH; cy++) for (let cx = 1; cx < GW; cx++) {
+        const scs = [(cy - 1) * GW + cx - 1, (cy - 1) * GW + cx, cy * GW + cx - 1, cy * GW + cx];
+        const lv = [...new Set(scs.map(levelOf))].sort((a, b) => a - b);
+        if (lv.length <= 2) continue;
+        const top = lv[lv.length - 1], next = lv[lv.length - 2];
+        const movable = scs.filter((sc) => base.cell[sc] >= 0 && levelOf(sc) === top);
+        if (movable.length) { for (const sc of movable) baseThemes[base.cell[sc]].elev = next; changed = true; continue; }
+        // (the highest is a fixed range: the regions between come up or down to one of its neighbours' heights)
+        const mid = scs.filter((sc) => base.cell[sc] >= 0 && levelOf(sc) !== lv[0] && levelOf(sc) !== top);
+        for (const sc of mid) baseThemes[base.cell[sc]].elev = lv[0];
+        if (mid.length) changed = true;
+      }
+      if (!changed) break;
+    }
+  }
   // rivers flow downhill over this land; a region cut in two by one becomes two banks
   // (a course that would leave a bank too small to hold anything is not taken; wider rivers need wider
   // banks, and so do caves, whose walls are two tiles deep on every side)

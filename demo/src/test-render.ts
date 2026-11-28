@@ -191,7 +191,7 @@ if (tot.narrowCut) fail('a corner was cut where that leaves no whole tile of top
 console.log('  cut corners that show the lower ground on their cut half:', pct(tot.cutWithHalf, tot.cutTiles));
 console.log('  shore corners (water on two sides that meet) drawn as a 45 degree line:', pct(tot.shoreDiag, tot.shoreCorners));
 console.log(`  specks of top (smaller than a tile, among wall faces): ${tot.specks} in ${N} worlds; at the edge of the rock outside a cave: ${tot.specksVoid}`);
-if (tot.specks / N > 0.5) fail('walls leave specks of top');
+if (tot.specks / N > 0.1) fail('walls leave specks of top');
 console.log('  bodies of water and lava with a shore flush with the land:', pct(tot.bodiesFlush, tot.bodies));
 console.log('  shore, tile by tile: flush', pct(tot.shoreFlush, tot.shorePairs), '| under a wall of higher land', tot.shoreWall, '| land below the water', tot.shorePairs - tot.shoreFlush - tot.shoreWall);
 console.log('  steps between two water tiles:', tot.waterSteps, '(of which on a flowing river, a waterfall:', tot.waterfallSteps + ')');

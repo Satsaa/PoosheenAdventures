@@ -210,6 +210,16 @@ Everything else follows from the row, nothing is written twice:
 - outward corners of `cut` kinds are cut, so a raised place ends up eight-sided;
 - the tile checker reports every one of these that does not hold.
 
+Two rules keep walls from colliding, both checked where heights are chosen rather than patched
+afterwards:
+
+- at any point where screens meet there are at most two heights. Where three regions of
+  different heights meet, their walls collide and no shape of the ground is clean, so the
+  highest of the three comes down to the next height below it (`logic.ts`);
+- a corner is only cut where the ground behind it, measured along the diagonal, has room for
+  its own diagonal face, the face at the far side and a tile of top between. Otherwise it stays
+  square rather than leave a patch of top smaller than a tile (`settle.ts`).
+
 To add a kind of wall: add a row, and name it in `wallStyle()` (which ground on which kind of
 map follows it). One limit: the depths are per kind of map, because the drawing reads them
 once per map; corners can differ from ground to ground.
