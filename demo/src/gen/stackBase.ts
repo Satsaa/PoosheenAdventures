@@ -146,13 +146,36 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
     }
     if (st.river[i]) st.border[i] = 1; // water is not land: it bounds the walkable area like a rim does
   }
-  // a cave's wall against the rock outside it is two tiles thick: room for the full face that looks into the cave
-  if (bp.kind === 'underworld') for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const i = y * w + x;
-    if (reg[i] < 0 || st.border[i]) continue;
-    for (let dy = -2; dy <= 2 && !st.border[i]; dy++) for (let dx = -2; dx <= 2; dx++) {
-      const nx = x + dx, ny = y + dy;
-      if (nx < 0 || ny < 0 || nx >= w || ny >= h || reg[ny * w + nx] < 0) { st.border[i] = 1; break; }
+  // Walls get their room here, at the source, so that no later pass has to move an outline tile by
+  // tile (which is what turns a straight wall into a row of bumps):
+  //  - under the open sky, a region that stands higher than the ground beside it is closed as deep
+  //    as its wall there: two tiles where the wall looks south, one elsewhere (the wall table);
+  //  - in a cave every wall is two tiles deep on both sides with a tile of top between, so the
+  //    wall between two regions is five tiles thick, and the wall against the rock outside two.
+  if (bp.kind === 'underworld') {
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (reg[i] < 0 || st.border[i]) continue;
+      for (let dy = -2; dy <= 3 && !st.border[i]; dy++) for (let dx = -2; dx <= 3; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) { if (dx >= -2 && dx <= 2 && dy >= -2 && dy <= 2) { st.border[i] = 1; break; } continue; }
+        const r2 = reg[ny * w + nx];
+        if (r2 === reg[i]) continue;
+        // (the third tile only toward another region, and only from one side: 2 + 3 = 5 between them)
+        if (r2 < 0 ? Math.abs(dx) <= 2 && Math.abs(dy) <= 2 : true) { st.border[i] = 1; break; }
+      }
+    }
+  } else if (bp.kind === 'overworld') {
+    const levelAt = (j: number) => (reg[j] >= 0 ? bp.regions[reg[j]].elev : (bp.fill?.kind[scr[j]] ?? FILL.OCEAN) === FILL.RANGE ? 4 : 1);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (reg[i] < 0 || st.border[i] || blocky[reg[i]]) continue;
+      const e = bp.regions[reg[i]].elev;
+      for (let dy = -1; dy <= 2 && !st.border[i]; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        if (reg[ny * w + nx] !== reg[i] && levelAt(ny * w + nx) < e) { st.border[i] = 1; break; }
+      }
     }
   }
   // built walls are thick enough to carry their faces, and every outward corner carries a tower
@@ -211,7 +234,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
     if (!st.border[i]) st.interior[reg[i]].push(i);
   }
   bp.regions.forEach((r, k) => {
-    if (st.interior[k].length < (r.barren ? 6 : 60)) st.problems.push(`${r.name} is too small to hold anything`);
+    if (st.interior[k].length < (r.barren ? 6 : bp.kind === "underworld" ? 36 : 60)) st.problems.push(`${r.name} is too small to hold anything`);
     st.interior[k] = st.rng.shuffle(st.interior[k]);
   });
 
