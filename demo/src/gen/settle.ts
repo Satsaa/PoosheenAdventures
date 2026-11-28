@@ -263,8 +263,15 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
         // walkable ground right at a drop: the wall needs closed ground. This tile closes, or the
         // lower tile in front of it comes up as wall; stairs, ledges and gates keep their step.
         const f = bareEdge(dim, i);
-        if (f < 0 || keep(i) || keep(f) || dim.ground[i] === T.PLANK) continue; // (a bridge or a jetty has no wall)
+        if (f < 0 || dim.ground[i] === T.PLANK) continue; // (a bridge or a jetty has no wall)
+        // the way onto a bridge (its gate included: only the ground changes): the deck begins at the
+        // edge, so it carries on over the drop
+        if (dim.ground[f] !== T.VOID && [i - 1, i + 1, i - w, i + w].some((j) => j >= 0 && j < n && dim.ground[j] === T.PLANK)) { dim.ground[i] = T.PLANK; changed = true; continue; }
+        // closed lower ground beside it comes up to its level: nothing about where one can walk changes
+        if (dim.solid[f] && !keep(f) && !liquid(f) && !lowered.has(f) && dim.ground[f] !== T.VOID) { raise(dim, f, i); changed = true; continue; }
+        if (keep(i) || keep(f)) continue;
         if (spare(dim, i, keep)) { dim.solid[i] = 1; dim.zone[i] = -1; dim.deco[i] = D.NONE; changed = true; }
+
         else if (!fixedWater(f) && !lowered.has(f) && (dim.solid[f] || spare(dim, f, keep))) { raise(dim, f, i); changed = true; }
         continue;
       }

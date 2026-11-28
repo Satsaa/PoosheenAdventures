@@ -79,7 +79,7 @@ for (const [k, m] of [...depth].sort()) {
   console.log(`  ${k.padEnd(32)} wanted ${want}: ${ok} of ${total} (${((ok / total) * 100).toFixed(1)}%)` + (ok < total ? '  others: ' + [...m].filter(([q]) => q !== want).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([q, c]) => `${q} x${c}`).join(', ') : ''));
 }
 if (offSize / Math.max(1, allFaces) > 0.005) fail('wall faces are not the size the wall table gives');
-console.log(`walkways along a drop that could not be given a wall: ${(walkways / N).toFixed(1)} per world`);
+console.log(`walkways along a drop that could not be given a wall: ${(walkways / N).toFixed(2)} per world (${walkways} in ${N} worlds)`);
 console.log(`docks: ${docks}, of which more than one level above their water (or below it): ${badDocks}`);
 if (badDocks) fail('a dock stands on a cliff');
 if (warned) fail('the generator leaves tiles without what they need');
