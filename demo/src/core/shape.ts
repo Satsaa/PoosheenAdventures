@@ -134,6 +134,7 @@ export interface Field {
   pat: WallPatterns;
 }
 
+const NO_FIT = true;
 /** how many tiles away lower ground can still shape a tile: the deepest face is three tiles */
 export const REACH = 3;
 const MAX_RUN = REACH * 16;
@@ -313,6 +314,11 @@ function axisFit(F: Field, x: number, y: number): [number, number] {
  * the faces shrunk to nothing it is a plain block, so this always ends.
  */
 export function fitOf(F: Field, x: number, y: number, lows: Low[] = lowsOf(F, x, y)): [number, number] {
+  // Faces are never fitted: a wall is the depth the wall table gives, everywhere. That every raised
+  // place has room for its walls and a top is the generator's business (it lays regions out with
+  // that room, and the tile check reports any place that lacks it). Shrinking faces tile by tile to
+  // force a top only made specks of top and odd stubs at corners.
+  if (NO_FIT) return [1, 1];
   const { w, h } = F, i = y * w + x, L = F.lift(i);
   if ((F.kind(i) & (3 | KIND.WALK)) || !lows.length) return [1, 1];
   const [sx, sy] = axisFit(F, x, y);

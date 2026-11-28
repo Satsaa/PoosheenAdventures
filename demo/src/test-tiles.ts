@@ -3,7 +3,7 @@
 // generator has a fix for it, the tidy-up must make the report go away again.
 import { generateWorld } from './gen/index';
 import { checkTiles, summariseIssues, tileCtx } from './core/tileset';
-import { facedAt, fieldOf, kindAt, levelAt, liftAt, reachesTop, surface } from './core/shape';
+import { facedAt, fieldOf, kindAt, levelAt, liftAt, surface } from './core/shape';
 import { settleTiles } from './gen/settle';
 import { D, T, type Dimension } from './core/types';
 import { useSmallDefaults } from './core/settings';
@@ -154,9 +154,10 @@ const expect = (name: string, d: Dimension, wants: RegExp, fixable: boolean) => 
   expect('a chest on a cliff edge', d, /^Chest .*needs level ground/, false);
 }
 
-// 3. the terrain model: however faces crowd a tile, raised ground keeps a top and walkable ground stays level
+// 3. the size rule: a raised place has room for its walls and a tile of top, or the checker says so;
+//    and ground one can walk on is level whatever stands beside it
 const sketch = (rows: string[], kind: Dimension['kind'] = 'overworld'): Dimension => {
-  // '.' low ground, '#' raised and solid, 'H' raised two levels and solid, '=' raised and walkable, '~' water (lower), ' ' nothing
+  // '.' low ground, '#' raised and solid, '=' raised and walkable, '~' water (lower), ' ' nothing
   const h = rows.length, w = rows[0].length, n = w * h;
   const d: Dimension = {
     id: 't', name: 'sketch', kind, w, h, sw: 12, sh: 10, ground: new Uint8Array(n), deco: new Uint8Array(n), elev: new Int8Array(n),
@@ -165,35 +166,36 @@ const sketch = (rows: string[], kind: Dimension['kind'] = 'overworld'): Dimensio
   rows.forEach((row, y) => [...row].forEach((ch, x) => {
     const i = y * w + x;
     d.ground[i] = ch === ' ' ? T.VOID : ch === '~' ? T.WATER : T.STONE;
-    d.elev[i] = ch === '#' || ch === '=' ? 2 : ch === 'H' ? 3 : ch === '~' ? 0 : 1;
+    d.elev[i] = ch === '#' || ch === '=' ? 2 : ch === '~' ? 0 : 1;
     d.solid[i] = ch === '.' || ch === '=' ? 0 : 1;
   }));
   return d;
 };
-const shapes: [string, string[]][] = [
-  ['a lone hill', ['.....', '.....', '..#..', '.....', '.....']],
-  ['a ridge running east', ['......', '......', '.####.', '......', '......']],
-  ['a ridge running south', ['.....', '..#..', '..#..', '..#..', '..#..', '.....']],
-  ['a ridge running diagonally', ['.......', '.#.....', '.##....', '..##...', '...##..', '....#..', '.......']],
-  ['a peak on a hill', ['.......', '.#####.', '.##H##.', '.#####.', '.......']],
-  ['a wall two tiles thick', ['......', '......', '######', '######', '......', '......']],
-  ['a wall with nothing behind it', ['......', '......', '######', '      ', '      ']],
-  ['a causeway between two waters', ['~~~~~~', '~~~~~~', '======', '~~~~~~', '~~~~~~']],
-  ['a bank above water', ['======', '======', '~~~~~~', '~~~~~~']],
+const block = (bw: number, bh: number): string[] => { const pad = '.'.repeat(bw + 4); return [pad, pad, ...Array.from({ length: bh }, () => '..' + '#'.repeat(bw) + '..'), pad, pad, pad]; };
+// [name, map, too small outdoors (walls 1 + 1 top + 1 across, 1 + 1 + 2 down), too small in rooms (2 + 1 + 2 both ways)]
+const shapes: [string, string[], boolean, boolean][] = [
+  ['a lone hill', block(1, 1), true, true],
+  ['a ridge running east', block(6, 1), true, true],
+  ['a ridge running south', block(1, 6), true, true],
+  ['a wall two tiles thick', block(6, 2), true, true],
+  ['a block of 3 x 3', block(3, 3), true, true],
+  ['a block of 3 x 4', block(3, 4), false, true],
+  ['a block of 4 x 4', block(4, 4), false, true],
+  ['a block of 5 x 5', block(5, 5), false, false],
+  ['a wall with nothing behind it', ['......', '......', '######', '      ', '      '], false, false],
+  ['a causeway between two waters', ['~~~~~~', '~~~~~~', '======', '~~~~~~', '~~~~~~'], false, false],
+  ['a bank above water', ['======', '======', '~~~~~~', '~~~~~~'], false, false],
 ];
 for (const mode of ['overworld', 'interior'] as const) {
-  for (const [name, rows] of shapes) {
+  for (const [name, rows, smallOut, smallIn] of shapes) {
     const d = sketch(rows, mode);
-    let noTop = 0, tilted = 0;
-    for (let i = 0; i < d.w * d.h; i++) {
-      if (d.ground[i] === T.VOID || d.ground[i] === T.WATER) continue;
-      if (!reachesTop(d, i)) noTop++;
-      if (!d.solid[i] && !levelAt(d, i)) tilted++;
-    }
-    if (noTop) fail(`${name} (${mode}): ${noTop} raised tile(s) never reach their height`);
+    const said = checkTiles(d).some((x) => /a place of its own/.test(x.lacks)), want = mode === 'overworld' ? smallOut : smallIn;
+    if (said !== want) fail(`${name} (${mode}): ${want ? 'too small for its walls, but not reported' : 'reported as too small, though it has room'}`);
+    let tilted = 0;
+    for (let i = 0; i < d.w * d.h; i++) if (d.ground[i] !== T.VOID && d.ground[i] !== T.WATER && !d.solid[i] && !levelAt(d, i)) tilted++;
     if (tilted) fail(`${name} (${mode}): ${tilted} walkable tile(s) are not level`);
   }
 }
-console.log(`  shapes: ${shapes.length} sketches x 2 kinds of map keep their tops and their walkable ground level`);
+console.log(`  sizes: ${shapes.length} sketches x 2 kinds of map are reported exactly when they are too small for their walls`);
 console.log(failed ? `TILES ${failed} failed` : 'TILES ok');
 if (failed) process.exitCode = 1;

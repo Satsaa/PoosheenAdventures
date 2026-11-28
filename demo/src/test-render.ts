@@ -5,7 +5,7 @@
 import { generateWorld } from './gen/index';
 import { useSmallDefaults } from './core/settings';
 import { T, type Dimension } from './core/types';
-import { KIND, cornerAt, kindAt, liftAt, wallStyle } from './core/shape';
+import { KIND, cornerAt, fieldOf, kindAt, liftAt, surface, wallStyle } from './core/shape';
 import { bakeAtlas } from './render/bake';
 import { buildStatic, layout, FLOATS } from './render/lit/compose';
 import { resetWallSprites, wallStats } from './render/bake/walls';
@@ -20,7 +20,7 @@ const framesOf = (prefix: string) => { const s = new Set<number>(); for (const [
 const liquid = (g: number) => g === T.WATER || g === T.DEEP || g === T.LAVA;
 
 const uncut = new Map<string, number>(), all = new Map<string, number>();
-const tot = { wallTiles: 0, wallBaked: 0, wallLive: 0, faceFogOwn: 0, faceFogLower: 0, cutTiles: 0, cutWithHalf: 0, corners: 0, cornersCut: 0, shoreCorners: 0, shoreDiag: 0, jambs: 0, jambsCut: 0,
+const tot = { wallTiles: 0, wallBaked: 0, wallLive: 0, faceFogOwn: 0, faceFogLower: 0, cutTiles: 0, cutWithHalf: 0, corners: 0, cornersCut: 0, shoreCorners: 0, shoreDiag: 0, jambs: 0, jambsCut: 0, specks: 0, specksVoid: 0,
   shorePairs: 0, shoreFlush: 0, shoreWall: 0, bodies: 0, bodiesFlush: 0, waterSteps: 0, waterfallSteps: 0 };
 for (let s = 0; s < N; s++) {
   const world = generateWorld('render' + s);
@@ -71,6 +71,36 @@ for (let s = 0; s < N; s++) {
           if (wet(a) && wet(b) && dim.ground[a] === dim.ground[b] && dry(c) && dry(d)) { tot.shoreCorners++; if (diagAt.has(i)) tot.shoreDiag++; break; }
       }
     }
+    // ---- specks: a patch of top smaller than a tile, cut off from any ground one can stand on
+    {
+      const W4 = w * 4, H4 = h * 4, F = fieldOf(dim), top = new Int16Array(W4 * H4).fill(-1), walk = new Uint8Array(W4 * H4);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const i = y * w + x, k = kindAt(dim, i);
+        if (k & 3) continue;
+        const L = liftAt(dim, i);
+        for (let b = 0; b < 4; b++) for (let a2 = 0; a2 < 4; a2++) {
+          const q = (y * 4 + b) * W4 + x * 4 + a2;
+          if (k & KIND.WALK) { top[q] = L; walk[q] = 1; } else if (!(lay.kind![i] & KIND.SLOPED) || surface(F, x, y, a2 * 4 + 2, b * 4 + 2) >= L - 0.3) top[q] = L;
+        }
+      }
+      const seen4 = new Uint8Array(W4 * H4);
+      for (let s0 = 0; s0 < W4 * H4; s0++) {
+        if (seen4[s0] || top[s0] < 0) continue;
+        const q = [s0]; seen4[s0] = 1;
+        let hasWalk = false, edge = false, byVoid = false;
+        for (let k = 0; k < q.length; k++) {
+          const c = q[k], x = c % W4, y = (c / W4) | 0;
+          if (walk[c]) hasWalk = true;
+          if (x < 8 || y < 8 || x >= W4 - 8 || y >= H4 - 8) edge = true;
+          for (const t of [x > 0 ? c - 1 : -1, x < W4 - 1 ? c + 1 : -1, c - W4, c + W4]) {
+            if (t < 0 || t >= W4 * H4) continue;
+            if (dim.ground[((t / W4) >> 2) * w + ((t % W4) >> 2)] === T.VOID) byVoid = true;
+            if (!seen4[t] && top[t] === top[s0]) { seen4[t] = 1; q.push(t); }
+          }
+        }
+        if (!hasWalk && !edge && q.length < 16) { if (byVoid) tot.specksVoid++; else tot.specks++; }
+      }
+    }
     // ---- water lies on the level of the land beside it
     const seen = new Uint8Array(n);
     for (let s0 = 0; s0 < n; s0++) {
@@ -107,6 +137,8 @@ if (tot.cornersCut / Math.max(1, tot.corners) < 0.95) fail('outward corners are 
 if (tot.jambsCut) fail('a doorway jamb was cut');
 console.log('  cut corners that show the lower ground on their cut half:', pct(tot.cutWithHalf, tot.cutTiles));
 console.log('  shore corners (water on two sides that meet) drawn as a 45 degree line:', pct(tot.shoreDiag, tot.shoreCorners));
+console.log(`  specks of top (smaller than a tile, among wall faces): ${tot.specks} in ${N} worlds; at the edge of the rock outside a cave: ${tot.specksVoid}`);
+if (tot.specks / N > 0.5) fail('walls leave specks of top');
 console.log('  bodies of water and lava with a shore flush with the land:', pct(tot.bodiesFlush, tot.bodies));
 console.log('  shore, tile by tile: flush', pct(tot.shoreFlush, tot.shorePairs), '| under a wall of higher land', tot.shoreWall, '| land below the water', tot.shorePairs - tot.shoreFlush - tot.shoreWall);
 console.log('  steps between two water tiles:', tot.waterSteps, '(of which on a flowing river, a waterfall:', tot.waterfallSteps + ')');
