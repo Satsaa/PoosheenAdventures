@@ -5,7 +5,7 @@
 // fits faces to the room they have, see core/shape.ts.)
 import { D, T, type Dimension } from '../core/types';
 import { NEEDS, PROPS, tileCtx } from '../core/tileset';
-import { bareEdge, cornerAt, cutsOf, diagDepth, fieldOf, isWallG, levelAt, liftAt, shortFace, stepMask, surface, thinAt, thinPairs, wallStyle } from '../core/shape';
+import { bareEdge, cornerAt, cutsOf, diagDepth, fieldOf, isWallG, levelAt, liftAt, shortFace, stepMask, thinAt, thinPairs, topShare, wallStyle } from '../core/shape';
 
 /**
  * Would closing walkable tile c leave everything around it as connected as before? True when the
@@ -63,8 +63,27 @@ function seaLevel(dim: Dimension): void {
         const e = !dim.solid[j] || r < 0 ? dim.elev[j] : dim.regions[r]?.elev ?? dim.elev[j];
         if (e < low) low = e;
       }
-      if (low !== 99) { want[i] = low; front.push(i); }
+      if (low !== 99) want[i] = low;
     }
+    // a river is one level from bank to bank: across its flow, every tile lies on the level of the
+    // lower bank (the higher bank meets it with a cliff). Only along the flow does it step, and
+    // there it falls over its whole width.
+    if (dim.flow) {
+      const low = want.slice();
+      for (let i = 0; i < n; i++) {
+        const f = dim.flow[i];
+        if (!f || !wet(i)) continue;
+        const across = f === 1 || f === 3 ? 1 : w, y = (i / w) | 0;
+        let m = low[i] >= 0 ? low[i] : 99;
+        for (const s of [-1, 1]) for (let k = 1; k <= 8; k++) {
+          const j = i + s * across * k;
+          if (j < 0 || j >= n || (across === 1 && ((j / w) | 0) !== y) || !wet(j)) break;
+          if (low[j] >= 0 && low[j] < m) m = low[j];
+        }
+        if (m !== 99) want[i] = m;
+      }
+    }
+    for (let i = 0; i < n; i++) if (want[i] >= 0) front.push(i);
     while (front.length) {
       const next: number[] = [];
       for (const i of front) {
@@ -79,7 +98,30 @@ function seaLevel(dim: Dimension): void {
     }
     for (let i = 0; i < n; i++) if (want[i] >= 0 && want[i] !== dim.elev[i] && dim.ground[i] !== T.DEEP) dim.elev[i] = want[i];
   }
-  if (dim.kind !== 'overworld') return;
+  if (dim.kind === 'overworld') stillWater(dim);
+  // and at a bend, or where a river runs along other water: it stands above the water beside it
+  // only where it flows into it (once the sea and the lakes have their levels)
+  if (dim.flow && (dim.kind === 'overworld' || dim.kind === 'underworld')) {
+    const wet = (i: number) => dim.ground[i] === T.WATER || dim.ground[i] === T.LAVA || dim.ground[i] === T.DEEP;
+    for (let pass = 0; pass < 8; pass++) {
+      let changed = false;
+      for (let i = 0; i < n; i++) {
+        const f = dim.flow[i];
+        if (!f || !wet(i) || dim.ground[i] === T.DEEP) continue;
+        const x = i % w, down = f === 1 ? i - w : f === 2 ? i + 1 : f === 3 ? i + w : i - 1;
+        for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) {
+          if (j < 0 || j >= n || j === down || !wet(j) || dim.elev[j] >= dim.elev[i]) continue;
+          dim.elev[i] = dim.elev[j]; changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+  }
+}
+
+/** The open sea and every lake with deep water in it: one level each, that of its lowest shore. */
+function stillWater(dim: Dimension): void {
+  const { w, h } = dim, n = w * h;
   const water = (i: number) => dim.ground[i] === T.DEEP || dim.ground[i] === T.WATER;
   const still = (i: number) => water(i) && !(dim.flow && dim.flow[i]) && (dim.ground[i] === T.DEEP || dim.region[i] < 0 || dim.zone[i] < 0);
   const seen = new Uint8Array(n);
@@ -294,7 +336,7 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   };
   const was = dim.cut;
   const cut = (dim.cut = new Uint8Array(n));
-  if (was) for (let i = 0; i < n; i++) if (was[i]) { dim.cut[i] = 0; if (cornerAt(dim, i) && !jambLate(i)) cut[i] = 1; }
+  if (was) for (let i = 0; i < n; i++) if (was[i]) { dim.cut[i] = 0; if (cornerAt(dim, i) && !jambLate(i) && wallStyle(dim.kind, dim.ground[i]).corners === 'cut' && !(dim.solid[i] && thinAt(dim, i, 1))) cut[i] = 1; }
   if (dim.kind === 'interior' || dim.kind === 'underworld') {
     const fills: [number, number][] = [];
     // a floor tile in the corner of a room: wall on two sides that meet, floor on the other two
@@ -323,7 +365,7 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
   for (let i = 0; i < n; i++) {
     // (which walls are cut is the wall table's business: core/shape.ts)
     // closed ground and walkable shores alike: any tile can be cut (what may be is cornerAt's business)
-    if (!edge1[i] || !cornerAt(dim, i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || jamb(i) || thinAt(dim, i) || nearHouse(i)) continue;
+    if (!edge1[i] || !cornerAt(dim, i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || jamb(i) || thinAt(dim, i, 1) || nearHouse(i)) continue;
     cut[i] = 1;
   }
   // A diagonal wall is as deep as the straight walls it joins, so the edge of the top above it is
@@ -362,7 +404,7 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
     edge2 = stepMask(dim, 1);
     // closing tiles can make new corners
     for (let i = 0; i < n; i++) {
-      if (cut[i] || !edge2[i] || !cornerAt(dim, i) || square.has(i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || jamb(i) || thinAt(dim, i) || nearHouse(i)) continue;
+      if (cut[i] || !edge2[i] || !cornerAt(dim, i) || square.has(i) || keep(i) || wallStyle(dim.kind, dim.ground[i]).corners !== 'cut' || jamb(i) || thinAt(dim, i, 1) || nearHouse(i)) continue;
       cut[i] = 1;
     }
   }
@@ -381,8 +423,17 @@ export function settleShape(dim: Dimension, keepTile: (i: number) => boolean = (
       for (const i of front) {
         if (!isWallG(dim.ground[i]) || keep(i) || !atEdge(i)) continue;
         const x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
-        let top = 0;
-        for (let b = 0; b < 4; b++) for (let a2 = 0; a2 < 4; a2++) if (surface(F2, x, y, a2 * 4 + 2, b * 4 + 2) >= L - 0.3) top++;
+        // (lower ground within the two tiles a cave's face is deep: all face. None that near: all
+        // top. Only where a diagonal face reaches part of the way in is it measured.)
+        let top = 16, near = false;
+        for (let dy = -3; dy <= 3 && top; dy++) for (let dx = -3; dx <= 3; dx++) {
+          const xx = x + dx, yy = y + dy, j = yy * w + xx;
+          if (xx < 0 || yy < 0 || xx >= w || yy >= h || dim.ground[j] === T.VOID || liftAt(dim, j) >= L) continue;
+          const m = Math.abs(dx) + Math.abs(dy);
+          if (m <= 2) { top = 0; break; }
+          if (m === 3 && dx && dy) near = true; // (a diagonal face reaches part of the way in)
+        }
+        if (near && top) top = topShare(F2, x, y);
         if (top >= 6) gone.push(i);
       }
       front = [];

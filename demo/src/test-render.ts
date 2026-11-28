@@ -5,7 +5,7 @@
 import { generateWorld } from './gen/index';
 import { useSmallDefaults } from './core/settings';
 import { T, type Dimension } from './core/types';
-import { KIND, cornerAt, fieldOf, kindAt, liftAt, surface, wallStyle } from './core/shape';
+import { KIND, cornerAt, fieldOf, kindAt, liftAt, surface, thinAt, wallStyle } from './core/shape';
 import { bakeAtlas } from './render/bake';
 import { buildStatic, layout, FLOATS } from './render/lit/compose';
 import { resetWallSprites, wallStats } from './render/bake/walls';
@@ -20,8 +20,8 @@ const framesOf = (prefix: string) => { const s = new Set<number>(); for (const [
 const liquid = (g: number) => g === T.WATER || g === T.DEEP || g === T.LAVA;
 
 const uncut = new Map<string, number>(), all = new Map<string, number>();
-const tot = { wallTiles: 0, wallBaked: 0, wallLive: 0, faceFogOwn: 0, faceFogLower: 0, cutTiles: 0, cutWithHalf: 0, corners: 0, cornersCut: 0, shoreCorners: 0, shoreDiag: 0, jambs: 0, jambsCut: 0, specks: 0, specksVoid: 0,
-  shorePairs: 0, shoreFlush: 0, shoreWall: 0, bodies: 0, bodiesFlush: 0, waterSteps: 0, waterfallSteps: 0 };
+const tot = { wallTiles: 0, wallBaked: 0, wallLive: 0, faceFogOwn: 0, faceFogLower: 0, cutTiles: 0, cutWithHalf: 0, corners: 0, cornersCut: 0, shoreCorners: 0, shoreDiag: 0, jambs: 0, jambsCut: 0, narrow: 0, narrowCut: 0, specks: 0, specksVoid: 0,
+  shorePairs: 0, shoreFlush: 0, shoreWall: 0, bodies: 0, bodiesFlush: 0, waterSteps: 0, waterfallSteps: 0, riverSeams: 0, crossings: 0, trenches: 0 };
 for (let s = 0; s < N; s++) {
   const world = generateWorld('render' + s);
   resetWallSprites(sheet);
@@ -57,6 +57,8 @@ for (let s = 0; s < N; s++) {
         let jamb = false;
         for (const d of [1, -1, w, -w]) { const t = i + d, u = t + d; if (t >= 0 && u >= 0 && t < n && u < n && dim.ground[t] !== T.VOID && liftAt(dim, t) < L && dim.ground[u] !== T.VOID && liftAt(dim, u) >= L) jamb = true; }
         if (jamb) { tot.jambs++; if (dim.cut?.[i]) tot.jambsCut++; }
+        // raised ground no wider there than its walls and one tile of top: diagonals would leave the top no whole tile
+        else if (thinAt(dim, i, 1)) { tot.narrow++; if (dim.cut?.[i]) tot.narrowCut++; }
         else {
           tot.corners++;
           all.set(dim.kind, (all.get(dim.kind) ?? 0) + 1);
@@ -98,7 +100,22 @@ for (let s = 0; s < N; s++) {
             if (!seen4[t] && top[t] === top[s0]) { seen4[t] = 1; q.push(t); }
           }
         }
-        if (!hasWalk && !edge && q.length < 16) { if (byVoid) tot.specksVoid++; else tot.specks++; }
+        if (!hasWalk && !edge && q.length < 16) {
+          if (byVoid) tot.specksVoid++; else tot.specks++;
+          if (process.env.SPECK && !byVoid) {
+            // (for looking into one: level, then . open, # closed, W built wall, / cut, ~ liquid)
+            const cx = (s0 % W4) >> 2, cy = ((s0 / W4) | 0) >> 2;
+            console.log(`  speck: world ${s} ${dim.kind} at ${cx},${cy} (${q.length} sixteenths)`);
+            for (let yy = cy - 4; yy <= cy + 4; yy++) {
+              let row = '    ';
+              for (let xx = cx - 5; xx <= cx + 5; xx++) {
+                const j = yy * w + xx;
+                row += xx < 0 || yy < 0 || xx >= w || yy >= h ? '   ' : dim.ground[j] === T.VOID ? ' __' : ` ${dim.elev[j]}${liquid(dim.ground[j]) ? '~' : dim.cut?.[j] ? '/' : dim.solid[j] ? (dim.ground[j] === T.WALL || dim.ground[j] === T.CAVEWALL ? 'W' : '#') : '.'}`;
+              }
+              console.log(row);
+            }
+          }
+        }
       }
     }
     // ---- water lies on the level of the land beside it
@@ -112,7 +129,16 @@ for (let s = 0; s < N; s++) {
         for (const j of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, i - w, i + w]) {
           if (j < 0 || j >= n || dim.ground[j] === T.VOID) continue;
           if (liquid(dim.ground[j])) {
-            if (liftAt(dim, j) !== Li) { if (j > i) { tot.waterSteps++; if (dim.flow?.[i] || dim.flow?.[j]) tot.waterfallSteps++; } continue; }
+            if (liftAt(dim, j) !== Li) {
+              if (j > i) {
+                tot.waterSteps++;
+                if (dim.flow?.[i] || dim.flow?.[j]) tot.waterfallSteps++;
+                // a step that runs along the river (its two sides lie across the flow) is no waterfall: it is a wall in the water
+                const across = (f: number) => f > 0 && (j - i === 1 ? f === 1 || f === 3 : f === 2 || f === 4);
+                if (across(dim.flow?.[i] ?? 0) && across(dim.flow?.[j] ?? 0)) tot.riverSeams++;
+              }
+              continue;
+            }
             if (!seen[j]) { seen[j] = 1; body.push(j); }
             continue;
           }
@@ -121,7 +147,32 @@ for (let s = 0; s < N; s++) {
           if (dL === 0) { tot.shoreFlush++; flush = true; } else if (dL > 0) tot.shoreWall++;
         }
       }
-      if (shore) { tot.bodies++; if (flush) tot.bodiesFlush++; }
+      if (shore) {
+        tot.bodies++; if (flush) tot.bodiesFlush++;
+        else if (process.env.BODY) {
+          // (for looking into one: level, then ~ liquid, # closed, . open)
+          const cx = s0 % w, cy = (s0 / w) | 0;
+          console.log(`  not flush: world ${s} ${dim.kind} at ${cx},${cy}, ${body.length} tiles, ground ${dim.ground[s0]}, flow ${dim.flow?.[s0] ?? 0}, region ${dim.region[s0]}, zone ${dim.zone[s0]}`);
+          for (let yy = cy - 3; yy <= cy + 4; yy++) {
+            let row = '    ';
+            for (let xx = cx - 5; xx <= cx + 5; xx++) { const j = yy * w + xx; row += xx < 0 || yy < 0 || xx >= w || yy >= h ? '   ' : dim.ground[j] === T.VOID ? ' __' : ` ${dim.elev[j]}${liquid(dim.ground[j]) ? '~' : dim.solid[j] ? '#' : '.'}`; }
+            console.log(row);
+          }
+        }
+      }
+    }
+    // ---- no trench: from bank to bank, water lies on the level of the lower bank
+    for (let i = 0; i < n; i++) {
+      if (liquid(dim.ground[i]) || dim.ground[i] === T.VOID) continue;
+      for (const d of [1, w]) {
+        let j = i + d, k = 0;
+        if (j >= n || (d === 1 && j % w === 0) || !liquid(dim.ground[j])) continue;
+        const Lw = liftAt(dim, j);
+        while (k < 8 && j < n && (d !== 1 || j % w !== 0) && liquid(dim.ground[j]) && liftAt(dim, j) === Lw) { j += d; k++; }
+        if (j >= n || (d === 1 && j % w === 0) || liquid(dim.ground[j]) || dim.ground[j] === T.VOID) continue;
+        tot.crossings++;
+        if (liftAt(dim, i) > Lw && liftAt(dim, j) > Lw) tot.trenches++;
+      }
     }
     for (let i = 0; i < n; i++) if ((lay.kind![i] & KIND.SLOPED) && !(lay.kind![i] & 3) && dim.solid[i]) tot.wallTiles++;
   }
@@ -134,7 +185,9 @@ console.log('  outward corners of raised ground cut at 45 degrees:', pct(tot.cor
 console.log('    by kind of map (cut of all):', [...all].map(([k, v]) => `${k} ${v - (uncut.get(k) ?? 0)} of ${v}`).join(', '), '(a corner stays square only where an object, a gate or a building stands on or beside it)');
 console.log('  doorway and gateway jambs (kept upright):', tot.jambs, '| cut by mistake:', tot.jambsCut);
 if (tot.cornersCut / Math.max(1, tot.corners) < 0.95) fail('outward corners are not cut at 45 degrees');
+console.log('  corners of raised ground too narrow for diagonals (kept square, so its top stays a whole tile):', tot.narrow, '| cut by mistake:', tot.narrowCut);
 if (tot.jambsCut) fail('a doorway jamb was cut');
+if (tot.narrowCut) fail('a corner was cut where that leaves no whole tile of top');
 console.log('  cut corners that show the lower ground on their cut half:', pct(tot.cutWithHalf, tot.cutTiles));
 console.log('  shore corners (water on two sides that meet) drawn as a 45 degree line:', pct(tot.shoreDiag, tot.shoreCorners));
 console.log(`  specks of top (smaller than a tile, among wall faces): ${tot.specks} in ${N} worlds; at the edge of the rock outside a cave: ${tot.specksVoid}`);
@@ -142,6 +195,9 @@ if (tot.specks / N > 0.5) fail('walls leave specks of top');
 console.log('  bodies of water and lava with a shore flush with the land:', pct(tot.bodiesFlush, tot.bodies));
 console.log('  shore, tile by tile: flush', pct(tot.shoreFlush, tot.shorePairs), '| under a wall of higher land', tot.shoreWall, '| land below the water', tot.shorePairs - tot.shoreFlush - tot.shoreWall);
 console.log('  steps between two water tiles:', tot.waterSteps, '(of which on a flowing river, a waterfall:', tot.waterfallSteps + ')');
+console.log('  steps that run along a river instead of across it (a wall in the water):', tot.riverSeams);
+console.log('  water crossed from bank to bank with a wall on both sides (a canyon through a raised rim, a channel through a wall):', pct(tot.trenches, tot.crossings));
+if (tot.riverSeams / N > 0.5) fail('walls run along inside rivers');
 if (tot.wallLive) fail('some walls are drawn the slow way');
 if (tot.faceFogLower / Math.max(1, tot.faceFogLower + tot.faceFogOwn) < 0.97) fail('wall faces do not take the fog of the ground they face');
 if (tot.cutWithHalf / Math.max(1, tot.cutTiles) < 0.99) fail('cut corners do not show the lower ground on their cut half');

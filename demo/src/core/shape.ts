@@ -56,8 +56,10 @@ export interface WallShape { room: number; south: number; north: number; side: n
  */
 export interface WallStyle { north: number; south: number; side: number; corners: 'cut' | 'square' }
 export const WALL_STYLES = {
-  /** cliffs, hills, ramparts under the open sky: one tile on three sides, two looking south */
+  /** cliffs and hills under the open sky: one tile on three sides, two looking south */
   outdoor: { north: 1, south: 2, side: 1, corners: 'cut' },
+  /** built walls under the open sky (a castle's ramparts and towers): the same depths, rectangular */
+  rampart: { north: 1, south: 2, side: 1, corners: 'square' },
   /** caves and the underworld: two tiles all round, rounded off */
   cave: { north: 2, south: 2, side: 2, corners: 'cut' },
   /** built rooms (dungeons, houses): two tiles all round, rectangular */
@@ -65,7 +67,7 @@ export const WALL_STYLES = {
 } as const satisfies Record<string, WallStyle>;
 /** Which row of the wall table raised ground of this material follows on this kind of map. */
 export function wallStyle(kind: DimKind, ground: number): WallStyle {
-  if (WALL_MODE[kind] === 'outdoor') return WALL_STYLES.outdoor;
+  if (WALL_MODE[kind] === 'outdoor') return ground === T.WALL ? WALL_STYLES.rampart : WALL_STYLES.outdoor;
   return ground === T.WALL && kind === 'interior' ? WALL_STYLES.built : WALL_STYLES.cave;
 }
 export const DEFAULT_WALLS: WallShape = {
@@ -355,6 +357,17 @@ export function surface(F: Field, x: number, y: number, px: number, py: number):
   return over(F.lift(i), lows, px, py, sx, sy);
 }
 
+/** How much of a tile is level top, in sixteenths (its neighbourhood is read once for all sixteen). */
+export function topShare(F: Field, x: number, y: number): number {
+  const i = y * F.w + x, L = F.lift(i);
+  if (F.kind(i) & 3) return 16;
+  const lows = lowsOf(F, x, y), [sx, sy] = fitOf(F, x, y, lows);
+  if (!lows.length) return 16;
+  let top = 0;
+  for (let b = 0; b < 4; b++) for (let a = 0; a < 4; a++) if (over(L, lows, a * 4 + 2, b * 4 + 2, sx, sy) >= L - 0.3) top++;
+  return top;
+}
+
 /** A map as the model sees it at the game's own face sizes: for rules, placement and checks. */
 const GAME_WALLS: Record<DimKind, WallPatterns> = {
   overworld: patternsFor('overworld'), sky: patternsFor('sky'), underworld: patternsFor('underworld'), interior: patternsFor('interior'),
@@ -427,14 +440,14 @@ export function levelAt(dim: Dimension, i: number): boolean {
  * the void or the map's edge on one side has no face there and is not measured. Water or lava a
  * bank's height below is not "lower": a bank is not a wall.
  */
-export function thinPairs(dim: Dimension, i: number): [number, number, number][] {
+export function thinPairs(dim: Dimension, i: number, extra = 0): [number, number, number][] {
   if (kindAt(dim, i) & (3 | KIND.WALK)) return [];
   const { w, h } = dim, x = i % w, y = (i / w) | 0, L = liftAt(dim, i);
   const out: [number, number, number][] = [];
   const g = dim.ground, el = dim.elev;
   for (const [dx, dy] of [[1, 0], [0, 1]]) {
     // (face depths do not depend on the height of the step: the size a place needs is known up front)
-    const need = faceDepth(dim, -dx, -dy) + 1 + faceDepth(dim, dx, dy);
+    const need = faceDepth(dim, -dx, -dy) + 1 + faceDepth(dim, dx, dy) + extra;
     // walk to both ends of the ground that is at least this high; -1: it ends at nothing, or it is
     // long enough this way alone
     const end = (s: number): [number, number] => {
@@ -458,7 +471,8 @@ export function thinPairs(dim: Dimension, i: number): [number, number, number][]
   }
   return out;
 }
-export const thinAt = (dim: Dimension, i: number): boolean => thinPairs(dim, i).length > 0;
+/** `extra`: ask for that many tiles more than the least (a place whose corners are cut needs one more, or the diagonals leave its top no whole tile) */
+export const thinAt = (dim: Dimension, i: number, extra = 0): boolean => thinPairs(dim, i, extra).length > 0;
 
 /**
  * Does walkable tile i stand at the edge of a drop with no wall under it: is the ground right

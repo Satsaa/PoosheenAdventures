@@ -152,10 +152,26 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
   //    as its wall there: two tiles where the wall looks south, one elsewhere (the wall table);
   //  - in a cave every wall is two tiles deep on both sides with a tile of top between, so the
   //    wall between two regions is five tiles thick, and the wall against the rock outside two.
+  // (a river lies on the level of its lower bank: its higher bank is a wall like any other)
+  const riverLevel = new Int8Array(st.segs.length ? n : 0).fill(127);
+  if (st.segs.length) for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    if (!st.river[i]) continue;
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+      const nx = x + dx, ny = y + dy, j = ny * w + nx;
+      if (nx >= 0 && ny >= 0 && nx < w && ny < h && st.river[j] && reg[j] >= 0 && bp.regions[reg[j]].elev < riverLevel[i]) riverLevel[i] = bp.regions[reg[j]].elev;
+    }
+  }
   if (bp.kind === 'underworld') {
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const i = y * w + x;
       if (reg[i] < 0 || st.border[i]) continue;
+      // (toward a river that lies lower, the bank is a wall two tiles deep like every wall in a cave)
+      if (st.segs.length) for (let dy = -2; dy <= 2 && !st.border[i]; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const nx = x + dx, ny = y + dy, j = ny * w + nx;
+        if (nx >= 0 && ny >= 0 && nx < w && ny < h && st.river[j] && riverLevel[j] < bp.regions[reg[i]].elev) { st.border[i] = 1; break; }
+      }
+      if (st.border[i]) continue;
       for (let dy = -2; dy <= 3 && !st.border[i]; dy++) for (let dx = -2; dx <= 3; dx++) {
         const nx = x + dx, ny = y + dy;
         if (nx < 0 || ny < 0 || nx >= w || ny >= h) { if (dx >= -2 && dx <= 2 && dy >= -2 && dy <= 2) { st.border[i] = 1; break; } continue; }
@@ -166,7 +182,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
       }
     }
   } else if (bp.kind === 'overworld') {
-    const levelAt = (j: number) => (reg[j] >= 0 ? bp.regions[reg[j]].elev : (bp.fill?.kind[scr[j]] ?? FILL.OCEAN) === FILL.RANGE ? 4 : 1);
+    const levelAt = (j: number) => (st.river[j] && riverLevel[j] !== 127 ? riverLevel[j] : reg[j] >= 0 ? bp.regions[reg[j]].elev : (bp.fill?.kind[scr[j]] ?? FILL.OCEAN) === FILL.RANGE ? 4 : 1);
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       const i = y * w + x;
       if (reg[i] < 0 || st.border[i] || blocky[reg[i]]) continue;
@@ -174,7 +190,7 @@ export function initStack(bp: StackBP, gw: number, gh: number, seed: number, wob
       for (let dy = -1; dy <= 2 && !st.border[i]; dy++) for (let dx = -1; dx <= 1; dx++) {
         const nx = x + dx, ny = y + dy;
         if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-        if (reg[ny * w + nx] !== reg[i] && levelAt(ny * w + nx) < e) { st.border[i] = 1; break; }
+        if ((reg[ny * w + nx] !== reg[i] || st.river[ny * w + nx]) && levelAt(ny * w + nx) < e) { st.border[i] = 1; break; }
       }
     }
   }
@@ -336,7 +352,27 @@ export function carveOpenings(st: ST, drop: (edgeId: string) => void): void {
     const min = Math.min(...cands.map((c) => c.path.length));
     cands = cands.filter((k) => k.path.length <= min + 1);
     const fewest = Math.min(...cands.map((k) => k.walls.length));
-    const c = st.rng.pick(cands.filter((k) => k.walls.length === fewest));
+    cands = cands.filter((k) => k.walls.length === fewest);
+    // a way through goes through a straight stretch of wall where there is one: an outward corner
+    // of raised ground within reach of it could not be cut at 45 degrees (the way would be in its
+    // diagonal's place), and would stay square
+    const turns = (k: Cand): number => {
+      let m = 0;
+      const seen = new Set<number>();
+      for (const j of [k.pa, ...k.path, k.pb]) {
+        const jx = j % w, jy = (j / w) | 0;
+        for (let yy = Math.max(1, jy - 3); yy <= Math.min(h - 2, jy + 3); yy++) for (let xx = Math.max(1, jx - 3); xx <= Math.min(w - 2, jx + 3); xx++) {
+          const t = yy * w + xx;
+          if (seen.has(t)) continue;
+          seen.add(t);
+          const e = dim.elev[t];
+          if ((dim.elev[t - 1] < e || dim.elev[t + 1] < e) && (dim.elev[t - w] < e || dim.elev[t + w] < e)) m++;
+        }
+      }
+      return m;
+    };
+    if (cands.length > 1) { const tv = cands.map(turns), least = Math.min(...tv); cands = cands.filter((_, k) => tv[k] === least); }
+    const c = st.rng.pick(cands);
     const ra = st.bp.regions[op.a], rb = st.bp.regions[op.b];
     for (const t of c.walls) {
       border[t] = 1;
@@ -355,7 +391,11 @@ export function carveOpenings(st: ST, drop: (edgeId: string) => void): void {
       dim.region[j] = regOf[j];
       dim.elev[j] = side.elev;
       if (st.river[j]) st.bridge[j] = 1; // a bridge deck: walkers cross above, swimmers pass below
-      dim.ground[j] = op.gate === 'water' ? T.WATER : st.river[j] || st.bp.kind === 'sky' ? T.PLANK : st.bp.kind === 'underworld' ? T.CAVE : T.PATH;
+      // (the deck begins where the water does: a tile of the higher bank with the river below it on
+      // either side is deck already, not a path along a bare edge)
+      const across = c.d === 0 || c.d === 2 ? 1 : w;
+      const overWater = [j - across, j + across].some((t) => st.river[t] && dim.elev[t] < side.elev);
+      dim.ground[j] = op.gate === 'water' ? T.WATER : st.river[j] || overWater || st.bp.kind === 'sky' ? T.PLANK : st.bp.kind === 'underworld' ? T.CAVE : T.PATH;
     });
     const gate = c.path[lastA];
     st.barriers.set(gate, op.edgeId);

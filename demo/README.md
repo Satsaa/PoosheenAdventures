@@ -59,7 +59,8 @@ Open `dist/index.html` in a browser. No server needed.
 ## Rivers
 
 - A river is a path on the lattice of screen corners, traced downhill before the lock graph
-  exists. A course that would cut off a bank too small to use is rejected.
+  exists. A course that would cut off a bank too small to use is rejected (a bank needs a
+  screen more than the river is wide, and one more again: walls and their room come out of it).
 - On a region border it replaces the rim. Through a region it splits that region into two
   banks, which the lock-graph builder then treats as ordinary neighbouring regions joined by a
   bridge (any gate can stand on a bridge).
@@ -193,7 +194,8 @@ degrees:
 
 | kind | north | south | sides | corners |
 | --- | --- | --- | --- | --- |
-| `outdoor` (cliffs, hills, ramparts) | 1 | 2 | 1 | cut |
+| `outdoor` (cliffs, hills) | 1 | 2 | 1 | cut |
+| `rampart` (a castle's walls and towers) | 1 | 2 | 1 | square |
 | `cave` (caves, the underworld) | 2 | 2 | 2 | cut |
 | `built` (dungeons, houses) | 2 | 2 | 2 | square |
 
@@ -214,7 +216,10 @@ once per map; corners can differ from ground to ground.
 
 Water and lava lie exactly on the level of the land beside them: the sea on the level of the
 lowest shore, a river or a pool on the level of its lower bank. There is no bank and no step.
-Higher ground that reaches water ends in a wall like any other.
+Higher ground that reaches water ends in a wall like any other. A river is one level from bank
+to bank: it steps only along its flow, where it falls over its whole width, and it never
+stands above other water beside it unless it flows into it. (`test-render` counts steps that
+run along a river; there are none.)
 
 ## The tile table
 

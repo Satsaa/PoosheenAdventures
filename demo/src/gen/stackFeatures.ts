@@ -100,17 +100,33 @@ export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => voi
       for (const f of r.feats.slice().sort((a, b) => rank(a) - rank(b))) {
         if (f.f === 'vertical') {
           const st2 = sts.get(f.other.stack.id)!;
-          const at = findBlock(st, r.idx, P, -1, -1, 1, 1, (x, y) => freeBlock(st2, f.other.idx, x - 1, y - 1, x + 1, y + 1));
-          if (!at) { if (f.optional) drop(f.edgeId); else fail(f.label); continue; }
+          // straight above or below where the two places overlap; where they have no free ground in
+          // common, the way comes out at the nearest free spot of the other place instead
+          let at = findBlock(st, r.idx, P, -1, -1, 1, 1, (x, y) => freeBlock(st2, f.other.idx, x - 1, y - 1, x + 1, y + 1));
+          let to = at;
+          if (!at && !f.optional) {
+            let bestD = 1e9;
+            const mine = st.interior[r.idx].filter((i) => freeBlock(st, r.idx, (i % w) - 1, ((i / w) | 0) - 1, (i % w) + 1, ((i / w) | 0) + 1));
+            if (mine.length) for (const j of st2.interior[f.other.idx]) {
+              const x2 = j % st2.w, y2 = (j / st2.w) | 0;
+              if (!freeBlock(st2, f.other.idx, x2 - 1, y2 - 1, x2 + 1, y2 + 1)) continue;
+              for (const i of mine) {
+                const d = Math.abs((i % w) - x2) + Math.abs(((i / w) | 0) - y2);
+                if (d < bestD) { bestD = d; at = { x: i % w, y: (i / w) | 0 }; to = { x: x2, y: y2 }; }
+              }
+            }
+            if (at) P.push(at);
+          }
+          if (!at || !to) { if (f.optional) drop(f.edgeId); else fail(f.label); continue; }
           reserve(st, at.x - 1, at.y - 1, at.x + 1, at.y + 1);
-          reserve(st2, at.x - 1, at.y - 1, at.x + 1, at.y + 1);
-          ptsOf(f.other).push(at);
-          const here: MapObject = { id: 'v.' + f.edgeId, kind: 'entrance', x: at.x, y: at.y, label: f.label, style: f.style, req: f.req, edgeId: f.edgeId, to: { dim: st2.dim.id, x: at.x, y: at.y } };
-          const there: MapObject = { id: 'w.' + f.edgeId, kind: 'entrance', x: at.x, y: at.y, label: `Back to ${r.name}`, style: st2.bp.stack < st.bp.stack ? 'stairs-up' : 'stairs-down', edgeId: f.edgeId, to: { dim: dim.id, x: at.x, y: at.y } };
+          reserve(st2, to.x - 1, to.y - 1, to.x + 1, to.y + 1);
+          ptsOf(f.other).push(to);
+          const here: MapObject = { id: 'v.' + f.edgeId, kind: 'entrance', x: at.x, y: at.y, label: f.label, style: f.style, req: f.req, edgeId: f.edgeId, to: { dim: st2.dim.id, x: to.x, y: to.y } };
+          const there: MapObject = { id: 'w.' + f.edgeId, kind: 'entrance', x: to.x, y: to.y, label: `Back to ${r.name}`, style: st2.bp.stack < st.bp.stack ? 'stairs-up' : 'stairs-down', edgeId: f.edgeId, to: { dim: dim.id, x: at.x, y: at.y } };
           dim.objects.push(here);
           st2.dim.objects.push(there);
           st.mouths[r.idx].push(at.y * w + at.x);
-          st2.mouths[f.other.idx].push(at.y * w + at.x);
+          st2.mouths[f.other.idx].push(to.y * st2.w + to.x);
           doors.set(f.edgeId, { dim: dim.id, x: at.x, y: at.y, obj: here });
         } else if (f.f === 'entrance' || f.f === 'house') {
           const kind = f.f === 'house' ? 'house' : f.style;
@@ -128,6 +144,35 @@ export function placeFeatures(sts: Map<DimId, ST>, drop: (edgeId: string) => voi
             if (at) P.push(at);
             at ??= findBlock(st, r.idx, P, x0, y0, x1, 1);
             if (at) { shape = s; reserve(st, at.x + x0, at.y + y0, at.x + x1, at.y + 1); break; }
+          }
+          if (!at && built) {
+            // no open lot left: a building can as well stand with its back in the region's own closed
+            // rim (level ground of its own height: the trees and rocks along the edge), as long as
+            // the ground in front of its door is open
+            const backs = (x: number, y: number, e: number) => {
+              const i = y * w + x;
+              return x >= 1 && y >= 1 && x < w - 1 && y < st.h - 1 && st.owner[i] === r.idx && !st.reserved[i] && !st.river[i] && !st.barriers.has(i)
+                && dim.elev[i] === e && dim.deco[i] !== D.HOUSE && dim.ground[i] !== T.WATER && dim.ground[i] !== T.DEEP && dim.ground[i] !== T.LAVA && dim.ground[i] !== T.VOID && levelAt(dim, i);
+            };
+            for (const s of [shape, plain]) {
+              const xs = s.map((o) => o[0]), ys = s.map((o) => o[1]);
+              const x0 = Math.min(...xs) - 1, y0 = Math.min(...ys) - 1, x1 = Math.max(...xs) + 1;
+              let bestD = -1;
+              for (const i of st.interior[r.idx]) {
+                const x = i % w, y = (i / w) | 0;
+                if (!freeBlock(st, r.idx, x - 1, y, x + 1, y + 1)) continue;
+                let ok = true;
+                for (let yy = y + y0; yy <= y + 1 && ok; yy++) for (let xx = x + x0; xx <= x + x1; xx++) {
+                  if (yy >= y && Math.abs(xx - x) <= 1) continue;
+                  if (!backs(xx, yy, dim.elev[i])) { ok = false; break; }
+                }
+                if (!ok) continue;
+                let d = 1e9;
+                for (const q of P) d = Math.min(d, Math.abs(q.x - x) + Math.abs(q.y - y));
+                if (d > bestD) { bestD = d; at = { x, y }; }
+              }
+              if (at) { shape = s; P.push(at); reserve(st, at.x + x0, at.y + y0, at.x + x1, at.y + 1); break; }
+            }
           }
           if (!at) {
             if (f.f !== 'entrance') continue;

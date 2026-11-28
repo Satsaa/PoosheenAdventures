@@ -90,13 +90,14 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
     return { biome: b.id, elev: coastal ? 1 : picked, name, color: b.color };
   });
   // rivers flow downhill over this land; a region cut in two by one becomes two banks
-  // (a course that would leave a bank too small to hold anything is not taken; wider rivers need wider banks)
+  // (a course that would leave a bank too small to hold anything is not taken; wider rivers need wider
+  // banks, and so do caves, whose walls are two tiles deep on every side)
   const minBank = 1 + S.riverWidth;
-  const roomyBanks = (whole: Partition) => (rs: Parameters<typeof splitByRivers>[1]) => {
+  const roomyBanks = (whole: Partition, extra = 0) => (rs: Parameters<typeof splitByRivers>[1]) => {
     const cut = splitByRivers(whole, rs);
-    return cut.part.regions.every((screens, i) => screens.length >= Math.min(minBank, whole.regions[cut.origin[i]].length));
+    return cut.part.regions.every((screens, i) => screens.length >= Math.min(minBank + extra, whole.regions[cut.origin[i]].length));
   };
-  const rivers = S.rivers > 0 ? traceRivers(new Rng(childSeed(seed, 'rivers')), base, (r) => baseThemes[r].elev, S.rivers, roomyBanks(base), (s) => fill.kind[s] === FILL.OCEAN) : [];
+  const rivers = S.rivers > 0 ? traceRivers(new Rng(childSeed(seed, 'rivers')), base, (r) => baseThemes[r].elev, S.rivers, roomyBanks(base, 1), (s) => fill.kind[s] === FILL.OCEAN) : [];
   const cut = splitByRivers(base, rivers);
   const origin = cut.origin;
   const entryRegion = cut.part.cell[startScreen];
@@ -184,7 +185,7 @@ export function buildBlueprint(seed: number, S: GenSettings): Blueprint {
     const whole = sub.regions.map((_, i) => theme(i));
     // rivers run through the underworld too; a cave system cut in two by one becomes two banks
     const under = kind === 'under' && S.caveRivers > 0;
-    const subRivers = under ? traceRivers(new Rng(childSeed(seed, 'caverivers')), sub, (r) => whole[r].elev, S.caveRivers, roomyBanks(sub)) : [];
+    const subRivers = under ? traceRivers(new Rng(childSeed(seed, 'caverivers')), sub, (r) => whole[r].elev, S.caveRivers, roomyBanks(sub, 1)) : [];
     const subCut = splitByRivers(sub, subRivers);
     const entry = subCut.part.cell[seedScreen];
     const subThemes = bankThemes(sub, subCut, whole, entry);
